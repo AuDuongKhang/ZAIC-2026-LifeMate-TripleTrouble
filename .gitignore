@@ -1,0 +1,29 @@
+# Competition data: licensed to registered teams only, never commit it
+data/
+*.zip
+
+# Run outputs (submission.jsonl, traces, metrics)
+runs/
+
+# Model weights / caches
+models/
+checkpoints/
+*.safetensors
+*.bin
+*.gguf
+.cache/
+__marimo__/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+
+# OS / editor
+.DS_Store
+__MACOSX/
+.vscode/
+.idea/

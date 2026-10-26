@@ -1,0 +1,3 @@
+# Runtime deps of the pipeline. zaic_tools itself is stdlib-only and ships with the data.
+# ASR / LLM deps (torch, transformers, vllm, ...) get added once the approach is chosen.
+numpy

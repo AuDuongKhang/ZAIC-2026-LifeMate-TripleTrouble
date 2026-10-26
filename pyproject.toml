@@ -1,0 +1,17 @@
+[project]
+name = "lifemate"
+version = "0.1.0"
+description = "ZAC 2026 LifeMate: spoken Vietnamese requests -> tool calls"
+requires-python = ">=3.10"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-p no:hydra_pytest"  # a globally installed hydra registers a broken pytest plugin on some machines
