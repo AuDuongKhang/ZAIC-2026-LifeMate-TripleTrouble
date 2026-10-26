@@ -7,11 +7,12 @@ Zalo AI Challenge 2026, **LifeMate** track (team TripleTrouble). Organiser specs
 ## Commands
 
 ```bash
-pip install -r requirements-dev.txt            # pytest + marimo; zaic_tools itself is stdlib-only
+bash scripts/setup.sh                          # macOS/Linux: .venv + pip install -r requirements-dev.txt -e .
+                                               # (Windows: scripts\setup.ps1); then activate .venv
+python -m lifemate.fetch_data --url "<zip link>"   # or --zip <file>; no-op if data/ is present
 pytest                                         # unit tests + oracle end-to-end (skipped without data/train)
 pytest tests/test_scoring.py::test_each_call_matches_at_most_once
 
-export PYTHONPATH=src PYTHONUTF8=1             # (PowerShell: $env:PYTHONPATH="src"; $env:PYTHONUTF8="1")
 python -m lifemate.infer --split train --agent oracle --asr gold --limit 50   # -> runs/<time>_<split>_<agent>_<asr>/
 python -m lifemate.infer --split public_test --agent empty --asr none --ids public_0001 public_0002
 python -m lifemate.evaluate runs/<run>          # train only: metrics.json + per_sample.jsonl + RESULTS.md row
@@ -19,7 +20,9 @@ python -m lifemate.evaluate --row-only runs/<run>
 cd data && PYTHONPATH=public_test python -m zaic_tools --split public_test --root . --validate ../runs/<run>/submission.jsonl
 ```
 
-`LIFEMATE_DATA_ROOT` overrides the data folder (default `data/`). Reference numbers on train: oracle 100.0, empty 7.18.
+Without the editable install (e.g. the user's base Anaconda, whose torch/numpy are broken), set `PYTHONPATH=src`. On Windows, set `PYTHONUTF8=1` for Vietnamese output. `LIFEMATE_DATA_ROOT` overrides the data folder (default `data/`). Reference numbers on train: oracle 100.0, empty 7.18.
+
+All repo files (code, comments, docs, notebook UI, commits) are in English; Vietnamese appears only as data. The team mostly uses macOS, so keep `scripts/setup.sh` working (bash, LF line endings via `.gitattributes`).
 
 ## Architecture
 
@@ -29,7 +32,7 @@ cd data && PYTHONPATH=public_test python -m zaic_tools --split public_test --roo
 - `task.Task`: everything an agent may use. `history` user turns get ASR `text` (`audio_text` is stripped), `tools` are catalog specs for `installed_apps` + `sys.ask_missing_info`. `label` is set on train for oracle/debug only. A real agent must never read it.
 - `scoring.py`: local copy of the official metric, with our assumptions in its docstring. `evaluate.py` gets the gold hash by replaying `label.tool_calls` in a fresh ToolEnv, which reproduces `label.final_state` on all 1545 train samples.
 - `data.import_zaic_tools`: every split ships its **own** `zaic_tools` under the same module name, so one process handles one split. Steps that touch two splits run as subprocesses (see `tests/test_pipeline.py` and the notebook).
-- `notebooks/molab_run.py`: marimo notebook for molab (GPU). molab syncs only this file from GitHub, so it clones the repo itself (shallow, chosen branch, optional token), downloads the data zip from a URL typed in the UI, installs `requirements.txt`, runs infer (+ evaluate on train) in subprocesses, and offers downloads plus the RESULTS.md row. Team results are logged by hand in `RESULTS.md`.
+- `notebooks/molab_run.py`: marimo notebook for molab (GPU). molab syncs only this file from GitHub, so it clones the repo itself (shallow, chosen branch, optional token), fetches data with `lifemate.fetch_data` from a URL typed in the UI (never stored in the repo), installs `requirements.txt`, runs infer (+ evaluate on train) in subprocesses, and offers downloads plus the RESULTS.md row. Team results are logged by hand in `RESULTS.md`.
 
 ## Rules that constrain the code
 

@@ -19,13 +19,11 @@ def _():
     import shutil
     import subprocess
     import sys
-    import urllib.request
-    import zipfile
     from datetime import datetime
     from pathlib import Path
 
     import marimo as mo
-    return Path, datetime, mo, os, shlex, shutil, subprocess, sys, urllib, zipfile
+    return Path, datetime, mo, os, shlex, shutil, subprocess, sys
 
 
 @app.cell
@@ -33,10 +31,11 @@ def _(mo):
     mo.md("""
     # LifeMate runner
 
-    1. Bật GPU ở nút *notebook specs* (header). 2. Điền repo / token (nếu repo private) / link data.
-    3. Chọn split, agent, ASR rồi bấm **Pull + run**. Mỗi lần bấm sẽ kéo commit mới nhất của branch.
+    1. Turn on the GPU with the *notebook specs* button in the header.
+    2. Fill in the repo, a token (private repo) and the data zip link (only needed once per session).
+    3. Pick split, agent and ASR, then press **Pull + run**. Every press pulls the latest commit of the branch.
 
-    Trên `train` notebook tự chấm điểm local; trên `public_test` tải `submission.jsonl` về rồi nộp lên portal.
+    On `train` the run is scored locally; on `public_test` download `submission.jsonl` and submit it on the portal.
     """)
     return
 
@@ -60,8 +59,8 @@ def _(mo, os):
 
 
 @app.cell
-def _(Path, branch, data_url, mo, repo_url, run, shutil, subprocess, sys, token, urllib, zipfile):
-    mo.stop(not run.value, mo.md("_Bấm **Pull + run** để bắt đầu._"))
+def _(Path, branch, data_url, mo, os, repo_url, run, shutil, subprocess, sys, token):
+    mo.stop(not run.value, mo.md("_Press **Pull + run** to start._"))
 
     work = Path.cwd() / "lifemate_work"
     work.mkdir(exist_ok=True)
@@ -86,24 +85,16 @@ def _(Path, branch, data_url, mo, repo_url, run, shutil, subprocess, sys, token,
     commit = _git("log", "-1", "--format=%h", cwd=repo_dir)
     commit_msg = _git("log", "-1", "--format=%s", cwd=repo_dir)
 
-    def _find_data_root():
-        base = work / "data"
-        for p in [base, *sorted(base.glob("*"))] if base.is_dir() else []:
-            if (p / "train").is_dir() or (p / "public_test").is_dir():
-                return p
-        return None
-
-    data_root = _find_data_root()
-    if data_root is None:
-        if not data_url.value.strip():
-            raise ValueError("Chưa có data: điền 'Data zip URL'")
-        _zip = work / "data.zip"
-        print("Downloading data ...", flush=True)
-        urllib.request.urlretrieve(data_url.value.strip(), _zip)
-        with zipfile.ZipFile(_zip) as z:
-            z.extractall(work / "data", members=[m for m in z.namelist() if not m.startswith("__MACOSX")])
-        _zip.unlink()
-        data_root = _find_data_root()
+    # same command as on laptops; a no-op when this session already has the data
+    data_root = work / "data"
+    _fetch = [sys.executable, "-m", "lifemate.fetch_data", "--dest", str(data_root)]
+    if data_url.value.strip():
+        _fetch += ["--url", data_url.value.strip()]
+    _r = subprocess.run(_fetch, cwd=repo_dir, env={**os.environ, "PYTHONPATH": str(repo_dir / "src")},
+                        capture_output=True, text=True)
+    print(_r.stdout[-2000:], flush=True)
+    if _r.returncode:
+        raise RuntimeError(f"fetching data failed (is 'Data zip URL' filled in?):\n{_r.stderr[-2000:]}")
 
     _req = repo_dir / "requirements.txt"
     _pip = [sys.executable, "-m", "pip", "install", "-q", "-r", str(_req)]
@@ -153,8 +144,8 @@ def _(agent, asr, commit, data_root, datetime, extra, limit, os, repo_dir, shlex
 def _(mo, results_row, run_dir):
     import json as _json
 
-    _items = [mo.md("### Kết quả"), mo.md("Dòng cho `RESULTS.md`:"), mo.ui.code_editor(value=results_row, language="markdown",
-                                                                                         disabled=True)]
+    _items = [mo.md("### Results"), mo.md("Row for `RESULTS.md`:"),
+              mo.ui.code_editor(value=results_row, language="markdown", disabled=True)]
     _metrics_path = run_dir / "metrics.json"
     if _metrics_path.exists():
         _m = _json.loads(_metrics_path.read_text(encoding="utf-8"))
