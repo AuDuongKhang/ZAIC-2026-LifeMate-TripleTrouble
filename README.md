@@ -26,12 +26,23 @@ powershell -ExecutionPolicy Bypass -File scripts\setup.ps1
 
 ### Data
 
-The data is licensed to registered teams only. Never commit it (`data/` is gitignored) and never put the
-download link in the repo. Get the link from the competition portal (Data page), then:
+The data is licensed to registered teams only. Never commit it (`data/` is gitignored), and never put links or
+tokens in the repo. The team keeps one copy in a **private** Hugging Face dataset (ask a teammate for its name and
+access):
 
 ```bash
-python -m lifemate.fetch_data --url "<train+public_test.zip link>"   # ~880 MB download, ~1.1 GB unpacked
-python -m lifemate.fetch_data --zip ~/Downloads/train+public_test.zip # or from a zip you already have
+hf auth login                                                         # once; or export HF_TOKEN=... (read access)
+python -m lifemate.fetch_data --hf-repo <user>/<dataset>              # ~880 MB download, ~1.1 GB unpacked
+python -m lifemate.fetch_data --zip ~/Downloads/train+public_test.zip # or from the organisers' zip
+python -m lifemate.fetch_data --url "<link from the portal>"          # or straight from the organisers
+```
+
+Uploading the team copy (once, needs a token with write access; the dataset is created private and public ones are
+refused):
+
+```bash
+python -m lifemate.hf_upload --repo <user>/<dataset> --zip ~/Downloads/train+public_test.zip
+python -m lifemate.hf_upload --repo <user>/<dataset>                  # or re-pack the unpacked data/ folder
 ```
 
 This produces `data/train/`, `data/public_test/`, `data/README.md` (the organisers' format docs, worth reading).
@@ -65,15 +76,20 @@ of **Pull + run** clones or pulls the chosen branch (default `main`), downloads 
 have it yet, installs `requirements.txt`, runs `infer` (and `evaluate` on train), then shows the score table,
 download buttons and the row to paste into `RESULTS.md`.
 
-1. Open the notebook in molab. Either add it from GitHub (new notebook → paste the file's GitHub URL), or, if
-   molab cannot read the private repo, upload `notebooks/molab_run.py` once. It pulls the code itself, so it only
-   needs re-uploading when the notebook file changes.
+1. Upload `notebooks/molab_run.py` to molab once (molab cannot sync from a private repo). It pulls the code itself
+   on every run, so it only needs re-uploading when the notebook file itself changes.
 2. Turn on the GPU in *notebook specs*.
-3. Fill in a GitHub token (fine-grained, read-only *Contents* on this repo) and the data link. Neither is saved in the
-   notebook file. Do not paste them into code cells.
+3. Fill in a GitHub token (fine-grained, read-only *Contents* on this repo), the HF dataset name and an HF read
+   token. They live only in the UI fields, not in the notebook file. Never paste them into code cells.
 
 molab notebooks are public by link, so keep secrets and data out of them. molab's GPU (RTX Pro 6000, 96 GB) is much
 stronger than the scoring A30 (24 GB) while its CPU is weaker (4 vs 16 cores), so treat molab timings as optimistic.
+
+## Contributing
+
+Never commit to `main` directly: molab runs it, so it must always work. Branch off `main` (`feat/…`, `fix/…`,
+`exp/…`), push, and open a pull request. Say what changed and how you checked it (`pytest`, and the train
+score when the agent or ASR changed). Test a branch on molab first by typing its name in the notebook's *Branch* field.
 
 ## Logging results
 
@@ -89,7 +105,8 @@ src/lifemate/
   scoring.py      re-implementation of the official metric (assumptions in its docstring)
   task.py         Task: what an agent sees (request, history, context, tool specs)
   data.py         samples, tool catalog, per-split zaic_tools import
-  fetch_data.py   download / unpack the data
+  fetch_data.py   download (HF / URL) or unpack the data
+  hf_upload.py    one-off upload of the data to the team's private HF dataset
   asr/            ASR backends (--asr): gold (train transcripts), none
   agents/         agents (--agent): empty, oracle
 notebooks/molab_run.py   molab runner
