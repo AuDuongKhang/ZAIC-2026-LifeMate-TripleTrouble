@@ -147,6 +147,20 @@ Everything around the model:
 - Train on rendered trajectories, i.e. the full sequence of calls with the real tool results produced by replaying in `ToolEnv`. Compute the loss on assistant tokens only.
 - Each job must fit one 12 h molab session and save a checkpoint about every 30 minutes. A checkpoint holds the adapter, optimizer, scheduler and RNG state. It is pushed to a private HF model repo, never committed. A new session resumes with `resume_from_checkpoint`. The HF repo name and token are typed in the notebook UI, like the data repo.
 - Decide merge versus runtime LoRA at the Docker stage. Both are fine as long as the result is deterministic.
+- **Training monitoring plots**, requested by the team so both members can analyse runs. They appear in the molab training notebook, update live, and are saved as PNG/HTML next to the checkpoint. SFT plots:
+  - train/eval loss;
+  - learning rate;
+  - gradient norm;
+  - per-checkpoint score on held-out apps and on the seen-app dev set, split by act / ask / out-of-scope;
+  - share of invalid or unparsable calls;
+  - mean calls per sample.
+
+  GRPO adds:
+  - mean/min/max reward per step;
+  - reward components;
+  - KL to the reference policy;
+  - response length;
+  - per-sample latency.
 - Exit criterion (Gate 2): SFT beats Tier 0 on held-out apps with our ASR.
 
 ### Tier 3: GRPO on the metric (Track A), only if Gate 2 passes with ≥ 5 days left before freeze
