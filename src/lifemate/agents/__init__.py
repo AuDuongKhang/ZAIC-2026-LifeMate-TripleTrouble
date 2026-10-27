@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from .base import Agent, EmptyAgent, OracleAgent
+from .react import ReActAgent
 
 AGENTS: dict[str, type[Agent]] = {
     "empty": EmptyAgent,
     "oracle": OracleAgent,
+    "react": ReActAgent,
 }
 
 

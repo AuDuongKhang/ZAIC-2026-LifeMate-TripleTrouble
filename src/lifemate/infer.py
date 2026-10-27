@@ -16,12 +16,13 @@ from .agents import AGENTS, build_agent
 from .asr import BACKENDS, build_asr
 from .data import REPO_ROOT, audio_path, default_data_root, import_zaic_tools, installed_tool_names, load_catalog, load_samples
 from .task import Task
-from .utils import git_info, seed_everything
+from .utils import git_info, parse_kw, seed_everything
 
 TIME_LIMIT_S = 30.0  # per sample on the scoring A30, ASR included
 
 
-def build_task(sample: dict, asr, catalog: dict[str, dict], data_root: Path, split: str) -> Task:
+def build_task(sample: dict, asr, catalog: dict[str, dict], data_root: Path, split: str,
+               started_at: float | None = None) -> Task:
     history = []
     for turn in sample["history"]:
         turn = {k: v for k, v in turn.items() if k != "audio_text"}  # agents only see ASR output
@@ -35,6 +36,7 @@ def build_task(sample: dict, asr, catalog: dict[str, dict], data_root: Path, spl
         context=sample["context"],
         tools=[catalog[name] for name in installed_tool_names(sample) if name in catalog],
         label=sample.get("label"),
+        started_at=started_at,
     )
 
 
@@ -48,6 +50,8 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--ids", nargs="*", default=None, help="only these sample ids")
     ap.add_argument("--out", type=Path, default=None, help="run folder (default runs/<time>_<split>_<agent>_<asr>)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--agent-kw", action="append", metavar="KEY=VALUE", help="agent constructor option (repeatable)")
+    ap.add_argument("--asr-kw", action="append", metavar="KEY=VALUE", help="ASR constructor option (repeatable)")
     args = ap.parse_args(argv)
 
     zaic_tools = import_zaic_tools(args.data_root, args.split)
@@ -62,8 +66,9 @@ def main(argv: list[str] | None = None) -> Path:
     catalog = load_catalog(args.data_root, args.split)
 
     t_load = time.perf_counter()
-    asr = build_asr(args.asr)
-    agent = build_agent(args.agent)
+    asr_kw, agent_kw = parse_kw(args.asr_kw), parse_kw(args.agent_kw)
+    asr = build_asr(args.asr, **asr_kw)
+    agent = build_agent(args.agent, **agent_kw)
     load_s = time.perf_counter() - t_load
     seed_everything(args.seed)
 
@@ -76,7 +81,7 @@ def main(argv: list[str] | None = None) -> Path:
             env = zaic_tools.ToolEnv(args.split, sample["id"], root=args.data_root)  # the sample's one and only env
             task, error = None, None
             try:
-                task = build_task(sample, asr, catalog, args.data_root, args.split)
+                task = build_task(sample, asr, catalog, args.data_root, args.split, started_at=t0)
                 agent.run(task, env)
             except Exception:
                 error = traceback.format_exc()
@@ -92,7 +97,8 @@ def main(argv: list[str] | None = None) -> Path:
                 print(f"[{i}/{len(samples)}] {sample['id']} {elapsed:.2f}s{flag}", flush=True)
 
     meta = {
-        "split": args.split, "agent": args.agent, "asr": args.asr, "seed": args.seed, "limit": args.limit,
+        "split": args.split, "agent": args.agent, "asr": args.asr, "agent_kw": agent_kw, "asr_kw": asr_kw,
+        "seed": args.seed, "limit": args.limit,
         "n": len(samples), "errors": errors, "load_seconds": round(load_s, 2),
         "mean_seconds": round(sum(times) / max(len(times), 1), 3), "max_seconds": round(max(times, default=0), 3),
         "over_time_limit": sum(t > TIME_LIMIT_S for t in times),

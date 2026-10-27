@@ -13,6 +13,7 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
+from .asr.wer import mean_wer
 from .data import default_data_root, fuzzy_params, import_zaic_tools, load_catalog, load_samples
 from .scoring import score_sample
 
@@ -63,6 +64,10 @@ def evaluate(pred_path: Path, split: str, data_root: Path) -> dict:
     metrics = {"split": split, "pred": str(pred_path), "n_in_split": len(samples), "overall": agg(rows),
                "by_group": {k: agg(v) for k, v in sorted(groups.items())}}
     out_dir = pred_path.parent
+    trace, meta = out_dir / "trace.jsonl", out_dir / "meta.json"
+    if trace.exists() and meta.exists() and json.loads(meta.read_text(encoding="utf-8"))["asr"] not in ("gold", "none"):
+        traces = [json.loads(line) for line in open(trace, encoding="utf-8") if line.strip()]
+        metrics["asr_wer"] = mean_wer(traces, samples)
     (out_dir / "metrics.json").write_text(json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8")
     with open(out_dir / "per_sample.jsonl", "w", encoding="utf-8") as f:
         for r in rows:
@@ -81,7 +86,8 @@ def summary_row(run_dir: Path) -> str:
     return " | ".join([
         "", meta["finished"][:16].replace("T", " "), commit, meta["split"], str(meta["n"]), meta["agent"], meta["asr"],
         str(m["overall"]["score"]) if m else "(submit)", str(m["overall"]["f1_no_hash"]) if m else "-",
-        cell("act"), cell("ask"), cell("empty"), str(meta["mean_seconds"]), str(meta["max_seconds"]), "",
+        cell("act"), cell("ask"), cell("empty"), str(meta["mean_seconds"]), str(meta["max_seconds"]),
+        f"WER {m['asr_wer']}" if m and m.get("asr_wer") is not None else "",
     ]).strip()
 
 
@@ -104,7 +110,8 @@ def main(argv: list[str] | None = None) -> dict:
     metrics = evaluate(pred, split, args.data_root)
 
     o = metrics["overall"]
-    print(f"{split}: {o['n']}/{metrics['n_in_split']} samples  score {o['score']}  F1(no hash) {o['f1_no_hash']}  hash acc {o['hash_acc']}")
+    print(f"{split}: {o['n']}/{metrics['n_in_split']} samples  score {o['score']}  F1(no hash) {o['f1_no_hash']}  hash acc {o['hash_acc']}"
+          + (f"  ASR WER {metrics['asr_wer']}" if metrics.get("asr_wer") is not None else ""))
     for k, v in metrics["by_group"].items():
         print(f"  {k:6s} n={v['n']:4d}  score {v['score']:6.2f}  F1 {v['f1_no_hash']:6.2f}  hash {v['hash_acc']:6.2f}")
     if (pred.parent / "meta.json").exists():
