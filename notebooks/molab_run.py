@@ -32,7 +32,7 @@ def _(mo):
     # LifeMate runner
 
     1. Turn on the GPU with the *notebook specs* button in the header.
-    2. Fill in the repo, a token (private repo) and the data zip link (only needed once per session).
+    2. Fill in the GitHub token (private repo) and the team's HF dataset + read token (data is fetched once per session).
     3. Pick split, agent and ASR, then press **Pull + run**. Every press pulls the latest commit of the branch.
 
     On `train` the run is scored locally; on `public_test` download `submission.jsonl` and submit it on the portal.
@@ -46,20 +46,22 @@ def _(mo, os):
                           label="Repo", full_width=True)
     branch = mo.ui.text(value="main", label="Branch")
     token = mo.ui.text(kind="password", value=os.environ.get("GITHUB_TOKEN", ""), label="GitHub token (repo private)")
-    data_url = mo.ui.text(value=os.environ.get("LIFEMATE_DATA_URL", ""), label="Data zip URL (train+public_test)",
-                          full_width=True)
+    hf_repo = mo.ui.text(value=os.environ.get("LIFEMATE_HF_REPO", ""), label="HF dataset (user/name)")
+    hf_token = mo.ui.text(kind="password", value=os.environ.get("HF_TOKEN", ""), label="HF token (read)")
+    data_url = mo.ui.text(value=os.environ.get("LIFEMATE_DATA_URL", ""), label="or data zip URL", full_width=True)
     split = mo.ui.dropdown(["train", "public_test"], value="train", label="Split")
     agent = mo.ui.text(value="oracle", label="--agent")
     asr = mo.ui.text(value="gold", label="--asr")
     limit = mo.ui.number(start=0, stop=100000, value=0, label="--limit (0 = all)")
     extra = mo.ui.text(value="", label="extra infer args", full_width=True)
     run = mo.ui.run_button(label="Pull + run")
-    mo.vstack([repo_url, mo.hstack([branch, token]), data_url, mo.hstack([split, agent, asr, limit]), extra, run])
-    return agent, asr, branch, data_url, extra, limit, repo_url, run, split, token
+    mo.vstack([repo_url, mo.hstack([branch, token]), mo.hstack([hf_repo, hf_token]), data_url,
+               mo.hstack([split, agent, asr, limit]), extra, run])
+    return agent, asr, branch, data_url, extra, hf_repo, hf_token, limit, repo_url, run, split, token
 
 
 @app.cell
-def _(Path, branch, data_url, mo, os, repo_url, run, shutil, subprocess, sys, token):
+def _(Path, branch, data_url, hf_repo, hf_token, mo, os, repo_url, run, shutil, subprocess, sys, token):
     mo.stop(not run.value, mo.md("_Press **Pull + run** to start._"))
 
     work = Path.cwd() / "lifemate_work"
@@ -85,17 +87,6 @@ def _(Path, branch, data_url, mo, os, repo_url, run, shutil, subprocess, sys, to
     commit = _git("log", "-1", "--format=%h", cwd=repo_dir)
     commit_msg = _git("log", "-1", "--format=%s", cwd=repo_dir)
 
-    # same command as on laptops; a no-op when this session already has the data
-    data_root = work / "data"
-    _fetch = [sys.executable, "-m", "lifemate.fetch_data", "--dest", str(data_root)]
-    if data_url.value.strip():
-        _fetch += ["--url", data_url.value.strip()]
-    _r = subprocess.run(_fetch, cwd=repo_dir, env={**os.environ, "PYTHONPATH": str(repo_dir / "src")},
-                        capture_output=True, text=True)
-    print(_r.stdout[-2000:], flush=True)
-    if _r.returncode:
-        raise RuntimeError(f"fetching data failed (is 'Data zip URL' filled in?):\n{_r.stderr[-2000:]}")
-
     _req = repo_dir / "requirements.txt"
     _pip = [sys.executable, "-m", "pip", "install", "-q", "-r", str(_req)]
     if shutil.which("uv"):
@@ -103,6 +94,22 @@ def _(Path, branch, data_url, mo, os, repo_url, run, shutil, subprocess, sys, to
     _r = subprocess.run(_pip, capture_output=True, text=True)
     if _r.returncode:
         raise RuntimeError(f"installing requirements failed:\n{_r.stderr[-3000:]}")
+
+    # same command as on laptops; a no-op when this session already has the data
+    data_root = work / "data"
+    _fetch = [sys.executable, "-m", "lifemate.fetch_data", "--dest", str(data_root)]
+    if hf_repo.value.strip():
+        _fetch += ["--hf-repo", hf_repo.value.strip()]
+    elif data_url.value.strip():
+        _fetch += ["--url", data_url.value.strip()]
+    _fetch_env = {**os.environ, "PYTHONPATH": str(repo_dir / "src")}
+    if hf_token.value:
+        _fetch_env["HF_TOKEN"] = hf_token.value
+    _r = subprocess.run(_fetch, cwd=repo_dir, env=_fetch_env, capture_output=True, text=True)
+    print(_r.stdout[-2000:], flush=True)
+    if _r.returncode:
+        _err = _r.stderr[-2000:].replace(hf_token.value, "***") if hf_token.value else _r.stderr[-2000:]
+        raise RuntimeError(f"fetching data failed (HF dataset + token filled in?):\n{_err}")
 
     _gpu = "no GPU"
     if shutil.which("nvidia-smi"):

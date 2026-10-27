@@ -1,10 +1,11 @@
 """Download and unpack the competition data into data/ (train/, public_test/, README.md, VERSION).
 
-    python -m lifemate.fetch_data --url "<train+public_test.zip link>"   # or set LIFEMATE_DATA_URL
+    python -m lifemate.fetch_data --hf-repo <user>/<dataset>    # team copy (see lifemate.hf_upload); or LIFEMATE_HF_REPO
+    python -m lifemate.fetch_data --url "<train+public_test.zip link>"   # organisers' server; or LIFEMATE_DATA_URL
     python -m lifemate.fetch_data --zip ~/Downloads/train+public_test.zip
 
-Does nothing when the data is already there (use --force to redo). The link is not stored in the repo: the data is
-licensed to registered teams only.
+The Hugging Face token comes from HF_TOKEN or `hf auth login`. Does nothing when the data is already there (use
+--force to redo). Links and tokens are never stored in the repo: the data is licensed to registered teams only.
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ from pathlib import Path
 from .data import default_data_root
 
 SPLITS = ("train", "public_test", "private_test")
+HF_ZIP = "train+public_test.zip"  # file name inside the team's Hugging Face dataset
 
 
 def has_data(dest: Path) -> bool:
@@ -35,6 +37,13 @@ def download(url: str, out: Path) -> None:
             done += len(chunk)
             if done % step < len(chunk) or done == total:
                 print(f"  {done >> 20} / {total >> 20} MB", flush=True)
+
+
+def download_hf(repo_id: str, filename: str, out_dir: Path) -> Path:
+    from huggingface_hub import hf_hub_download
+
+    print(f"downloading {repo_id}/{filename} from Hugging Face", flush=True)
+    return Path(hf_hub_download(repo_id, filename, repo_type="dataset", local_dir=out_dir))
 
 
 def extract(zip_path: Path, dest: Path) -> None:
@@ -56,9 +65,10 @@ def extract(zip_path: Path, dest: Path) -> None:
 
 def main(argv: list[str] | None = None) -> Path:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    src = ap.add_mutually_exclusive_group()
-    src.add_argument("--url", default=os.environ.get("LIFEMATE_DATA_URL"))
-    src.add_argument("--zip", type=Path, help="an already downloaded zip")
+    ap.add_argument("--zip", type=Path, help="an already downloaded zip (checked first)")
+    ap.add_argument("--hf-repo", default=os.environ.get("LIFEMATE_HF_REPO"), help="private HF dataset (checked second)")
+    ap.add_argument("--hf-file", default=HF_ZIP)
+    ap.add_argument("--url", default=os.environ.get("LIFEMATE_DATA_URL"), help="zip link (checked last)")
     ap.add_argument("--dest", type=Path, default=default_data_root())
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args(argv)
@@ -66,16 +76,19 @@ def main(argv: list[str] | None = None) -> Path:
     if has_data(args.dest) and not args.force:
         print(f"data already in {args.dest}")
         return args.dest
-    if not args.zip and not args.url:
-        sys.exit("no data yet: pass --url <zip link> (or LIFEMATE_DATA_URL) or --zip <file>")
+    if not (args.zip or args.hf_repo or args.url):
+        sys.exit("no data yet: pass --hf-repo <user/dataset>, --url <zip link> or --zip <file>")
     args.dest.mkdir(parents=True, exist_ok=True)
     if args.zip:
         extract(args.zip, args.dest)
     else:
         with tempfile.TemporaryDirectory(dir=args.dest) as tmp:
-            zip_path = Path(tmp) / "data.zip"
-            print(f"downloading -> {zip_path}", flush=True)
-            download(args.url, zip_path)
+            if args.hf_repo:
+                zip_path = download_hf(args.hf_repo, args.hf_file, Path(tmp))
+            else:
+                zip_path = Path(tmp) / "data.zip"
+                print(f"downloading -> {zip_path}", flush=True)
+                download(args.url, zip_path)
             extract(zip_path, args.dest)
     if not has_data(args.dest):
         sys.exit(f"unzipped into {args.dest} but found no <split>/<split>.jsonl; check the zip layout")

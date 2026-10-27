@@ -9,7 +9,8 @@ Zalo AI Challenge 2026, **LifeMate** track (team TripleTrouble). Organiser specs
 ```bash
 bash scripts/setup.sh                          # macOS/Linux: .venv + pip install -r requirements-dev.txt -e .
                                                # (Windows: scripts\setup.ps1); then activate .venv
-python -m lifemate.fetch_data --url "<zip link>"   # or --zip <file>; no-op if data/ is present
+python -m lifemate.fetch_data --hf-repo <user>/<dataset>   # team's private HF copy (HF_TOKEN); or --zip / --url
+python -m lifemate.hf_upload --repo <user>/<dataset> --zip <file>   # one-off; creates the dataset private
 pytest                                         # unit tests + oracle end-to-end (skipped without data/train)
 pytest tests/test_scoring.py::test_each_call_matches_at_most_once
 
@@ -24,6 +25,15 @@ Without the editable install (e.g. the user's base Anaconda, whose torch/numpy a
 
 All repo files (code, comments, docs, notebook UI, commits) are in English; Vietnamese appears only as data. The team mostly uses macOS, so keep `scripts/setup.sh` working (bash, LF line endings via `.gitattributes`).
 
+## Git workflow (team rule)
+
+- **Never commit or push directly to `main`.** molab runs `main` by default, so `main` must always work.
+- Branch from an up-to-date `main`: `feat/<topic>`, `fix/<topic>`, or `exp/<topic>` for experiments (for example `exp/qwen3-4b-react`).
+- Open a PR into `main` (`gh pr create --base main`). The description says what changed and how it was verified: `pytest`, plus the train score / `RESULTS.md` row when agent or ASR behaviour changed. Merge after a teammate has looked at it.
+- To try a branch on molab before merging, put its name in the notebook's *Branch* field.
+- Commit messages and PR text are in English. Never commit data, tokens, or the data/HF links (see `.gitignore`).
+- On the repo owner's machine `gh`'s active account is not the repo account. Run `gh` with `GH_TOKEN="$(gh auth token --user AuDuongKhang)"` instead of switching accounts.
+
 ## Architecture
 
 `src/lifemate/` pipeline: `infer.py` runs, for each sample, ASR → build `Task` → `agent.run(task, env)` and writes `submission.jsonl` (the official file), `trace.jsonl` (transcript, every call with its result, seconds, traceback) and `meta.json` (args, git commit, timing).
@@ -32,7 +42,7 @@ All repo files (code, comments, docs, notebook UI, commits) are in English; Viet
 - `task.Task`: everything an agent may use. `history` user turns get ASR `text` (`audio_text` is stripped), `tools` are catalog specs for `installed_apps` + `sys.ask_missing_info`. `label` is set on train for oracle/debug only. A real agent must never read it.
 - `scoring.py`: local copy of the official metric, with our assumptions in its docstring. `evaluate.py` gets the gold hash by replaying `label.tool_calls` in a fresh ToolEnv, which reproduces `label.final_state` on all 1545 train samples.
 - `data.import_zaic_tools`: every split ships its **own** `zaic_tools` under the same module name, so one process handles one split. Steps that touch two splits run as subprocesses (see `tests/test_pipeline.py` and the notebook).
-- `notebooks/molab_run.py`: marimo notebook for molab (GPU). molab syncs only this file from GitHub, so it clones the repo itself (shallow, chosen branch, optional token), fetches data with `lifemate.fetch_data` from a URL typed in the UI (never stored in the repo), installs `requirements.txt`, runs infer (+ evaluate on train) in subprocesses, and offers downloads plus the RESULTS.md row. Team results are logged by hand in `RESULTS.md`.
+- `notebooks/molab_run.py`: marimo notebook for molab (GPU). molab can't sync a private repo, so the team uploads this file once. It clones the repo itself (shallow, chosen branch, GitHub token), fetches data with `lifemate.fetch_data` from the team's private HF dataset (repo name and tokens typed in the UI, never stored in the repo), installs `requirements.txt`, runs infer (+ evaluate on train) in subprocesses, and offers downloads plus the RESULTS.md row. Team results are logged by hand in `RESULTS.md`.
 
 ## Rules that constrain the code
 
