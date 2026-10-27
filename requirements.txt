@@ -1,4 +1,7 @@
 # Runtime deps of the pipeline. zaic_tools itself is stdlib-only and ships with the data.
-# ASR / LLM deps (torch, transformers, vllm, ...) get added once the approach is chosen.
+# torch is not listed: molab and the Docker base image ship a CUDA build of it.
 numpy
 huggingface_hub    # fetching the team's data copy (lifemate.fetch_data / hf_upload); later also model weights
+transformers>=4.51  # Qwen3 + Whisper; torch itself comes preinstalled on molab (and in the Docker base image)
+accelerate
+soundfile

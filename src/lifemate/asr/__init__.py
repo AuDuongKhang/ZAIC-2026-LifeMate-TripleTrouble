@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from .base import ASR, GoldTranscriptASR, NullASR
+from .whisper import WhisperASR
 
 BACKENDS: dict[str, type[ASR]] = {
     "gold": GoldTranscriptASR,
     "none": NullASR,
+    "whisper": WhisperASR,
 }
 
 
