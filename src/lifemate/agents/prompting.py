@@ -55,10 +55,12 @@ def history_messages(history: list[dict]) -> list[dict]:
         if not calls:
             msgs.append({"role": "assistant", "content": turn.get("text", "")})
             continue
-        msgs.append({"role": "assistant", "content": turn.get("text", ""), "tool_calls": [
+        msgs.append({"role": "assistant", "content": "", "tool_calls": [
             {"type": "function", "function": {"name": c["name"], "arguments": c["arguments"]}} for c in calls]})
         for result in turn.get("tool_results") or []:
             msgs.append({"role": "tool", "content": json.dumps(result, ensure_ascii=False)})
+        if turn.get("text"):  # said after seeing the results
+            msgs.append({"role": "assistant", "content": turn["text"]})
     return msgs
 
 

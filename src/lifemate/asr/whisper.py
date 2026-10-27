@@ -17,7 +17,7 @@ class WhisperASR(ASR):
         from transformers import pipeline
 
         dtype = torch.float16 if device.startswith("cuda") else torch.float32
-        self.pipe = pipeline("automatic-speech-recognition", model=model, device=device, torch_dtype=dtype)
+        self.pipe = pipeline("automatic-speech-recognition", model=model, device=device, dtype=dtype)
 
     def transcribe(self, audio: Path, sample: dict) -> str:
         import numpy as np

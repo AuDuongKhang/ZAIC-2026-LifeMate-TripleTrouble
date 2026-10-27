@@ -27,7 +27,7 @@ class HFChatLLM:
         self.context_limit = CONTEXT_LIMIT
         self.max_new_tokens = max_new_tokens
         self.tokenizer = AutoTokenizer.from_pretrained(model)
-        self.model = AutoModelForCausalLM.from_pretrained(model, torch_dtype=getattr(torch, dtype), device_map="cuda")
+        self.model = AutoModelForCausalLM.from_pretrained(model, dtype=getattr(torch, dtype), device_map="cuda")
         self.model.eval()
         # Strings to cut from the completion: end-of-turn markers, not the <tool_call> markup.
         self.stop_strings = {t for t in (self.tokenizer.eos_token, self.tokenizer.pad_token, "<|im_end|>", "<|endoftext|>") if t}

@@ -35,9 +35,10 @@ def test_system_prompt_has_context_values():
 def test_history_messages_pairs_calls_with_results():
     msgs = history_messages([{"role": "user", "text": "báo thức mai?"},
         {"role": "assistant", "text": "Có 1.", "tool_calls": [{"name": "alarm.list", "arguments": {}}], "tool_results": [{"ok": True}]}])
-    assert [m["role"] for m in msgs] == ["user", "assistant", "tool"]
-    assert msgs[1]["tool_calls"][0]["function"]["name"] == "alarm.list"
-    assert msgs[2]["content"] == '{"ok": true}'
+    # The assistant's text was said after it saw the results, so it comes after the tool messages.
+    assert [m["role"] for m in msgs] == ["user", "assistant", "tool", "assistant"]
+    assert msgs[1]["tool_calls"][0]["function"]["name"] == "alarm.list" and msgs[1]["content"] == ""
+    assert msgs[2]["content"] == '{"ok": true}' and msgs[3]["content"] == "Có 1."
 
 
 def test_build_messages_drops_oldest_history_first():
