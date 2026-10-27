@@ -83,11 +83,14 @@ def summary_row(run_dir: Path) -> str:
     g = (m or {}).get("by_group", {})
     cell = lambda k: str(g[k]["score"]) if k in g else "-"  # noqa: E731
     commit = (meta.get("git") or {}).get("commit") or "?"
+    info = meta.get("agent_info") or {}
+    notes = [f"prompt {info['prompt']}" if info.get("prompt") else "",
+             f"WER {m['asr_wer']}" if m and m.get("asr_wer") is not None else ""]
+    notes = [n for n in notes if n]
     return " | ".join([
         "", meta["finished"][:16].replace("T", " "), commit, meta["split"], str(meta["n"]), meta["agent"], meta["asr"],
         str(m["overall"]["score"]) if m else "(submit)", str(m["overall"]["f1_no_hash"]) if m else "-",
-        cell("act"), cell("ask"), cell("empty"), str(meta["mean_seconds"]), str(meta["max_seconds"]),
-        f"WER {m['asr_wer']}" if m and m.get("asr_wer") is not None else "",
+        cell("act"), cell("ask"), cell("empty"), str(meta["mean_seconds"]), str(meta["max_seconds"]), "; ".join(notes), "",
     ]).strip()
 
 

@@ -98,6 +98,7 @@ def main(argv: list[str] | None = None) -> Path:
 
     meta = {
         "split": args.split, "agent": args.agent, "asr": args.asr, "agent_kw": agent_kw, "asr_kw": asr_kw,
+        "agent_info": getattr(agent, "info", {}),
         "seed": args.seed, "limit": args.limit,
         "n": len(samples), "errors": errors, "load_seconds": round(load_s, 2),
         "mean_seconds": round(sum(times) / max(len(times), 1), 3), "max_seconds": round(max(times, default=0), 3),

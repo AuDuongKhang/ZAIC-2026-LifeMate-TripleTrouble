@@ -31,8 +31,9 @@ class FakeLLM:
 
 
 class FakeEnv:
-    def __init__(self, bad=()):
+    def __init__(self, bad=(), results=None):
         self.bad, self.validated, self.called = set(bad), [], []
+        self.results = results or {}
 
     def validate(self, name, args):
         self.validated.append(name)
@@ -40,7 +41,7 @@ class FakeEnv:
 
     def call(self, name, args):
         self.called.append((name, args))
-        return {"ok": True}
+        return self.results.get(name, {"ok": True})
 
 
 def test_plain_answer_makes_no_calls():
@@ -114,3 +115,39 @@ def test_generation_capped_by_remaining_time():
     llm = FakeLLM(["Xong."])
     ReActAgent(llm=llm, time_budget_s=20, clock=lambda: 5.0).run(dataclasses.replace(TASK, started_at=0.0), FakeEnv())
     assert llm.max_times == [15.0]
+
+
+PAY = {"name": "bill_payment.pay", "description": "Pay a bill", "parameters": {"type": "object", "properties": {
+    "bill_id": {"type": "string", "x-ref": "bill_payment.bills"}, "source": {"type": "string"}}, "required": ["bill_id"]}}
+LIST = {"name": "bill_payment.list_bills", "description": "List bills", "parameters": {"type": "object", "properties": {}}}
+BILL_TASK = dataclasses.replace(TASK, tools=[PAY, LIST])
+
+
+def test_invented_ref_id_is_not_sent_until_looked_up():
+    env = FakeEnv(results={"bill_payment.list_bills": {"ok": True, "bills": [{"id": "bill_04", "amount": 300000}]}})
+    llm = FakeLLM([CALL("bill_payment.pay", {"bill_id": "bill_12345"}), CALL("bill_payment.list_bills", {}),
+                   CALL("bill_payment.pay", {"bill_id": "bill_04"}), "Xong."])
+    ReActAgent(llm=llm, check_refs=True).run(BILL_TASK, env)
+    assert [c for c in env.called] == [("bill_payment.list_bills", {}), ("bill_payment.pay", {"bill_id": "bill_04"})]
+    assert "bill_12345" in llm.seen[1][-1]["content"]
+
+
+def test_ref_id_from_history_results_is_accepted():
+    task = dataclasses.replace(BILL_TASK, history=[
+        {"role": "user", "text": "hoá đơn nào?"},
+        {"role": "assistant", "text": "Có 1.", "tool_calls": [{"name": "bill_payment.list_bills", "arguments": {}}],
+         "tool_results": [{"ok": True, "bills": [{"id": "bill_04"}]}]}])
+    env = FakeEnv()
+    ReActAgent(llm=FakeLLM([CALL("bill_payment.pay", {"bill_id": "bill_04"}), "Xong."]), check_refs=True).run(task, env)
+    assert env.called == [("bill_payment.pay", {"bill_id": "bill_04"})]
+
+
+def test_ref_check_is_off_by_default():
+    env = FakeEnv()
+    ReActAgent(llm=FakeLLM([CALL("bill_payment.pay", {"bill_id": "bill_12345"}), "Xong."])).run(BILL_TASK, env)
+    assert env.called == [("bill_payment.pay", {"bill_id": "bill_12345"})]
+
+
+def test_agent_info_records_prompt_and_options():
+    agent = ReActAgent(llm=FakeLLM([]), prompt_version="v1", check_refs=False)
+    assert agent.info["prompt"] == "v1" and agent.info["check_refs"] is False

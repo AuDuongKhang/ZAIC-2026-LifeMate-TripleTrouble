@@ -54,3 +54,16 @@ def test_build_messages_never_drops_request():
     task = Task(id="t", request="tắt đèn", context=CTX, tools=[], history=[{"role": "user", "text": "u1"}])
     msgs = build_messages(task, count_tokens=len, budget=1)
     assert [m["role"] for m in msgs] == ["system", "user"] and msgs[-1]["content"] == "tắt đèn"
+
+
+def test_prompt_versions_are_kept():
+    from lifemate.agents.prompts import DEFAULT_PROMPT, PROMPTS
+    assert PROMPTS["v1"].startswith("You are a voice assistant") and "Never invent" not in PROMPTS["v1"]
+    assert "Never invent" in PROMPTS["v2"] and DEFAULT_PROMPT == "v1"  # default = best measured version
+    assert PROMPTS["v2"] in system_prompt(CTX, "v2") and PROMPTS["v1"] in system_prompt(CTX)
+
+
+def test_unknown_prompt_version_fails_loudly():
+    import pytest
+    with pytest.raises(KeyError):
+        system_prompt(CTX, "v999")
