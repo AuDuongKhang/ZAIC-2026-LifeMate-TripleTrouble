@@ -5,15 +5,7 @@ import json
 from typing import Callable
 
 from ..task import Task
-
-RULES = """You are a voice assistant that acts through the given tools. The user's words come from speech recognition and may contain recognition errors.
-Rules:
-1. Handle only the user's last message. Earlier turns are context; their actions are already done.
-2. Call a read tool only when you need its data (an id, a current value, whether something exists) to decide or to fill a parameter.
-3. Use ids and values exactly as tools return them. Write dates and times in ISO 8601 with the timezone offset of the current time.
-4. If a required parameter cannot be determined from the request, the context, the history or tool results, call sys.ask_missing_info with that tool's name and the missing parameter names, then stop.
-5. If none of the tools can do the request, reply in one short sentence without calling any tool.
-6. When the request is done, reply in one short sentence without calling any tool."""
+from .prompts import DEFAULT_PROMPT, PROMPTS
 
 
 def _clean_property(prop: dict) -> dict:
@@ -40,9 +32,9 @@ def tool_schema(spec: dict) -> dict:
     return {"type": "function", "function": {"name": spec["name"], "description": description, "parameters": clean}}
 
 
-def system_prompt(context: dict) -> str:
+def system_prompt(context: dict, version: str = DEFAULT_PROMPT) -> str:
     ctx = {k: context[k] for k in ("current_time", "timezone", "location", "user_profile") if k in context}
-    return f"{RULES}\n\nContext: {json.dumps(ctx, ensure_ascii=False)}"
+    return f"{PROMPTS[version]}\n\nContext: {json.dumps(ctx, ensure_ascii=False)}"
 
 
 def history_messages(history: list[dict]) -> list[dict]:
@@ -64,7 +56,8 @@ def history_messages(history: list[dict]) -> list[dict]:
     return msgs
 
 
-def build_messages(task: Task, count_tokens: Callable[[list[dict]], int], budget: int) -> list[dict]:
+def build_messages(task: Task, count_tokens: Callable[[list[dict]], int], budget: int,
+                   prompt_version: str = DEFAULT_PROMPT) -> list[dict]:
     """[system, *history, user request]; drops the oldest history turns (a user turn and the replies after it)
     until the prompt fits the token budget. The system prompt and the request are never dropped."""
     turns: list[list[dict]] = []
@@ -72,7 +65,7 @@ def build_messages(task: Task, count_tokens: Callable[[list[dict]], int], budget
         if msg["role"] == "user" or not turns:
             turns.append([])
         turns[-1].append(msg)
-    head, tail = [{"role": "system", "content": system_prompt(task.context)}], [{"role": "user", "content": task.request}]
+    head, tail = [{"role": "system", "content": system_prompt(task.context, prompt_version)}], [{"role": "user", "content": task.request}]
     while True:
         msgs = head + [m for turn in turns for m in turn] + tail
         if not turns or count_tokens(msgs) <= budget:
