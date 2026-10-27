@@ -1,3 +1,4 @@
+import dataclasses
 import json
 
 from lifemate.agents.react import ReActAgent
@@ -18,9 +19,11 @@ class FakeLLM:
     def __init__(self, outputs):
         self.outputs = list(outputs)
         self.seen = []  # messages passed to each generate call
+        self.max_times = []
 
-    def generate(self, messages, tools):
+    def generate(self, messages, tools, max_time=None):
         self.seen.append([dict(m) for m in messages])
+        self.max_times.append(max_time)
         return self.outputs.pop(0) if self.outputs else "Xong."
 
     def count_tokens(self, messages, tools):
@@ -98,3 +101,16 @@ def test_broken_json_retried_then_gives_up():
     env, llm = FakeEnv(), FakeLLM(['<tool_call>{bad</tool_call>'] * 5)
     ReActAgent(llm=llm, max_invalid=2).run(TASK, env)
     assert env.called == [] and len(llm.seen) == 3
+
+
+def test_time_budget_counts_from_sample_start():
+    # ASR already used 19 s of a 20 s budget: no time left for a generation step (min_step_s=3).
+    llm = FakeLLM([CALL("alarm.list", {})])
+    ReActAgent(llm=llm, time_budget_s=20, min_step_s=3, clock=lambda: 19.0).run(dataclasses.replace(TASK, started_at=0.0), FakeEnv())
+    assert llm.seen == []
+
+
+def test_generation_capped_by_remaining_time():
+    llm = FakeLLM(["Xong."])
+    ReActAgent(llm=llm, time_budget_s=20, clock=lambda: 5.0).run(dataclasses.replace(TASK, started_at=0.0), FakeEnv())
+    assert llm.max_times == [15.0]

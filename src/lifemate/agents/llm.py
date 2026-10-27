@@ -10,7 +10,7 @@ class ChatLLM(Protocol):
     context_limit: int
     max_new_tokens: int
 
-    def generate(self, messages: list[dict], tools: list[dict]) -> str: ...
+    def generate(self, messages: list[dict], tools: list[dict], max_time: float | None = None) -> str: ...
 
     def count_tokens(self, messages: list[dict], tools: list[dict]) -> int: ...
 
@@ -39,11 +39,12 @@ class HFChatLLM:
     def count_tokens(self, messages: list[dict], tools: list[dict]) -> int:
         return int(self._encode(messages, tools)["input_ids"].shape[1])
 
-    def generate(self, messages: list[dict], tools: list[dict]) -> str:
+    def generate(self, messages: list[dict], tools: list[dict], max_time: float | None = None) -> str:
+        """max_time (seconds) stops decoding early; a cut-off tool call then fails to parse and is not sent."""
         inputs = self._encode(messages, tools).to(self.model.device)
         with self.torch.inference_mode():
             out = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens, do_sample=False, num_beams=1,
-                                      temperature=None, top_p=None, top_k=None)
+                                      temperature=None, top_p=None, top_k=None, max_time=max_time)
         text = self.tokenizer.decode(out[0, inputs["input_ids"].shape[1]:], skip_special_tokens=False)
         for s in self.stop_strings:
             text = text.replace(s, "")

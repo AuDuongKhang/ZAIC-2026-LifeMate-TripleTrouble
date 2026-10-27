@@ -18,21 +18,26 @@ class ReActAgent(Agent):
     name = "react"
 
     def __init__(self, llm: ChatLLM | None = None, model: str = "Qwen/Qwen3-4B-Instruct-2507", max_steps: int = 8,
-                 max_invalid: int = 2, time_budget_s: float = 20.0, clock: Callable[[], float] = time.perf_counter):
+                 max_invalid: int = 2, time_budget_s: float = 20.0, min_step_s: float = 3.0,
+                 clock: Callable[[], float] = time.perf_counter):
+        """time_budget_s counts from task.started_at (sample start, ASR included) when the runner sets it.
+        A step only starts with at least min_step_s left, and its generation is capped at the time remaining."""
         self.llm = llm if llm is not None else HFChatLLM(model)
-        self.max_steps, self.max_invalid, self.time_budget_s, self.clock = max_steps, max_invalid, time_budget_s, clock
+        self.max_steps, self.max_invalid, self.clock = max_steps, max_invalid, clock
+        self.time_budget_s, self.min_step_s = time_budget_s, min_step_s
 
     def run(self, task: Task, env) -> None:
-        start = self.clock()
+        start = task.started_at if task.started_at is not None else self.clock()
         tools = [tool_schema(spec) for spec in task.tools]
         budget = self.llm.context_limit - self.llm.max_new_tokens
         messages = build_messages(task, lambda m: self.llm.count_tokens(m, tools), budget)
         done: set[str] = set()  # canonical (name, arguments) of calls already sent
         invalid = 0
         for _ in range(self.max_steps):
-            if self.clock() - start > self.time_budget_s or self.llm.count_tokens(messages, tools) > budget:
+            remaining = self.time_budget_s - (self.clock() - start)
+            if remaining < self.min_step_s or self.llm.count_tokens(messages, tools) > budget:
                 return
-            text = self.llm.generate(messages, tools)
+            text = self.llm.generate(messages, tools, max_time=remaining)
             calls, errors = parse_tool_calls(text)
             if not calls and not errors:
                 return  # a plain answer: finished, or nothing to do (out of scope)

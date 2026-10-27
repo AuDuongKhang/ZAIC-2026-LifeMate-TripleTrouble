@@ -21,7 +21,8 @@ from .utils import git_info, parse_kw, seed_everything
 TIME_LIMIT_S = 30.0  # per sample on the scoring A30, ASR included
 
 
-def build_task(sample: dict, asr, catalog: dict[str, dict], data_root: Path, split: str) -> Task:
+def build_task(sample: dict, asr, catalog: dict[str, dict], data_root: Path, split: str,
+               started_at: float | None = None) -> Task:
     history = []
     for turn in sample["history"]:
         turn = {k: v for k, v in turn.items() if k != "audio_text"}  # agents only see ASR output
@@ -35,6 +36,7 @@ def build_task(sample: dict, asr, catalog: dict[str, dict], data_root: Path, spl
         context=sample["context"],
         tools=[catalog[name] for name in installed_tool_names(sample) if name in catalog],
         label=sample.get("label"),
+        started_at=started_at,
     )
 
 
@@ -79,7 +81,7 @@ def main(argv: list[str] | None = None) -> Path:
             env = zaic_tools.ToolEnv(args.split, sample["id"], root=args.data_root)  # the sample's one and only env
             task, error = None, None
             try:
-                task = build_task(sample, asr, catalog, args.data_root, args.split)
+                task = build_task(sample, asr, catalog, args.data_root, args.split, started_at=t0)
                 agent.run(task, env)
             except Exception:
                 error = traceback.format_exc()
