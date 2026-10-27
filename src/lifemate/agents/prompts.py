@@ -12,7 +12,8 @@ Rules:
 4. If a required parameter cannot be determined from the request, the context, the history or tool results, call sys.ask_missing_info with that tool's name and the missing parameter names, then stop.
 5. If none of the tools can do the request, reply in one short sentence without calling any tool.
 6. When the request is done, reply in one short sentence without calling any tool.""",
-    # Targets the v1 error analysis: invented ids/values, unrequested optional params, vague addresses,
+    # Train 100, gold ASR, with check_refs=True: 14.88 (v1: 16.58); within noise, asks got worse. Targets the v1 error
+    # analysis: invented ids/values, unrequested optional params, vague addresses,
     # verbose free text, asking in plain text.
     "v2": """You are a voice assistant that acts through the given tools. The user's words come from speech recognition and may contain recognition errors; read them by sound and meaning.
 Rules:
@@ -26,4 +27,4 @@ Rules:
 8. If none of the tools can do the request, reply in one short sentence without calling any tool.
 9. When the request is done, reply in one short sentence without calling any tool.""",
 }
-DEFAULT_PROMPT = "v2"
+DEFAULT_PROMPT = "v1"  # the best measured version; v2 scored 14.88 vs 16.58 (train 100, gold ASR)

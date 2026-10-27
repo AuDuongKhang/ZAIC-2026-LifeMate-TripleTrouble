@@ -48,11 +48,12 @@ class ReActAgent(Agent):
 
     def __init__(self, llm: ChatLLM | None = None, model: str = "Qwen/Qwen3-4B-Instruct-2507", max_steps: int = 8,
                  max_invalid: int = 2, time_budget_s: float = 20.0, min_step_s: float = 3.0,
-                 prompt_version: str = DEFAULT_PROMPT, check_refs: bool = True,
+                 prompt_version: str = DEFAULT_PROMPT, check_refs: bool = False,
                  clock: Callable[[], float] = time.perf_counter):
         """time_budget_s counts from task.started_at (sample start, ASR included) when the runner sets it.
         A step only starts with at least min_step_s left, and its generation is capped at the time remaining.
-        check_refs holds back calls whose x-ref ids were never seen in a tool result (v1 baseline: False)."""
+        check_refs holds back calls whose x-ref ids were never seen in a tool result (off by default: with it the
+        model dodged the check, e.g. calling by phone_number instead of asking which contact)."""
         self.llm = llm if llm is not None else HFChatLLM(model)
         self.max_steps, self.max_invalid, self.clock = max_steps, max_invalid, clock
         self.time_budget_s, self.min_step_s = time_budget_s, min_step_s

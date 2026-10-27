@@ -59,8 +59,8 @@ def test_build_messages_never_drops_request():
 def test_prompt_versions_are_kept():
     from lifemate.agents.prompts import DEFAULT_PROMPT, PROMPTS
     assert PROMPTS["v1"].startswith("You are a voice assistant") and "Never invent" not in PROMPTS["v1"]
-    assert "Never invent" in PROMPTS["v2"] and DEFAULT_PROMPT == "v2"
-    assert PROMPTS["v1"] in system_prompt(CTX, "v1") and PROMPTS["v2"] in system_prompt(CTX)
+    assert "Never invent" in PROMPTS["v2"] and DEFAULT_PROMPT == "v1"  # default = best measured version
+    assert PROMPTS["v2"] in system_prompt(CTX, "v2") and PROMPTS["v1"] in system_prompt(CTX)
 
 
 def test_unknown_prompt_version_fails_loudly():
