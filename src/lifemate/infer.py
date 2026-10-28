@@ -99,9 +99,10 @@ def main(argv: list[str] | None = None) -> Path:
             fsub.write(json.dumps(line, ensure_ascii=False) + "\n")
             ftr.write(json.dumps({"id": sample["id"], "request": task.request if task else None, "calls": env.log,
                                   "seconds": round(elapsed, 3), "error": error}, ensure_ascii=False) + "\n")
-            if error or elapsed > TIME_LIMIT_S or i % 50 == 0 or i == len(samples):
+            if error or elapsed > TIME_LIMIT_S or i % 10 == 0 or i == len(samples):
                 flag = " ERROR" if error else (" OVER 30s" if elapsed > TIME_LIMIT_S else "")
-                print(f"[{i}/{len(samples)}] {sample['id']} {elapsed:.2f}s{flag}", flush=True)
+                print(f"[{i}/{len(samples)}] {sample['id']} {elapsed:.2f}s (mean {sum(times) / len(times):.2f}s){flag}",
+                      flush=True)
 
     meta = {
         "split": args.split, "agent": args.agent, "asr": args.asr, "agent_kw": agent_kw, "asr_kw": asr_kw,
