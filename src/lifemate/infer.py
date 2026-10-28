@@ -15,6 +15,7 @@ from pathlib import Path
 from .agents import AGENTS, build_agent
 from .asr import BACKENDS, build_asr
 from .data import REPO_ROOT, audio_path, default_data_root, import_zaic_tools, installed_tool_names, load_catalog, load_samples
+from .splits import SUBSETS, load_splits
 from .task import Task
 from .utils import git_info, parse_kw, seed_everything
 
@@ -48,6 +49,7 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--asr", default="gold", choices=sorted(BACKENDS))
     ap.add_argument("--limit", type=int, default=None, help="first N samples only")
     ap.add_argument("--ids", nargs="*", default=None, help="only these sample ids")
+    ap.add_argument("--subset", choices=SUBSETS, default=None, help="train only: a part of configs/splits.json")
     ap.add_argument("--out", type=Path, default=None, help="run folder (default runs/<time>_<split>_<agent>_<asr>)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--agent-kw", action="append", metavar="KEY=VALUE", help="agent constructor option (repeatable)")
@@ -58,6 +60,11 @@ def main(argv: list[str] | None = None) -> Path:
     samples = load_samples(args.data_root, args.split)
     if args.asr == "gold" and samples and "audio_text" not in samples[0]:
         ap.error(f"--asr gold needs transcripts, which only train has; use a real ASR or --asr none on {args.split}")
+    if args.subset:
+        if args.split != "train":
+            ap.error("--subset needs --split train")
+        wanted = set(load_splits()[args.subset])
+        samples = [s for s in samples if s["id"] in wanted]
     if args.ids:
         wanted = set(args.ids)
         samples = [s for s in samples if s["id"] in wanted]
@@ -99,7 +106,7 @@ def main(argv: list[str] | None = None) -> Path:
     meta = {
         "split": args.split, "agent": args.agent, "asr": args.asr, "agent_kw": agent_kw, "asr_kw": asr_kw,
         "agent_info": getattr(agent, "info", {}),
-        "seed": args.seed, "limit": args.limit,
+        "seed": args.seed, "limit": args.limit, "subset": args.subset,
         "n": len(samples), "errors": errors, "load_seconds": round(load_s, 2),
         "mean_seconds": round(sum(times) / max(len(times), 1), 3), "max_seconds": round(max(times, default=0), 3),
         "over_time_limit": sum(t > TIME_LIMIT_S for t in times),
