@@ -37,7 +37,7 @@ Build the system in tiers, where each tier is a complete, submittable system and
 
 - Full-parameter fine-tuning, pre-training, or any model > 5B (LLM) / > 6B (system).
 - Long "thinking" traces at inference: the 30 s budget on an A30 does not allow them.
-- Training a custom ASR model. We pick and wrap an existing one, and fine-tuning ASR is out of scope for this roadmap.
+- Training an ASR model from scratch. Fine-tuning an existing one is in scope since 27 Oct; see Experiments.
 - Using anything from public_test or private_test (audio, transcripts, apps, labels) as training or tuning data. The rules forbid labelling test splits. Public_test is only for leaderboard submissions.
 
 ## Anti-goals: any of these counts as a failure even if train scores look good
@@ -189,12 +189,104 @@ Everything around the model:
 
 | Week | Track A (Lead) | Track B (Partner) | Gate at end of week |
 |---|---|---|---|
-| 1: 27 Oct – 1 Nov | Choose LLM. Tier 0 agent. First `RESULTS.md` rows. | ASR choice and backend with N-best. Train ASR cache. Holdout split and report breakdowns. Docker skeleton running `empty` offline. | **Gate 1**: Tier 0 + real ASR on public_test, submitted |
+| 1: 27 Oct – 1 Nov | Choose LLM. Tier 0 agent. First `RESULTS.md` rows. Experiments A1–A3 (below). | Experiments B1 (ASR comparison) and B2 (ASR fine-tune). Train ASR cache. Holdout split. Docker skeleton running `empty` offline. | **Gate 1**: Tier 0 + real ASR on public_test, submitted |
 | 2: 2 – 8 Nov | SFT pipeline with checkpoint/resume. First SFT run. | Function masking and ASR-noise records. Optional teacher data. Docker running Tier 0 offline with timing. | **Gate 2**: SFT beats Tier 0 on holdout? |
 | 3: 9 – 14 Nov | GRPO if Gate 2 passed and time allows, otherwise SFT iteration. Final retrain on all train data if compute allows. | Final Docker with the chosen model. Full public_test run inside Docker, run twice, outputs identical. | **Freeze 14 Nov** |
 | 15 – 16 Nov | Buffer only: fixes, no new features | Submit Docker | Deadline 16 Nov 23:59 |
 
 At every point, the best system that has passed its gate is the one packaged in Docker. A new tier replaces it only after beating it on held-out apps.
+
+## Experiments (added 27 Oct, after the first runs)
+
+### What the first runs showed
+
+These are the `RESULTS.md` rows from 27 Oct. All runs use the Tier 0 `react` agent with Qwen3-4B-Instruct-2507; "train 100" means the first 100 train samples.
+
+| Run | Score | Notes |
+|---|---|---|
+| train 100, prompt v1, gold transcripts | 16.58 | act 12.5, ask 11.1, out-of-scope 83.3; history ≥ 8 turns scores 0 |
+| train 100, prompt v1, PhoWhisper-medium | 8.17 | WER 0.298 |
+| train 100, ASR only, PhoWhisper-large | – | WER 0.283 |
+| train 100, prompt v2 + id guard, gold transcripts | 14.88 | 5 samples better, 6 worse than v1 |
+| **public_test, prompt v1, PhoWhisper-large** | **18.95** | leaderboard. Mean 3.3 s, max 8.6 s per sample |
+
+Conclusions:
+1. **ASR costs about half the score.** The audio is real speakers with strong regional accents (the team listened to the worst clips). WER is spread from below 0.1 to 0.85 by speaker. PhoWhisper large and medium fail on the same clips.
+2. **Prompt rules barely move a 4B model,** and with 100 samples the effect is within noise. Error analysis of v1:
+   - ids invented instead of looked up;
+   - optional parameters filled that the user never stated (`repeat`, `type`, `label`, date filters);
+   - no ask after a search returns several matches;
+   - conditions ("if it rains…") not checked before acting;
+   - vague addresses and verbose free text.
+3. **Speed has headroom.** About 3 s per sample out of 30 s, so retrieval-augmented prompts or a larger ASR model fit.
+
+### Shared infrastructure (built first, used by every experiment)
+
+- **Splits.** `configs/splits.json`, written once and committed. It holds:
+  - the holdout apps (spec section Evaluation);
+  - a **dev set of 300 train samples**, stratified by act/ask/out-of-scope and by history length, with no holdout app;
+  - the remaining training pool.
+
+  Few-shot retrieval and every training job draw only from the pool. All experiment numbers below are on dev, or on holdout where stated, never on the first 100.
+- **Paired comparison.** `python -m lifemate.compare runs/<a> runs/<b>` prints, over the shared ids:
+  - the score difference;
+  - better/worse/same sample counts;
+  - a paired bootstrap 95% interval.
+
+  An experiment counts as a win only when the interval excludes 0.
+- **ASR cache.** `--asr cached --asr-kw name=<cache>` replays transcripts from `asr_cache/<split>/<name>.jsonl`, the interface spec section 1. So LLM experiments do not rerun ASR, and every LLM comparison uses identical transcripts. A cache is written by a transcribe-only command, run once per ASR config and split.
+- **WER that counts real errors.** Digits and spelled-out Vietnamese numbers are normalized to one form before scoring, so "5 giờ" and "năm giờ" match. Report both WER and CER.
+
+### Track B, ASR (Partner)
+
+- **B1. Off-the-shelf comparison.** Run on all train clips whose sample is not in the training pool (dev + holdout conversations, final turn and history turns).
+  - Candidates:
+    - PhoWhisper-medium and PhoWhisper-large, each in fp16 and fp32;
+    - Qwen3-ASR-1.7B and Qwen3-ASR-0.6B;
+    - ChunkFormer-CTC-large-vie;
+    - NVIDIA parakeet-ctc-0.6b-vi, only if its licence and Hugging Face release check out.
+  - Per candidate, report:
+    - normalized WER and CER;
+    - p50/p95 seconds per clip on molab;
+    - parameter count;
+    - licence, release date, and required packages.
+  - A candidate must stay under 6B total together with the LLM, i.e. ≤ ~1.9B next to a 4B LLM.
+- **B2. Fine-tune on in-domain audio.** Train the best Whisper-family checkpoint from B1 (or the best overall, if its training stack is practical) on the **training-pool clips** of train. That is up to 5,036 clips, 6.8 h of real speakers, minus dev and holdout conversations.
+  - Optionally add public accented data, licence permitting:
+    - ViMD, 102 h, 63 provinces;
+    - VietSpeech;
+    - Bud500.
+  - Run limits and outputs:
+    - one 12 h molab session, with checkpoint/resume as in Tier 2;
+    - training plots of loss and dev WER per evaluation;
+    - a training script in the repo, since Docker ships training code.
+  - Success: lower WER on dev + holdout clips than the B1 winner, then a higher end-to-end score through the ASR cache.
+- B3 (later): pass the N-best list to the LLM (HyPoradise). Only after B2, if ASR is still the main loss.
+
+### Track A, LLM (Lead)
+
+All Track A runs use the dev set with gold transcripts, and with the cached best ASR for the final comparison.
+
+- **A1. Dynamic few-shot.** This is expected to be the largest LLM-side gain before SFT.
+  - Retrieve the k training-pool samples most similar to the current one. Similarity is lexical or embedding similarity of the request, plus overlap of installed apps.
+  - Render each example as a short prior conversation: user request, gold calls, real results.
+  - Never retrieve the sample itself or any dev or holdout sample.
+  - Compare k = 0, 2, 4. Watch the token budget, still under 16,384, and latency.
+- **A2. Base LLM comparison.** Compare Qwen3-4B-Instruct-2507 with 1–2 other open models under 5B with native tool calling, released before 26 Oct 2026, with a compatible licence. Qwen3.5-4B is a candidate only if its total parameter count, vision tower included, stays under 5B. Use the best A1 setting for all.
+- **A3. Prompt v3 and targeted feedback.**
+  - Rules:
+    - ask when a search returns several matches the user did not disambiguate;
+    - check a stated condition with a read tool, and act only if it holds;
+    - call nothing when the user asks for no change.
+  - Bring back the `x-ref` guard only with feedback naming the read tools of the referenced app (e.g. "use `bill_payment.list_bills`"), so the model looks the id up instead of dodging the check.
+- **A4 (if A1 makes prompts long or slow): vLLM engine.** It is kept only if outputs are deterministic across two runs.
+
+### Order and gates
+
+1. **Shared infrastructure.** Splits, compare, ASR cache, normalized WER. Both tracks depend on it, so it comes first.
+2. **B1 and A1 in parallel.** B1 picks the ASR to fine-tune; A1 decides whether few-shot carries into the SFT data format.
+3. **B2, A2, A3.**
+4. **Gate, around 2 Nov.** The best combination becomes the Tier 0 submission and the baseline that Tier 2 SFT must beat. SFT data should use the best ASR's transcripts and, if A1 wins, the same example format.
 
 ## Left to the builder
 
