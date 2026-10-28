@@ -36,6 +36,12 @@ def _(mo):
     3. Pick split, agent and ASR, then press **Pull + run**. Every press pulls the latest commit of the branch.
 
     On `train` the run is scored locally; on `public_test` download `submission.jsonl` and submit it on the portal.
+
+    **Command** (optional) runs one other step instead of infer, as `python -m lifemate.<command>` from the work folder,
+    for example `transcribe --split train --asr whisper --asr-kw model=vinai/PhoWhisper-large --name pho-large-fp16 --subset eval`,
+    `asr_report --split train pho-large-fp16` or `compare runs/<a> runs/<b>`. ASR caches stay in `lifemate_work/asr_cache/`
+    for the session, so later runs can use `--asr cached --asr-kw name=<cache>`. The HF token is also passed to every step,
+    so private model repos load too.
     """)
     return
 
@@ -54,10 +60,11 @@ def _(mo, os):
     asr = mo.ui.text(value="gold", label="--asr")
     limit = mo.ui.number(start=0, stop=100000, value=0, label="--limit (0 = all)")
     extra = mo.ui.text(value="", label="extra infer args", full_width=True)
+    command = mo.ui.text(value="", label="or command instead of infer (lifemate.<command> args)", full_width=True)
     run = mo.ui.run_button(label="Pull + run")
     mo.vstack([repo_url, mo.hstack([branch, token]), mo.hstack([hf_repo, hf_token]), data_url,
-               mo.hstack([split, agent, asr, limit]), extra, run])
-    return agent, asr, branch, data_url, extra, hf_repo, hf_token, limit, repo_url, run, split, token
+               mo.hstack([split, agent, asr, limit]), extra, command, run])
+    return agent, asr, branch, command, data_url, extra, hf_repo, hf_token, limit, repo_url, run, split, token
 
 
 @app.cell
@@ -120,36 +127,57 @@ def _(Path, branch, data_url, hf_repo, hf_token, mo, os, repo_url, run, shutil, 
 
 
 @app.cell
-def _(agent, asr, commit, data_root, datetime, extra, limit, os, repo_dir, shlex, split, subprocess, sys, work):
-    run_dir = work / "runs" / f"{datetime.now():%Y%m%d-%H%M%S}_{commit}_{split.value}_{agent.value}_{asr.value}"
-    _env = {**os.environ, "PYTHONPATH": str(repo_dir / "src"), "LIFEMATE_DATA_ROOT": str(data_root), "PYTHONUTF8": "1"}
-    _cmd = [sys.executable, "-m", "lifemate.infer", "--split", split.value, "--agent", agent.value,
-            "--asr", asr.value, "--out", str(run_dir), *shlex.split(extra.value)]
-    if limit.value:
-        _cmd += ["--limit", str(int(limit.value))]
+def _(agent, asr, command, commit, data_root, datetime, extra, hf_token, limit, os, repo_dir, shlex, split,
+      subprocess, sys, work):
+    _env = {**os.environ, "PYTHONPATH": str(repo_dir / "src"), "LIFEMATE_DATA_ROOT": str(data_root), "PYTHONUTF8": "1",
+            "LIFEMATE_ASR_CACHE": str(work / "asr_cache")}
+    if hf_token.value:
+        _env["HF_TOKEN"] = hf_token.value  # private model repos (fine-tuned ASR / LLM)
 
-    def _stream(cmd):
+    def _stream(cmd, cwd=repo_dir):
         """Run a step in its own process (each split has its own zaic_tools; fresh code after every pull)."""
         out = []
-        with subprocess.Popen(cmd, cwd=repo_dir, env=_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        with subprocess.Popen(cmd, cwd=cwd, env=_env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                               text=True, encoding="utf-8") as p:
             for line in p.stdout:
+                line = line.replace(hf_token.value, "***") if hf_token.value else line
                 print(line, end="", flush=True)
                 out.append(line)
         if p.returncode:
             raise RuntimeError(f"{cmd[2]} exited with {p.returncode}")
         return "".join(out)
 
-    _stream(_cmd)
-    if split.value == "train":
-        _stream([sys.executable, "-m", "lifemate.evaluate", str(run_dir)])
-    results_row = _stream([sys.executable, "-m", "lifemate.evaluate", "--row-only", str(run_dir)]).strip()
-    return results_row, run_dir
+    run_dir, command_out = None, None
+    if command.value.strip():
+        _module, *_args = shlex.split(command.value)
+        # from the work folder, so runs/<name> and asr_cache/ resolve as shown in the UI
+        command_out = _stream([sys.executable, "-m", f"lifemate.{_module}", *_args], cwd=work)
+        results_row = ""
+    else:
+        run_dir = work / "runs" / f"{datetime.now():%Y%m%d-%H%M%S}_{commit}_{split.value}_{agent.value}_{asr.value}"
+        _cmd = [sys.executable, "-m", "lifemate.infer", "--split", split.value, "--agent", agent.value,
+                "--asr", asr.value, "--out", str(run_dir), *shlex.split(extra.value)]
+        if limit.value:
+            _cmd += ["--limit", str(int(limit.value))]
+        _stream(_cmd)
+        if split.value == "train":
+            _stream([sys.executable, "-m", "lifemate.evaluate", str(run_dir)])
+        results_row = _stream([sys.executable, "-m", "lifemate.evaluate", "--row-only", str(run_dir)]).strip()
+    return command_out, results_row, run_dir
 
 
 @app.cell
-def _(mo, results_row, run_dir):
+def _(command_out, mo, results_row, run_dir, work):
     import json as _json
+
+    if run_dir is None:
+        _caches = sorted((work / "asr_cache").glob("*/*")) if (work / "asr_cache").is_dir() else []
+        _out = mo.vstack([mo.md("### Command output"),
+                          mo.ui.code_editor(value=command_out[-5000:], language="markdown", disabled=True),
+                          mo.md("ASR caches in this session (download to keep them):"),
+                          mo.hstack([mo.download(data=p.read_bytes(), filename=f"{p.parent.name}_{p.name}", label=f"{p.parent.name}/{p.name}")
+                                     for p in _caches], justify="start")])
+    mo.stop(run_dir is None, _out if run_dir is None else None)
 
     _items = [mo.md("### Results"), mo.md("Row for `RESULTS.md`:"),
               mo.ui.code_editor(value=results_row, language="markdown", disabled=True)]
