@@ -36,7 +36,7 @@ Decisions that follow:
 
 | Dates | Phase | Leaderboard submission at the end |
 |---|---|---|
-| 29–31 Oct | 1: Tasks 1–6 | best few-shot k, bank = all train, best ASR from the ASR owner |
+| 29–31 Oct | 1: Tasks 1–6 (Task 4 = presets + notebook dropdowns) | best few-shot k, bank = all train, best ASR from the ASR owner |
 | 31 Oct – 5 Nov | 2: Tasks 7–11 | SFT v1 |
 | 5–10 Nov | 3: Tasks 12–14 | SFT v2, then the final retrain |
 | 10–14 Nov | 4: Task 15 | none new. Hand the chosen model to Docker packaging; freeze 14 Nov |
@@ -48,6 +48,8 @@ Decisions that follow:
 - **Leakage rule:** few-shot retrieval and every training job use pool samples only, except the final retrain (Task 14). Experiment numbers come from dev or holdout, never from the first 100 or from the pool.
 - On `public_test` and private test, the few-shot bank uses **all** train samples.
 - `requirements.txt` must not gain anything that pulls torch (`tests/test_requirements.py`). Training-only packages go in `requirements-train.txt`, installed on molab with `pip install --no-deps -r requirements-train.txt`.
+  - That file is **shared with ASR fine-tuning**, which needs `accelerate` and `datasets`. Whoever creates it first owns the header comment; the other adds lines. Do not create a second file.
+  - Pin nothing that conflicts with the other track without asking.
 - Defaults stay at the best measured setup until a run beats it: `examples=0`, `prompt_version="v1"`, `check_refs=False`. New behaviour is opt-in through `--agent-kw`.
 - Never edit a released prompt version. Never commit data, tokens, HF repo names, checkpoints or `train_records/`; add `train_records/` and `checkpoints/` to `.gitignore`.
 - English everywhere in the repo. Branch `feat/agent-infra` for Phase 1, `feat/sft` for Phases 2–3, each cut from an up-to-date `main`, with a PR into `main`. The PR text gives `pytest` output and the dev/holdout `compare` lines.
@@ -65,7 +67,7 @@ Decisions that follow:
 
 ## Phase 1: infrastructure and few-shot (branch `feat/agent-infra`)
 
-### Tasks 1, 2 and 4: already built by the ASR owner (`feat/experiments-infra`, 28 Oct)
+### Tasks 1 and 2: already built by the ASR owner (`feat/experiments-infra`, 28 Oct)
 
 Batch-1 Tasks 1–5 are implemented on `origin/feat/experiments-infra`:
 - `lifemate.splits` and `configs/splits.json`, with `infer --subset`;
@@ -133,21 +135,90 @@ def test_ask_stops_with_asked():
 - [ ] **Step 5:** Run `python -m lifemate.diagnose runs/20261027-045012_5a7ce91_train_react_gold` locally. Expect matched 67, extra_key total 74. No stop reasons, since that run predates the trace. Paste the output into the PR.
 - [ ] **Step 6:** Commit `Record agent steps and stop reason; add failure breakdown`.
 
+### Task 4: Named experiment presets and notebook dropdowns
+
+Typing `--agent-kw` by hand makes runs hard to repeat and easy to get wrong. A preset is a named agent or ASR configuration. One name works in the CLI, the molab notebook and Docker, and `meta.json` records it. A new architecture or setting is one line in `configs/presets.json` on the branch, with no notebook change.
+
+`notebooks/molab_run.py` was just changed on `feat/experiments-infra`. Do this task only on a branch that already contains that change (see Tasks 1 and 2), and tell the ASR owner that the notebook moved to presets.
+
+**Files:**
+- Create: `src/lifemate/presets.py`, `configs/presets.json`
+- Modify: `src/lifemate/infer.py`, `notebooks/molab_run.py`
+- Test: `tests/test_presets.py`
+
+**Interfaces:**
+- `configs/presets.json`: `{"agent": {NAME: {"agent": str, "agent_kw": {...}}}, "asr": {NAME: {"asr": str, "asr_kw": {...}}}}`.
+  - A string value may contain `${VAR}`, filled from the environment at resolve time. Private HF repo owners are never committed. For example, the model of `sft-v1` is `"${HF_MODEL_OWNER}/lifemate-sft-v1"`.
+  - Initial content:
+    - agent: `empty`, `oracle`, `react-v1` (defaults), `react-v2-refs` (`prompt_version=v2`, `check_refs=true`);
+    - asr: `gold`, `none`, `pho-medium` (`model=vinai/PhoWhisper-medium`), `pho-large` (`model=vinai/PhoWhisper-large`), `pho-large-fp32` (with `dtype=float32`).
+- `presets.load_presets(path: Path = REPO_ROOT / "configs/presets.json") -> dict`.
+- `presets.resolve(kind: str, name: str, environ: Mapping[str, str] = os.environ, path: Path = <committed file>) -> tuple[str, dict]` returns `(backend name, kwargs)`, where `kind` is `"agent"` or `"asr"`.
+  - An ASR name `cached:<cache>` needs no entry and resolves to `("cached", {"name": "<cache>"})`.
+  - An unknown name raises `KeyError` listing the known names.
+  - An unset `${VAR}` raises `ValueError` naming the variable.
+- CLI `python -m lifemate.presets --list` prints `{"agent": [names], "asr": [names]}` as JSON, for the notebook.
+- `infer --agent-preset NAME --asr-preset NAME`:
+  - The preset fills `--agent` / `--asr` and its kwargs. `--agent-kw` / `--asr-kw` given on top override single keys.
+  - Giving both `--agent` and `--agent-preset` is an error (same for ASR).
+  - `meta.json` gains `"agent_preset"` and `"asr_preset"` (null when unused).
+- Notebook, in two steps:
+  1. **Pull** clones, installs and fetches data, as today.
+  2. A new cell runs `python -m lifemate.presets --list` in the pulled repo and shows two dropdowns:
+     - agent preset;
+     - ASR preset, plus one `cached:<name>` entry for each `lifemate_work/asr_cache/<split>/<name>.jsonl` present in the session.
+
+  A new text field "HF model owner" is exported as `HF_MODEL_OWNER` to every step. **Run** calls `infer --agent-preset ... --asr-preset ...`, plus the existing extra-args field. Keep the split, limit, extra args and command mode as they are. The run folder name uses the preset names.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+def test_resolve_fills_env_vars(tmp_presets):
+    assert resolve("agent", "sft-test", {"HF_MODEL_OWNER": "me"}, tmp_presets) == ("react", {"model": "me/lifemate-sft-test"})
+
+def test_unset_env_var_is_named(tmp_presets):
+    with pytest.raises(ValueError, match="HF_MODEL_OWNER"):
+        resolve("agent", "sft-test", {}, tmp_presets)
+
+def test_cached_asr_needs_no_entry():
+    assert resolve("asr", "cached:pho-large-fp16") == ("cached", {"name": "pho-large-fp16"})
+
+def test_every_committed_preset_names_a_registered_backend():
+    p = load_presets()
+    assert all(v["agent"] in AGENTS for v in p["agent"].values())
+    assert all(v["asr"] in BACKENDS for v in p["asr"].values())
+
+def test_infer_records_presets(tmp_path):  # skip without data/train
+    out = infer.main(["--split", "train", "--agent-preset", "oracle", "--asr-preset", "gold", "--limit", "2", "--out", str(tmp_path / "r")])
+    meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
+    assert meta["agent_preset"] == "oracle" and meta["agent"] == "oracle" and meta["asr_preset"] == "gold"
+```
+
+  `tmp_presets` is a fixture: a temporary presets file with one agent entry, `"sft-test": {"agent": "react", "agent_kw": {"model": "${HF_MODEL_OWNER}/lifemate-sft-test"}}`.
+- [ ] **Step 2:** `pytest tests/test_presets.py -v` → FAIL.
+- [ ] **Step 3:** Implement `presets.py` and the `infer` flags. Then update the notebook.
+- [ ] **Step 4:** `pytest -v` → all pass. Run `marimo check notebooks/molab_run.py` if marimo is installed.
+- [ ] **Step 5:** On molab, run preset `oracle` + `gold` with `--limit 5` on train. Expected score 100.0, and `meta.json` shows both preset names.
+- [ ] **Step 6:** Commit `Add named experiment presets and notebook dropdowns`. Tell the team to re-upload the notebook to molab.
+
+From here on, every task that adds an agent or ASR setting also adds its preset, and every molab run in this plan uses presets.
+
 ### Task 5: Dynamic few-shot examples (A1)
 
 Implement batch-1 Task 6 (`src/lifemate/agents/fewshot.py`, `examples=k` on `ReActAgent`, `examples_text` in `build_messages`, its tests and the token-budget check), with these changes:
 - `ExampleBank.from_data(data_root: Path, split: str) -> ExampleBank`. The pool is `load_splits()["pool"]` when `split == "train"`, and every train id otherwise. `ReActAgent` gains `split: str = "train"`. `infer` does `agent_kw.setdefault("split", args.split)` when `"split"` is a parameter of the agent's `__init__` (`inspect.signature`). Add a test that `from_data(root, "public_test")` indexes all 1545 train samples.
 - `info["examples"] = k` and `info["bank_size"] = len(pool)` go into meta.json.
 - The token-budget check (batch-1 Task 6 Step 5) runs on train **and** public_test with `examples=4`. Record both maxima in the PR.
+- Add the presets `react-fewshot-k2` and `react-fewshot-k4` (`examples=2` / `4`).
 
 - [ ] Steps 1–6 as in batch-1 Task 6, plus the test above.
 
 ### Task 6: Phase 1 runs on molab
 
-Branch `feat/agent-infra`, agent `react`. Download every run folder into `runs/`, then run `evaluate` and `diagnose` locally.
+Branch `feat/agent-infra`, with presets chosen in the notebook. Download every run folder into `runs/`, then run `evaluate` and `diagnose` locally.
 
-- [ ] **Step 1:** Dev baseline: `--split train --asr gold --subset dev --agent-kw examples=0`. Expected: 300 samples, 0 errors.
-- [ ] **Step 2:** The same with `examples=2`, then `examples=4`. Run `compare` of k0 against k2 and of k0 against k4. Put the `RESULTS.md` rows and both compare lines in the PR. Max seconds must stay < 15.
+- [ ] **Step 1:** Dev baseline: split `train`, agent preset `react-v1`, ASR preset `gold`, extra args `--subset dev`. Expected: 300 samples, 0 errors.
+- [ ] **Step 2:** The same with `react-fewshot-k2`, then `react-fewshot-k4`. Run `compare` of k0 against k2 and of k0 against k4. Put the `RESULTS.md` rows and both compare lines in the PR. Max seconds must stay < 15.
 - [ ] **Step 3:** For the best k, rerun on `--subset holdout` against k=0 on holdout. This checks the gain holds for apps that have no examples in the pool.
 - [ ] **Step 4:** If a k wins on dev, with the CI above 0, and does not lose on holdout, run full public_test with that k and the ASR owner's current best ASR. Validate with `zaic_tools --validate` and submit. Log the leaderboard score.
 - [ ] **Step 5:** Open the PR. In the description, give the decision: the k used from now on, or 0.
@@ -315,8 +386,8 @@ It then:
 ### Task 11: SFT v1 runs on molab
 
 - [ ] **Step 1: Smoke test**, `--max-steps 20`. Check that the loss goes down, then stop the run and restart it with `--resume`. The log continues at step 21 with no repeated step. Record tokens/s and the projected time for 2 epochs. If the projection is over 10 h, drop to 1 epoch.
-- [ ] **Step 2: Full run** on `gold-pool`, with eval records from dev (`--subset dev` records, used only for eval loss). Then merge.
-- [ ] **Step 3:** `infer --split train --asr gold --subset dev --agent-kw model=<merged>` and the same on holdout. Run `compare` against the best Phase 1 run on each subset. Run `diagnose` on the dev run. Watch three numbers: the `extra_key` total (expected to drop sharply), the ask column, and max seconds (< 15).
+- [ ] **Step 2: Full run** on `gold-pool`, with eval records from dev (`--subset dev` records, used only for eval loss). Then merge to the HF repo `<owner>/lifemate-sft-v1`, and add the agent preset `sft-v1` (`model=${HF_MODEL_OWNER}/lifemate-sft-v1`, plus the Phase 1 winner's `examples` if any) to `configs/presets.json`.
+- [ ] **Step 3:** Run agent preset `sft-v1` with ASR preset `gold`, extra args `--subset dev`, then the same on holdout. Run `compare` against the best Phase 1 run on each subset. Run `diagnose` on the dev run. Watch three numbers: the `extra_key` total (expected to drop sharply), the ask column, and max seconds (< 15).
 - [ ] **Step 4:** If SFT v1 beats Phase 1 on dev and on holdout, run full public_test with it and the best ASR, validate it and submit. Add the `RESULTS.md` rows and open the PR. It records Gate 2 of the spec.
 
 ---
@@ -380,6 +451,8 @@ def test_mask_is_deterministic(act_record):
 
 Depends on an ASR cache from the ASR owner, `asr_cache/train/<name>.jsonl` (written by `lifemate.transcribe --subset pool`), covering the pool's final and history clips. If that cache is not ready by 6 Nov, skip this task and note it in the PR.
 
+**The cache must come from an ASR model that was not fine-tuned on pool clips**: the B1 winner off the shelf, for example `pho-large-fp16`. B2 fine-tunes on exactly these clips, so its transcripts of them would be unrealistically clean, and the LLM would not learn real ASR errors. Ask the ASR owner for this cache early. It is one transcribe run of about 4,000 clips.
+
 **Files:**
 - Modify: `src/lifemate/sft/records.py` (`--text cache:<name>`)
 - Test: `tests/test_sft_replay.py` (extend)
@@ -394,7 +467,7 @@ Depends on an ASR cache from the ASR owner, `asr_cache/train/<name>.jsonl` (writ
 
 ### Task 14: SFT v2 and the final retrain
 
-- [ ] **Step 1:** Build the records `v2-pool` = gold + `--mask 1` + (if Task 13 is done) the ASR copy. Train them as in Task 11, then merge.
+- [ ] **Step 1:** Build the records `v2-pool` = gold + `--mask 1` + (if Task 13 is done) the ASR copy. Train them as in Task 11, then merge to `<owner>/lifemate-sft-v2`. Add the preset `sft-v2`; the final retrain gets `sft-final`.
 - [ ] **Step 2:** Run dev and holdout, with gold text and with the best ASR cache, and `compare` against SFT v1. Keep v2 only if holdout improves and the ask column does not drop by more than 5 points. The Calibration paper warns that masking can hurt asking.
 - [ ] **Step 3: Final retrain.** Same recipe as the winner, `--subset all` (the leakage exemption in Global Constraints), same seed and hyperparameters. It has no held-out score, so accept it only if public_test is not lower than the gated model's. One submission.
 - [ ] **Step 4:** Log the `RESULTS.md` rows, then open the PR.
@@ -404,5 +477,5 @@ Depends on an ASR cache from the ASR owner, `asr_cache/train/<name>.jsonl` (writ
 ### Task 15: Timing and determinism check of the chosen system
 
 - [ ] **Step 1:** Run full public_test twice with the chosen model, ASR and settings. The two `submission.jsonl` files must be byte-identical (`cmp`). Record mean and max seconds; max must be < 15 on molab.
-- [ ] **Step 2:** Write the exact inference command, model repo revision (commit hash) and agent kwargs into `RESULTS.md` notes. Give them to the Docker owner. Add the training commands (records, train, merge, with seeds) to `README.md`, because the Docker package must ship training code.
+- [ ] **Step 2:** Write into `RESULTS.md` notes the exact inference command (agent and ASR preset names) and the model repo revision (commit hash). In `configs/presets.json`, pin that revision through a `revision` kwarg in the shipped preset: add `revision: str | None = None` to `HFChatLLM` and `ReActAgent` and pass it to `from_pretrained`. Give them to the Docker owner. Add the training commands (records, train, merge, with seeds) to `README.md`, because the Docker package must ship training code.
 - [ ] **Step 3:** Commit `Document the shipped model and how to retrain it` on a `docs/` branch with a PR.
