@@ -2,6 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Update 29 Oct:** Tasks 1–5 are implemented on `feat/experiments-infra` (ASR owner, 28 Oct). Tasks 6–7 (few-shot) continue as Tasks 5–6 of `2026-10-29-agent-track.md`, with amendments. Tasks 8–9 stay with the ASR owner.
+
 **Goal:** Build the shared experiment infrastructure (fixed splits, paired comparison, ASR cache, number-normalized WER), then run A1 (dynamic few-shot) and B1 (off-the-shelf ASR comparison).
 
 **Architecture:**

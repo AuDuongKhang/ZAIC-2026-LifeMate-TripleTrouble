@@ -288,6 +288,28 @@ All Track A runs use the dev set with gold transcripts, and with the cached best
 3. **B2, A2, A3.**
 4. **Gate, around 2 Nov.** The best combination becomes the Tier 0 submission and the baseline that Tier 2 SFT must beat. SFT data should use the best ASR's transcripts and, if A1 wins, the same example format.
 
+## Update 29 Oct: agent track re-planned
+
+The partner owns all ASR work: B1, B2, the ASR cache and normalized WER. The Lead's plan is now `docs/superpowers/plans/2026-10-29-agent-track.md`. It changes the Track A part of Experiments as follows.
+
+- **What the runs showed.** Error analysis of the train-100 gold-transcript run:
+  - 24% of gold calls matched;
+  - 74 of 98 wrong-argument calls added an optional key the gold call omits;
+  - 110 gold calls were never attempted.
+
+  Gold itself uses optional parameters in 40% of reads and 58% of writes, so this is a convention to learn, not a rule to hard-code.
+- **Prompts fit without retrieval.** Measured with the Qwen3 tokenizer, prompts are 5.0k tokens on average and 7.3k at most, all tools and full history included. Tool selection and history trimming are not needed. Few-shot has about 8k tokens of headroom.
+- **A2 is dropped:** the team confirmed on 29 Oct that we fine-tune Qwen3-4B-Instruct-2507. The other candidates were turned down for these reasons:
+  - Qwen3.5-4B: about 5B parameters with the vision tower, thinking by default, and a different tool-call format;
+  - Gemma 4 E4B: about 8B parameters with embeddings;
+  - xLAM-2-3b: non-commercial licence, English-centric.
+
+  No public evidence shows a sub-5B model clearly ahead in non-thinking tool use, and SFT on our own trajectories matters more than the base. **A3 is dropped:** its behaviours go into few-shot examples and SFT data.
+- **SFT starts on 31 Oct,** in parallel with the few-shot runs, instead of after the 2 Nov gate.
+  - SFT records are rendered by replaying gold calls through the real agent, so training and inference text are identical.
+  - Tier 1 data work (records, masking, ASR-noise copies) moves from Track B to the Lead. ASR-noise copies use the partner's ASR cache.
+- **Tier 3 (GRPO) is out of the current plan.** It gets its own plan only if SFT v2 is done by 10 Nov.
+
 ## Left to the builder
 
 - The exact candidate LLMs and the inference engine (vLLM or HF transformers), chosen on measured latency and determinism.
