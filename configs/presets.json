@@ -1,0 +1,15 @@
+{
+  "agent": {
+    "empty": {"agent": "empty", "agent_kw": {}},
+    "oracle": {"agent": "oracle", "agent_kw": {}},
+    "react-v1": {"agent": "react", "agent_kw": {}},
+    "react-v2-refs": {"agent": "react", "agent_kw": {"prompt_version": "v2", "check_refs": true}}
+  },
+  "asr": {
+    "gold": {"asr": "gold", "asr_kw": {}},
+    "none": {"asr": "none", "asr_kw": {}},
+    "pho-medium": {"asr": "whisper", "asr_kw": {"model": "vinai/PhoWhisper-medium"}},
+    "pho-large": {"asr": "whisper", "asr_kw": {"model": "vinai/PhoWhisper-large"}},
+    "pho-large-fp32": {"asr": "whisper", "asr_kw": {"model": "vinai/PhoWhisper-large", "dtype": "float32"}}
+  }
+}

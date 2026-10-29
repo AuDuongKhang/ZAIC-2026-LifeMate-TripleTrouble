@@ -15,9 +15,10 @@ from pathlib import Path
 from .agents import AGENTS, build_agent
 from .asr import BACKENDS, build_asr
 from .data import REPO_ROOT, audio_path, default_data_root, import_zaic_tools, installed_tool_names, load_catalog, load_samples
+from .presets import choose
 from .splits import SUBSETS, load_splits
 from .task import Task
-from .utils import git_info, parse_kw, seed_everything
+from .utils import git_info, seed_everything
 
 TIME_LIMIT_S = 30.0  # per sample on the scoring A30, ASR included
 
@@ -45,8 +46,11 @@ def main(argv: list[str] | None = None) -> Path:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--split", default="public_test")
     ap.add_argument("--data-root", type=Path, default=default_data_root())
-    ap.add_argument("--agent", default="empty", choices=sorted(AGENTS))
-    ap.add_argument("--asr", default="gold", choices=sorted(BACKENDS))
+    ap.add_argument("--agent", default=None, choices=sorted(AGENTS), help="default: empty")
+    ap.add_argument("--asr", default=None, choices=sorted(BACKENDS), help="default: gold")
+    ap.add_argument("--agent-preset", default=None, metavar="NAME", help="named agent setup from configs/presets.json")
+    ap.add_argument("--asr-preset", default=None, metavar="NAME",
+                    help="named ASR setup from configs/presets.json, or cached:<cache>")
     ap.add_argument("--limit", type=int, default=None, help="first N samples only")
     ap.add_argument("--ids", nargs="*", default=None, help="only these sample ids")
     ap.add_argument("--subset", choices=SUBSETS, default=None, help="train only: a part of configs/splits.json")
@@ -55,10 +59,15 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--agent-kw", action="append", metavar="KEY=VALUE", help="agent constructor option (repeatable)")
     ap.add_argument("--asr-kw", action="append", metavar="KEY=VALUE", help="ASR constructor option (repeatable)")
     args = ap.parse_args(argv)
+    try:
+        args.agent_name, agent_kw = choose("agent", args.agent, args.agent_preset, args.agent_kw, "empty")
+        args.asr_name, asr_kw = choose("asr", args.asr, args.asr_preset, args.asr_kw, "gold")
+    except (ValueError, KeyError) as e:
+        ap.error(str(e.args[0]))
 
     zaic_tools = import_zaic_tools(args.data_root, args.split)
     samples = load_samples(args.data_root, args.split)
-    if args.asr == "gold" and samples and "audio_text" not in samples[0]:
+    if args.asr_name == "gold" and samples and "audio_text" not in samples[0]:
         ap.error(f"--asr gold needs transcripts, which only train has; use a real ASR or --asr none on {args.split}")
     if args.subset:
         if args.split != "train":
@@ -73,13 +82,14 @@ def main(argv: list[str] | None = None) -> Path:
     catalog = load_catalog(args.data_root, args.split)
 
     t_load = time.perf_counter()
-    asr_kw, agent_kw = parse_kw(args.asr_kw), parse_kw(args.agent_kw)
-    asr = build_asr(args.asr, **asr_kw)
-    agent = build_agent(args.agent, **agent_kw)
+    asr = build_asr(args.asr_name, **asr_kw)
+    agent = build_agent(args.agent_name, **agent_kw)
     load_s = time.perf_counter() - t_load
     seed_everything(args.seed)
 
-    out = args.out or REPO_ROOT / "runs" / f"{datetime.now():%Y%m%d-%H%M%S}_{args.split}_{args.agent}_{args.asr}"
+    out = args.out or REPO_ROOT / "runs" / (
+        f"{datetime.now():%Y%m%d-%H%M%S}_{args.split}_{(args.agent_preset or args.agent_name).replace(':', '-')}"
+        f"_{(args.asr_preset or args.asr_name).replace(':', '-')}")
     out.mkdir(parents=True, exist_ok=True)
     times, errors = [], 0
     with open(out / "submission.jsonl", "w", encoding="utf-8") as fsub, open(out / "trace.jsonl", "w", encoding="utf-8") as ftr:
@@ -106,7 +116,8 @@ def main(argv: list[str] | None = None) -> Path:
                       flush=True)
 
     meta = {
-        "split": args.split, "agent": args.agent, "asr": args.asr, "agent_kw": agent_kw, "asr_kw": asr_kw,
+        "split": args.split, "agent": args.agent_name, "asr": args.asr_name,
+        "agent_preset": args.agent_preset, "asr_preset": args.asr_preset, "agent_kw": agent_kw, "asr_kw": asr_kw,
         "agent_info": getattr(agent, "info", {}),
         "seed": args.seed, "limit": args.limit, "subset": args.subset,
         "n": len(samples), "errors": errors, "load_seconds": round(load_s, 2),
