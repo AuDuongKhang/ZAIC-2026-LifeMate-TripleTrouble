@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from typing import Callable
 
-from ..data import SYS_TOOL
+from ..data import SYS_TOOL, default_data_root
 from ..task import Task
 from .base import Agent
+from .fewshot import ExampleBank, render_examples
 from .llm import ChatLLM, HFChatLLM
 from .parsing import BLOCK, parse_tool_calls
 from .prompting import build_messages, tool_schema
@@ -49,18 +51,25 @@ class ReActAgent(Agent):
     def __init__(self, llm: ChatLLM | None = None, model: str = "Qwen/Qwen3-4B-Instruct-2507", max_steps: int = 8,
                  max_invalid: int = 2, time_budget_s: float = 20.0, min_step_s: float = 3.0,
                  prompt_version: str = DEFAULT_PROMPT, check_refs: bool = False,
+                 examples: int = 0, split: str = "train", data_root: Path | None = None, bank: ExampleBank | None = None,
                  clock: Callable[[], float] = time.perf_counter):
         """time_budget_s counts from task.started_at (sample start, ASR included) when the runner sets it.
         A step only starts with at least min_step_s left, and its generation is capped at the time remaining.
         check_refs holds back calls whose x-ref ids were never seen in a tool result (off by default: with it the
-        model dodged the check, e.g. calling by phone_number instead of asking which contact)."""
+        model dodged the check, e.g. calling by phone_number instead of asking which contact).
+        examples=k puts the k most similar solved training requests into the system prompt. split is the split being
+        run (infer sets it): on train the bank is the experiment pool, on any other split every train sample."""
         self.llm = llm if llm is not None else HFChatLLM(model)
         self.max_steps, self.max_invalid, self.clock = max_steps, max_invalid, clock
         self.time_budget_s, self.min_step_s = time_budget_s, min_step_s
-        self.prompt_version, self.check_refs = prompt_version, check_refs
+        self.prompt_version, self.check_refs, self.examples = prompt_version, check_refs, examples
+        self.bank = bank
+        if self.bank is None and examples:
+            self.bank = ExampleBank.from_data(data_root or default_data_root(), split)
         # Recorded in meta.json, so every RESULTS.md row traces back to its prompt and settings.
         self.info = {"model": model if llm is None else type(llm).__name__, "prompt": prompt_version,
-                     "check_refs": check_refs, "max_steps": max_steps, "time_budget_s": time_budget_s}
+                     "check_refs": check_refs, "max_steps": max_steps, "time_budget_s": time_budget_s,
+                     "examples": examples, "bank_size": len(self.bank) if self.bank is not None else 0}
 
     def run(self, task: Task, env) -> None:
         trace = self.last_trace = {"steps": [], "stop": "max_steps"}
@@ -69,7 +78,12 @@ class ReActAgent(Agent):
         specs = {spec["name"]: spec for spec in task.tools}
         seen = scalar_strings([turn.get("tool_results") for turn in task.history], set())
         budget = self.llm.context_limit - self.llm.max_new_tokens
-        messages = build_messages(task, lambda m: self.llm.count_tokens(m, tools), budget, self.prompt_version)
+        examples_text = ""
+        if self.bank is not None:
+            picked = self.bank.select(task.request, set(task.context["installed_apps"]), self.examples, exclude_id=task.id)
+            examples_text = render_examples(picked)
+        messages = build_messages(task, lambda m: self.llm.count_tokens(m, tools), budget, self.prompt_version,
+                                  examples_text)
         done: set[str] = set()  # canonical (name, arguments) of calls already sent
         invalid = 0
         for _ in range(self.max_steps):

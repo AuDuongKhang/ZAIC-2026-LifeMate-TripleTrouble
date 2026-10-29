@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import time
 import traceback
@@ -40,6 +41,13 @@ def build_task(sample: dict, asr, catalog: dict[str, dict], data_root: Path, spl
         label=sample.get("label"),
         started_at=started_at,
     )
+
+
+def with_split(agent_cls: type, agent_kw: dict, split: str) -> dict:
+    """agent_kw plus split=<split> for agents that take one (the few-shot bank depends on it), unless set."""
+    if "split" in inspect.signature(agent_cls.__init__).parameters:
+        return {"split": split, **agent_kw}
+    return agent_kw
 
 
 def main(argv: list[str] | None = None) -> Path:
@@ -82,6 +90,7 @@ def main(argv: list[str] | None = None) -> Path:
     catalog = load_catalog(args.data_root, args.split)
 
     t_load = time.perf_counter()
+    agent_kw = with_split(AGENTS[args.agent_name], agent_kw, args.split)
     asr = build_asr(args.asr_name, **asr_kw)
     agent = build_agent(args.agent_name, **agent_kw)
     load_s = time.perf_counter() - t_load

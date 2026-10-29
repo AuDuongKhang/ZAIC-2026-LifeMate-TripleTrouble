@@ -192,3 +192,31 @@ def test_invalid_json_is_listed_as_rejected():
     agent = ReActAgent(llm=FakeLLM(['<tool_call>{"name": </tool_call>', "Xong."]))
     agent.run(TASK, FakeEnv())
     assert agent.last_trace["steps"][0]["rejected"][0].startswith("invalid JSON")
+
+
+class StubBank:
+    def __init__(self, text):
+        self.text, self.asked = text, []
+
+    def __len__(self):
+        return 1
+
+    def select(self, request, installed_apps, k, exclude_id):
+        self.asked.append((request, installed_apps, k, exclude_id))
+        return [{"id": "e", "audio_text": self.text, "label": {"tool_calls": [], "tool_results": []}}]
+
+
+def test_examples_are_added_to_the_system_message():
+    bank, llm = StubBank("EXAMPLE BLOCK"), FakeLLM(["Xong."])
+    task = dataclasses.replace(TASK, context={**TASK.context, "installed_apps": {"alarm": {}}})
+    ReActAgent(llm=llm, examples=2, bank=bank).run(task, FakeEnv())
+    assert "EXAMPLE BLOCK" in llm.seen[0][0]["content"]
+    assert bank.asked == [("xoá báo thức sớm nhất", {"alarm"}, 2, "t")]
+
+
+def test_default_has_no_examples_and_builds_no_bank():
+    llm = FakeLLM(["Xong."])
+    agent = ReActAgent(llm=llm)
+    agent.run(TASK, FakeEnv())
+    assert agent.bank is None and "Examples" not in llm.seen[0][0]["content"]
+    assert agent.info["examples"] == 0

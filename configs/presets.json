@@ -3,7 +3,9 @@
     "empty": {"agent": "empty", "agent_kw": {}},
     "oracle": {"agent": "oracle", "agent_kw": {}},
     "react-v1": {"agent": "react", "agent_kw": {}},
-    "react-v2-refs": {"agent": "react", "agent_kw": {"prompt_version": "v2", "check_refs": true}}
+    "react-v2-refs": {"agent": "react", "agent_kw": {"prompt_version": "v2", "check_refs": true}},
+    "react-fewshot-k2": {"agent": "react", "agent_kw": {"examples": 2}},
+    "react-fewshot-k4": {"agent": "react", "agent_kw": {"examples": 4}}
   },
   "asr": {
     "gold": {"asr": "gold", "asr_kw": {}},

@@ -67,3 +67,12 @@ def test_unknown_prompt_version_fails_loudly():
     import pytest
     with pytest.raises(KeyError):
         system_prompt(CTX, "v999")
+
+
+def test_build_messages_appends_examples_to_the_system_prompt_only():
+    task = Task(id="t", request="bật đèn", history=[], tools=[], context=CTX)
+    plain = build_messages(task, count_tokens=len, budget=10)
+    with_examples = build_messages(task, count_tokens=len, budget=10, examples_text="EXAMPLES")
+    assert with_examples[0]["content"] == plain[0]["content"] + "\n\nEXAMPLES"
+    assert with_examples[1:] == plain[1:]
+    assert build_messages(task, count_tokens=len, budget=10, examples_text="") == plain

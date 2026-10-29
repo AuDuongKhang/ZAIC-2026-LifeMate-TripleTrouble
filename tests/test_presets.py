@@ -91,3 +91,15 @@ def test_agent_and_agent_preset_together_is_an_error(tmp_path):
         infer.main(["--agent", "oracle", "--agent-preset", "oracle", "--out", str(tmp_path / "r")])
     with pytest.raises(SystemExit):
         infer.main(["--asr", "gold", "--asr-preset", "gold", "--out", str(tmp_path / "r")])
+
+
+def test_infer_passes_the_split_to_agents_that_take_one(tmp_path):
+    from lifemate.agents import EmptyAgent, ReActAgent
+    assert infer.with_split(ReActAgent, {"examples": 4}, "public_test") == {"examples": 4, "split": "public_test"}
+    assert infer.with_split(ReActAgent, {"split": "train"}, "public_test") == {"split": "train"}
+    assert infer.with_split(EmptyAgent, {}, "public_test") == {}
+
+
+def test_fewshot_presets_set_examples():
+    assert resolve("agent", "react-fewshot-k2") == ("react", {"examples": 2})
+    assert resolve("agent", "react-fewshot-k4") == ("react", {"examples": 4})
