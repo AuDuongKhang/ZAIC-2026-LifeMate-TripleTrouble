@@ -105,3 +105,37 @@ def test_infer_passes_the_split_to_agents_that_take_one(tmp_path):
 def test_fewshot_presets_set_examples():
     assert resolve("agent", "react-fewshot-k2") == ("react", {"examples": 2})
     assert resolve("agent", "react-fewshot-k4") == ("react", {"examples": 4})
+
+
+class _StubLLM:
+    context_limit, max_new_tokens = 16384, 0
+
+    def generate(self, messages, tools, max_time=None):
+        return "Xong."
+
+    def count_tokens(self, messages, tools):
+        return 1
+
+
+@needs_data
+def test_infer_with_a_react_agent_writes_meta_without_the_data_root(tmp_path, monkeypatch):
+    import functools
+
+    from lifemate.agents import ReActAgent
+    monkeypatch.setitem(AGENTS, "react", functools.partial(ReActAgent, llm=_StubLLM()))
+    out = infer.main(["--split", "train", "--agent", "react", "--asr", "gold", "--limit", "2", "--out", str(tmp_path / "r")])
+    meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
+    assert meta["agent_kw"] == {"split": "train"} and meta["agent_info"]["examples"] == 0
+
+
+@needs_data
+def test_infer_builds_the_fewshot_bank_from_the_given_data_root(tmp_path, monkeypatch):
+    import functools
+
+    from lifemate.agents import ReActAgent
+    monkeypatch.setitem(AGENTS, "react", functools.partial(ReActAgent, llm=_StubLLM()))
+    out = infer.main(["--split", "train", "--agent", "react", "--agent-kw", "examples=2", "--asr", "gold", "--limit", "2",
+                      "--subset", "dev", "--data-root", str(default_data_root()), "--out", str(tmp_path / "r")])
+    meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
+    assert meta["agent_info"]["examples"] == 2 and meta["agent_info"]["bank_size"] == 794
+    assert "data_root" not in meta["agent_kw"]

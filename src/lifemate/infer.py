@@ -45,7 +45,7 @@ def build_task(sample: dict, asr, catalog: dict[str, dict], data_root: Path, spl
 
 def with_split(agent_cls: type, agent_kw: dict, split: str, data_root: Path) -> dict:
     """agent_kw plus split= and data_root= for agents that take them (the few-shot bank depends on both), unless set."""
-    params = inspect.signature(agent_cls.__init__).parameters
+    params = inspect.signature(agent_cls).parameters
     extra = {"split": split, "data_root": data_root}
     return {**{k: v for k, v in extra.items() if k in params}, **agent_kw}
 
@@ -93,6 +93,7 @@ def main(argv: list[str] | None = None) -> Path:
     agent_kw = with_split(AGENTS[args.agent_name], agent_kw, args.split, args.data_root)
     asr = build_asr(args.asr_name, **asr_kw)
     agent = build_agent(args.agent_name, **agent_kw)
+    agent_kw.pop("data_root", None)  # a machine path: needed to build the agent, not part of the run record
     load_s = time.perf_counter() - t_load
     seed_everything(args.seed)
 
