@@ -15,34 +15,7 @@ from .llm import ChatLLM, HFChatLLM
 from .parsing import BLOCK, parse_tool_calls
 from .prompting import build_messages, tool_schema
 from .prompts import DEFAULT_PROMPT
-
-
-def scalar_strings(obj, out: set[str]) -> set[str]:
-    """Every scalar inside obj, as a string: the ids and values the agent has actually seen."""
-    if isinstance(obj, dict):
-        for v in obj.values():
-            scalar_strings(v, out)
-    elif isinstance(obj, list):
-        for v in obj:
-            scalar_strings(v, out)
-    elif obj is not None:
-        out.add(str(obj))
-    return out
-
-
-def unseen_refs(spec: dict | None, arguments: dict, seen: set[str]) -> list[str]:
-    """'param=value' for each x-ref argument (an id into another app's data) whose value never appeared in a tool
-    result. On train, 1277 of 1278 gold x-ref values appear in an earlier result, so these are invented ids."""
-    props = ((spec or {}).get("parameters") or {}).get("properties", {})
-    bad = []
-    for name, value in arguments.items():
-        prop = props.get(name, {})
-        if not (prop.get("x-ref") or (prop.get("items") or {}).get("x-ref")):
-            continue
-        for v in value if isinstance(value, list) else [value]:
-            if str(v) not in seen:
-                bad.append(f"{name}={v!r}")
-    return bad
+from .refs import scalar_strings, unseen_refs
 
 
 class ReActAgent(Agent):
@@ -72,7 +45,7 @@ class ReActAgent(Agent):
                      "examples": examples, "bank_size": len(self.bank) if self.bank is not None else 0}
 
     def run(self, task: Task, env) -> None:
-        trace = self.last_trace = {"steps": [], "stop": "max_steps"}
+        trace = self.last_trace = {"steps": [], "stop": None}  # None: a step raised
         start = task.started_at if task.started_at is not None else self.clock()
         tools = [tool_schema(spec) for spec in task.tools]
         specs = {spec["name"]: spec for spec in task.tools}
@@ -137,3 +110,4 @@ class ReActAgent(Agent):
             if invalid > self.max_invalid:
                 trace["stop"] = "invalid"
                 return
+        trace["stop"] = "max_steps"

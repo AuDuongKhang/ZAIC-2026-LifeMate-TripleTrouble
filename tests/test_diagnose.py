@@ -76,3 +76,11 @@ def test_diagnose_counts_predicted_calls_outside_gold(tmp_path):
     _write(tmp_path / "run", [{"id": s["id"], "tool_calls": gold + [stray]}])
     r = diagnose(tmp_path / "run", ROOT)
     assert r["matched"] == len(gold) and r["extra_pred_calls"] == 1 and r["more_calls"] == 1
+
+
+def test_diagnose_refuses_runs_that_are_not_train(tmp_path):
+    run = tmp_path / "run"
+    _write(run, [])
+    (run / "meta.json").write_text(json.dumps({"split": "public_test"}), encoding="utf-8")
+    with pytest.raises(SystemExit, match="train"):
+        diagnose(run, ROOT)

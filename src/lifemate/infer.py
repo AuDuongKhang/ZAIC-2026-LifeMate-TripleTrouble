@@ -43,11 +43,11 @@ def build_task(sample: dict, asr, catalog: dict[str, dict], data_root: Path, spl
     )
 
 
-def with_split(agent_cls: type, agent_kw: dict, split: str) -> dict:
-    """agent_kw plus split=<split> for agents that take one (the few-shot bank depends on it), unless set."""
-    if "split" in inspect.signature(agent_cls.__init__).parameters:
-        return {"split": split, **agent_kw}
-    return agent_kw
+def with_split(agent_cls: type, agent_kw: dict, split: str, data_root: Path) -> dict:
+    """agent_kw plus split= and data_root= for agents that take them (the few-shot bank depends on both), unless set."""
+    params = inspect.signature(agent_cls.__init__).parameters
+    extra = {"split": split, "data_root": data_root}
+    return {**{k: v for k, v in extra.items() if k in params}, **agent_kw}
 
 
 def main(argv: list[str] | None = None) -> Path:
@@ -90,7 +90,7 @@ def main(argv: list[str] | None = None) -> Path:
     catalog = load_catalog(args.data_root, args.split)
 
     t_load = time.perf_counter()
-    agent_kw = with_split(AGENTS[args.agent_name], agent_kw, args.split)
+    agent_kw = with_split(AGENTS[args.agent_name], agent_kw, args.split, args.data_root)
     asr = build_asr(args.asr_name, **asr_kw)
     agent = build_agent(args.agent_name, **agent_kw)
     load_s = time.perf_counter() - t_load

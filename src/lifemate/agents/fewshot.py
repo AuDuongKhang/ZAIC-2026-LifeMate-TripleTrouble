@@ -9,19 +9,38 @@ from collections import Counter
 from pathlib import Path
 
 from ..asr.wer import normalize
-from ..data import load_samples
+from ..data import load_catalog, load_samples
 from ..splits import load_splits
+from .refs import scalar_strings, unseen_refs
 
 K1, B = 1.5, 0.75
 
 
 def _gold_apps(sample: dict) -> set[str]:
-    return {c["name"].split(".", 1)[0] for c in sample["label"]["tool_calls"]} - {"sys"}
+    """Apps of the gold calls, including the app of the tool a sys.ask_missing_info asks about."""
+    apps = set()
+    for call in sample["label"]["tool_calls"]:
+        name = call["arguments"].get("tool_name", "") if call["name"] == "sys.ask_missing_info" else call["name"]
+        apps.add(name.split(".", 1)[0])
+    return apps - {"sys", ""}
+
+
+def _sees_its_ids(sample: dict, catalog: dict[str, dict]) -> bool:
+    """Every id the gold calls pass (x-ref arguments) appears in an earlier result of the example itself. The example
+    is shown without its history, so an id from the history would teach the model to use ids from nowhere."""
+    seen: set[str] = set()
+    for call, result in zip(sample["label"]["tool_calls"], sample["label"]["tool_results"]):
+        if call["name"] != "sys.ask_missing_info" and unseen_refs(catalog.get(call["name"]), call["arguments"], seen):
+            return False
+        scalar_strings(result, seen)
+    return True
 
 
 class ExampleBank:
-    def __init__(self, samples: list[dict], pool_ids: set[str]):
-        self.docs = sorted((s for s in samples if s["id"] in pool_ids), key=lambda s: s["id"])
+    def __init__(self, samples: list[dict], pool_ids: set[str], catalog: dict[str, dict] | None = None):
+        """With a tool catalog, samples whose ids come from their history rather than their own results are left out."""
+        self.docs = sorted((s for s in samples if s["id"] in pool_ids and (catalog is None or _sees_its_ids(s, catalog))),
+                           key=lambda s: s["id"])
         self.tokens = [Counter(normalize(s["audio_text"])) for s in self.docs]
         self.apps = [_gold_apps(s) for s in self.docs]
         self.lengths = [sum(t.values()) for t in self.tokens]
@@ -38,7 +57,7 @@ class ExampleBank:
         """The pool when evaluating on train (dev/holdout stay unseen); every train sample for any other split."""
         samples = load_samples(data_root, "train")
         pool = set(load_splits()["pool"]) if split == "train" else {s["id"] for s in samples}
-        return cls(samples, pool)
+        return cls(samples, pool, load_catalog(data_root, "train"))
 
     def _bm25(self, i: int, query: set[str]) -> float:
         tf, norm = self.tokens[i], 1 - B + B * self.lengths[i] / max(self.avg_len, 1e-9)

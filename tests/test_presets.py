@@ -95,9 +95,11 @@ def test_agent_and_agent_preset_together_is_an_error(tmp_path):
 
 def test_infer_passes_the_split_to_agents_that_take_one(tmp_path):
     from lifemate.agents import EmptyAgent, ReActAgent
-    assert infer.with_split(ReActAgent, {"examples": 4}, "public_test") == {"examples": 4, "split": "public_test"}
-    assert infer.with_split(ReActAgent, {"split": "train"}, "public_test") == {"split": "train"}
-    assert infer.with_split(EmptyAgent, {}, "public_test") == {}
+    root = tmp_path / "data"
+    assert infer.with_split(ReActAgent, {"examples": 4}, "public_test", root) == {
+        "examples": 4, "split": "public_test", "data_root": root}
+    assert infer.with_split(ReActAgent, {"split": "train"}, "public_test", root) == {"split": "train", "data_root": root}
+    assert infer.with_split(EmptyAgent, {}, "public_test", root) == {}
 
 
 def test_fewshot_presets_set_examples():

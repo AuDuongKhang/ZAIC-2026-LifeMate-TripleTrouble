@@ -220,3 +220,16 @@ def test_default_has_no_examples_and_builds_no_bank():
     agent.run(TASK, FakeEnv())
     assert agent.bank is None and "Examples" not in llm.seen[0][0]["content"]
     assert agent.info["examples"] == 0
+
+
+def test_a_crashing_step_does_not_report_max_steps():
+    class Boom(FakeLLM):
+        def generate(self, messages, tools, max_time=None):
+            raise RuntimeError("cuda oom")
+
+    agent = ReActAgent(llm=Boom([]))
+    try:
+        agent.run(TASK, FakeEnv())
+    except RuntimeError:
+        pass
+    assert agent.last_trace["stop"] is None

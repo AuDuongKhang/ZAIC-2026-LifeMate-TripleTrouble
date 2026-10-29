@@ -23,14 +23,15 @@ def _same_value(key: str, pred, gold, fuzzy: set[str]) -> bool:
 
 
 def diagnose(run_dir: Path, data_root: Path) -> dict:
+    meta_path = run_dir / "meta.json"
+    if meta_path.exists() and json.loads(meta_path.read_text(encoding="utf-8")).get("split") != "train":
+        raise SystemExit(f"{run_dir}: diagnose needs labels, so it only works on train runs")
     samples = {s["id"]: s for s in load_samples(data_root, "train")}
     catalog = load_catalog(data_root, "train")
     fuzzy = fuzzy_params(catalog)
     preds = [json.loads(line) for line in open(run_dir / "submission.jsonl", encoding="utf-8") if line.strip()]
     traces = {}
     if (run_dir / "trace.jsonl").exists():
-        traces = {t["id"]: t for t in map(json.loads, open(run_dir / "trace.jsonl", encoding="utf-8")) if t.strip()} \
-            if False else {}
         for line in open(run_dir / "trace.jsonl", encoding="utf-8"):
             if line.strip():
                 t = json.loads(line)
@@ -94,7 +95,7 @@ def main(argv: list[str] | None = None) -> dict:
     print(json.dumps(scalars, ensure_ascii=False))
     for name in ("stop", "extra_key", "missing_key", "wrong_value"):
         counter = result[name]
-        print(f"{name} (total {sum(counter.values())}):", dict(list(counter.items())[:15]))
+        print(f"{name} (summed over keys: {sum(counter.values())}):", dict(list(counter.items())[:15]))
     return result
 
 

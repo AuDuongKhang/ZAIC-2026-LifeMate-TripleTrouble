@@ -49,6 +49,44 @@ def test_render_examples_marks_out_of_scope_and_empty_selection():
 
 
 def test_from_data_pool_depends_on_the_split(train_samples):
+    from lifemate.agents.fewshot import _sees_its_ids
+    from lifemate.data import load_catalog
     root = default_data_root()
-    assert len(ExampleBank.from_data(root, "train")) == len(load_splits()["pool"])
-    assert len(ExampleBank.from_data(root, "public_test")) == len(train_samples) == 1545
+    pool, everything = set(load_splits()["pool"]), {s["id"] for s in train_samples}
+    on_train, on_public = ExampleBank.from_data(root, "train"), ExampleBank.from_data(root, "public_test")
+    assert {d["id"] for d in on_train.docs} <= pool
+    visible = {s["id"] for s in train_samples if _sees_its_ids(s, load_catalog(root, "train"))}
+    assert {d["id"] for d in on_train.docs} == pool & visible
+    assert {d["id"] for d in on_public.docs} == everything & visible
+
+
+def _sample(sid, text, calls, results=None, history=None):
+    return {"id": sid, "audio_text": text, "history": history or [],
+            "label": {"tool_calls": calls, "tool_results": results or [{"ok": True}] * len(calls)}}
+
+
+def test_asked_app_counts_as_a_gold_app():
+    ask = _sample("a", "gọi cho Minh", [{"name": "sys.ask_missing_info",
+                                         "arguments": {"tool_name": "phone.call", "params": ["contact_id"]}}])
+    bank = ExampleBank([ask], {"a"})
+    assert bank.select("gọi cho Minh", {"weather"}, k=1) == []
+    assert bank.select("gọi cho Minh", {"phone"}, k=1) == [ask]
+
+
+CATALOG = {"sms.send": {"parameters": {"properties": {"contact_id": {"type": "string", "x-ref": "contacts.contacts"}}}},
+           "contacts.search": {"parameters": {"properties": {"query": {"type": "string"}}}}}
+
+
+def test_examples_with_ids_that_never_appear_in_their_own_results_are_skipped():
+    blind = _sample("blind", "nhắn cho người đó", [{"name": "sms.send", "arguments": {"contact_id": "c_9"}}])
+    seen = _sample("seen", "nhắn cho Minh", [{"name": "contacts.search", "arguments": {"query": "Minh"}},
+                                             {"name": "sms.send", "arguments": {"contact_id": "c_9"}}],
+                   [{"ok": True, "contacts": [{"contact_id": "c_9"}]}, {"ok": True}])
+    bank = ExampleBank([blind, seen], {"blind", "seen"}, catalog=CATALOG)
+    assert [e["id"] for e in bank.select("nhắn cho", {"sms", "contacts"}, k=5)] == ["seen"]
+    assert len(ExampleBank([blind, seen], {"blind", "seen"})) == 2  # no catalog, no filter
+
+
+def test_from_data_drops_only_blind_examples(train_samples):
+    bank = ExampleBank.from_data(default_data_root(), "train")
+    assert 0 < len(bank) < len(load_splits()["pool"])
