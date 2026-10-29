@@ -78,18 +78,20 @@ def _(Path, branch, data_url, hf_repo, hf_token, mo, os, repo_url, run, shutil, 
     def _git(*args, cwd=None):
         r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
         if r.returncode:
-            msg = r.stderr.replace(token.value, "***") if token.value else r.stderr
+            msg = r.stderr.replace(_token, "***") if _token else r.stderr
             raise RuntimeError(f"git {args[0]} failed: {msg}")
         return r.stdout.strip()
 
+    _token = token.value.strip()
     _url = repo_url.value.strip()
-    if token.value and _url.startswith("https://"):
-        _url = _url.replace("https://", f"https://x-access-token:{token.value}@", 1)
+    if _token and _url.startswith("https://"):
+        _url = _url.replace("https://", f"https://x-access-token:{_token}@", 1)
     if (repo_dir / ".git").is_dir():
         _git("remote", "set-url", "origin", _url, cwd=repo_dir)
         _git("fetch", "--depth", "1", "origin", branch.value, cwd=repo_dir)
         _git("reset", "--hard", "FETCH_HEAD", cwd=repo_dir)
     else:
+        shutil.rmtree(repo_dir, ignore_errors=True)  # leftover of a failed clone (e.g. a bad token)
         _git("clone", "--depth", "1", "--branch", branch.value, _url, str(repo_dir))
     commit = _git("log", "-1", "--format=%h", cwd=repo_dir)
     commit_msg = _git("log", "-1", "--format=%s", cwd=repo_dir)
