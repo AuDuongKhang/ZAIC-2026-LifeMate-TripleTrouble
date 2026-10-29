@@ -87,6 +87,7 @@ def main(argv: list[str] | None = None) -> Path:
             t0 = time.perf_counter()
             env = zaic_tools.ToolEnv(args.split, sample["id"], root=args.data_root)  # the sample's one and only env
             task, error = None, None
+            agent.last_trace = None
             try:
                 task = build_task(sample, asr, catalog, args.data_root, args.split, started_at=t0)
                 agent.run(task, env)
@@ -98,7 +99,7 @@ def main(argv: list[str] | None = None) -> Path:
             line = {"id": sample["id"], "tool_calls": env.get_tool_calls(), "state_hash": env.get_state_hash()}
             fsub.write(json.dumps(line, ensure_ascii=False) + "\n")
             ftr.write(json.dumps({"id": sample["id"], "request": task.request if task else None, "calls": env.log,
-                                  "seconds": round(elapsed, 3), "error": error}, ensure_ascii=False) + "\n")
+                                  "agent": agent.last_trace, "seconds": round(elapsed, 3), "error": error}, ensure_ascii=False) + "\n")
             if error or elapsed > TIME_LIMIT_S or i % 10 == 0 or i == len(samples):
                 flag = " ERROR" if error else (" OVER 30s" if elapsed > TIME_LIMIT_S else "")
                 print(f"[{i}/{len(samples)}] {sample['id']} {elapsed:.2f}s (mean {sum(times) / len(times):.2f}s){flag}",

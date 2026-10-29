@@ -63,6 +63,7 @@ class ReActAgent(Agent):
                      "check_refs": check_refs, "max_steps": max_steps, "time_budget_s": time_budget_s}
 
     def run(self, task: Task, env) -> None:
+        trace = self.last_trace = {"steps": [], "stop": "max_steps"}
         start = task.started_at if task.started_at is not None else self.clock()
         tools = [tool_schema(spec) for spec in task.tools]
         specs = {spec["name"]: spec for spec in task.tools}
@@ -73,28 +74,38 @@ class ReActAgent(Agent):
         invalid = 0
         for _ in range(self.max_steps):
             remaining = self.time_budget_s - (self.clock() - start)
-            if remaining < self.min_step_s or self.llm.count_tokens(messages, tools) > budget:
+            if remaining < self.min_step_s:
+                trace["stop"] = "time"
+                return
+            if self.llm.count_tokens(messages, tools) > budget:
+                trace["stop"] = "tokens"
                 return
             text = self.llm.generate(messages, tools, max_time=remaining)
             calls, errors = parse_tool_calls(text)
+            rejected: list[str] = []
+            trace["steps"].append({"output": text[:2000], "rejected": rejected})
             if not calls and not errors:
-                return  # a plain answer: finished, or nothing to do (out of scope)
+                trace["stop"] = "no_call"  # a plain answer: finished, or nothing to do (out of scope)
+                return
             messages.append({"role": "assistant", "content": BLOCK.sub("", text).strip(), "tool_calls": [
                 {"type": "function", "function": {"name": c["name"], "arguments": c["arguments"]}} for c in calls]})
             for call in calls:
                 key = json.dumps([call["name"], call["arguments"]], sort_keys=True, ensure_ascii=False)
                 if key in done:
                     invalid += 1
+                    rejected.append(f"{call['name']}: already called")
                     messages.append({"role": "tool", "content": "Already called; reuse the earlier result."})
                     continue
                 check = env.validate(call["name"], call["arguments"])
                 if not check.get("ok"):
                     invalid += 1
+                    rejected.append(f"{call['name']}: {check.get('error')}")
                     messages.append({"role": "tool", "content": f"Rejected: {check.get('error')}. Fix the call."})
                     continue
                 unseen = unseen_refs(specs.get(call["name"]), call["arguments"], seen) if self.check_refs else []
                 if unseen:
                     invalid += 1
+                    rejected.append(f"{call['name']}: unknown id {', '.join(unseen)}")
                     messages.append({"role": "tool", "content": f"Not sent: unknown id {', '.join(unseen)}. Ids must "
                                      "come from tool results; call a read or search tool to look it up first."})
                     continue
@@ -102,10 +113,13 @@ class ReActAgent(Agent):
                 scalar_strings(result, seen)
                 done.add(key)
                 if call["name"] == SYS_TOOL:
+                    trace["stop"] = "asked"
                     return  # asking the user ends the turn; later calls in the batch are dropped
                 messages.append({"role": "tool", "content": json.dumps(result, ensure_ascii=False)})
             if errors:
                 invalid += 1
+                rejected.extend(f"invalid JSON: {e}" for e in errors)
                 messages.append({"role": "user", "content": "Your tool call was not valid JSON: " + "; ".join(errors)})
             if invalid > self.max_invalid:
+                trace["stop"] = "invalid"
                 return
