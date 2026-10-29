@@ -2,9 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .base import ASR
-
-SAMPLE_RATE = 16000
+from .base import ASR, SAMPLE_RATE, load_audio
 
 
 class WhisperASR(ASR):
@@ -23,14 +21,6 @@ class WhisperASR(ASR):
             self.generate_kwargs.update(language="vi", task="transcribe")
 
     def transcribe(self, audio: Path, sample: dict) -> str:
-        import numpy as np
-        import soundfile as sf
-
-        wav, sr = sf.read(str(audio), dtype="float32")
-        if wav.ndim > 1:
-            wav = wav.mean(axis=1)
-        if sr != SAMPLE_RATE:  # the data is 16 kHz; linear resampling is only a fallback
-            n = int(round(len(wav) * SAMPLE_RATE / sr))
-            wav = np.interp(np.linspace(0, len(wav) - 1, n), np.arange(len(wav)), wav).astype("float32")
+        wav = load_audio(audio)
         out = self.pipe({"raw": wav, "sampling_rate": SAMPLE_RATE}, generate_kwargs=self.generate_kwargs)
         return out["text"].strip()
