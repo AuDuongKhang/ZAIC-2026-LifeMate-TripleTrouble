@@ -11,6 +11,7 @@ Timing is per sample on the machine that ran it; the scoring A30 is slower than 
 | 2026-10-27 06:20 | 0e4a696 | train | 100 | empty | whisper | 6.0 | 6.0 | 0.0 | 0.0 | 100.0 | 0.768 | 2.02 | WER 0.2831; ASR-only check, PhoWhisper-large (medium: 0.2982); part of the WER is digits vs spelled-out numbers |
 | 2026-10-27 06:43 | 354cbb0 | train | 100 | react | gold | 14.88 | 28.73 | 13.27 | 0.0 | 66.67 | 3.24 | 8.022 | prompt v2 + check_refs; vs v1: 5 samples better, 6 worse (asks lost: model called by phone_number instead of asking) |
 | 2026-10-27 08:11 | 5baab9a | public_test | 634 | react | whisper | 18.95 | - | - | - | - | 3.262 | 8.613 | prompt v1; PhoWhisper-large; first leaderboard submission |
+| 2026-10-31 | f753b1b | public_test | 634 | react | whisper | 26.4 | - | - | - | - | - | - | prompt v1; ASR TripleTrouble/phoasr-small-ft-a (B2 run A, pool clips only); vs 18.95 with PhoWhisper-large: the fine-tune transfers to unseen audio |
 | 2026-10-29 08:04 | 4ac0018 | train | 50 | react | gold | 8.27 | 24.06 | 9.74 | 3.33 | 0.0 | 3.677 | 8.198 | prompt v1; first 50 of dev (--subset dev --limit 50), same ids as the cached row below |
 | 2026-10-29 07:32 | 4ac0018 | train | 50 | react | cached | 4.33 | 11.53 | 5.56 | 0.0 | 0.0 | 2.749 | 8.931 | prompt v1; cache pho-large-fp16, first 50 of dev (--subset dev --limit 50); WER 0.2313; vs gold row above: -3.93 [95% CI -8.47, -0.67], better 0 / worse 4 / same 46; out-of-scope sample lost only because the agent made read calls |
 
