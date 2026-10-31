@@ -25,3 +25,4 @@ user turns), number-normalized WER/CER against the train transcripts. Seconds ar
 | 2026-10-29 | 4ac0018 | pho-large-fp16 | vinai/PhoWhisper-large, fp16 | 2108 | 0.2627 | 0.1449 | 0.261 | 0.616 | B1 best so far |
 | 2026-10-29 | 4ac0018 | pho-large-fp32 | vinai/PhoWhisper-large, fp32 | 2108 | 0.2627 | 0.1449 | 0.321 | 0.674 | same WER/CER as fp16 but slower: keep fp16 |
 | 2026-10-29 | 4ac0018 | phoasr-small-fp16 | Qualcomm-AI-Research/PhoASR-whisper-small, fp16 | 2108 | 0.2654 | 0.1536 | 0.110 | 0.250 | 0.24B: WER within 0.003 of PhoWhisper-large at 1/6 the size and ~2.5x faster; CER worse |
+| 2026-10-31 | 1c15b73 | phoasr-small-ft-a | PhoASR-whisper-small fine-tuned on the 2928 pool clips (3.98 h), `train_asr --epochs 4 --lr 1e-5 --eval-steps 100`, best checkpoint | 2108 | 0.1349 | 0.0802 | 0.122 | 0.264 | B2 run A: WER halved vs PhoWhisper-large (0.2627). No speaker labels, so pool and eval may share speakers: confirm on public_test |
