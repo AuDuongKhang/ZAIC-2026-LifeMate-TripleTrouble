@@ -2,8 +2,9 @@
 data/
 *.zip
 
-# Run outputs (submission.jsonl, traces, metrics)
+# Run outputs (submission.jsonl, traces, metrics) and ASR transcript caches
 runs/
+asr_cache/
 
 # Model weights / caches
 models/
