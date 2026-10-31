@@ -78,7 +78,8 @@ def plot_history(history: list[dict], out: Path) -> None:
                 ax.plot(*zip(*series[k]), marker="o" if k.startswith("eval") else None, label=k)
         ax.set_title(title)
         ax.set_xlabel("step")
-        ax.legend()
+        if ax.lines:  # a short run may log no train loss yet
+            ax.legend()
     fig.tight_layout()
     fig.savefig(out / "training.png", dpi=120)
     print(f"-> {out / 'training.png'}")
