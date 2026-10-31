@@ -3,12 +3,14 @@ from __future__ import annotations
 
 from .base import ASR, GoldTranscriptASR, NullASR
 from .cached import CachedASR
+from .qwen3asr import Qwen3ASR
 from .whisper import WhisperASR
 
 BACKENDS: dict[str, type[ASR]] = {
     "cached": CachedASR,
     "gold": GoldTranscriptASR,
     "none": NullASR,
+    "qwen3-asr": Qwen3ASR,
     "whisper": WhisperASR,
 }
 
