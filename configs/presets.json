@@ -13,6 +13,7 @@
     "pho-medium": {"asr": "whisper", "asr_kw": {"model": "vinai/PhoWhisper-medium"}},
     "pho-large": {"asr": "whisper", "asr_kw": {"model": "vinai/PhoWhisper-large"}},
     "pho-large-fp32": {"asr": "whisper", "asr_kw": {"model": "vinai/PhoWhisper-large", "dtype": "float32"}},
-    "phoasr-small-ft-a": {"asr": "whisper", "asr_kw": {"model": "${HF_MODEL_OWNER}/phoasr-small-ft-a"}}
+    "phoasr-small-ft-a": {"asr": "whisper", "asr_kw": {"model": "${HF_MODEL_OWNER}/phoasr-small-ft-a"}},
+    "pho-large-ft-a": {"asr": "whisper", "asr_kw": {"model": "${HF_MODEL_OWNER}/pho-large-ft-a"}}
   }
 }
