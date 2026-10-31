@@ -13,6 +13,7 @@ backend loads directly:
         --name phoasr-small-ft-a --subset eval
 
 Plots of train loss, learning rate and eval WER/CER go to <out>/training.png, the raw log to <out>/log_history.json.
+Needs accelerate, installed by hand with --no-deps (it depends on torch, so it stays out of requirements.txt).
 """
 from __future__ import annotations
 
@@ -104,6 +105,10 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args(argv)
 
+    try:
+        import accelerate  # noqa: F401  (Trainer needs it; kept out of requirements.txt because it depends on torch)
+    except ImportError as e:
+        raise ImportError("train_asr needs accelerate: uv pip install --python <python> --no-deps 'accelerate>=1.1.0'") from e
     import torch
     from transformers import (Seq2SeqTrainer, Seq2SeqTrainingArguments, WhisperForConditionalGeneration,
                               WhisperProcessor)
