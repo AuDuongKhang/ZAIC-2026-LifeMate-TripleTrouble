@@ -31,7 +31,7 @@ All repo files (code, comments, docs, notebook UI, commits) are in English; Viet
 - Branch from an up-to-date `main`: `feat/<topic>`, `fix/<topic>`, or `exp/<topic>` for experiments (for example `exp/qwen3-4b-react`).
 - Open a PR into `main` (`gh pr create --base main`). The description says what changed and how it was verified: `pytest`, plus the train score / `RESULTS.md` row when agent or ASR behaviour changed. Merge after a teammate has looked at it.
 - To try a branch on molab before merging, put its name in the notebook's *Branch* field.
-- Commit messages and PR text are in English. Never commit data, tokens, or the data/HF links (see `.gitignore`).
+- Commit messages and PR text are in English. Never commit data, tokens, or data download links (see `.gitignore`). The one exception is the team's HF dataset name, which the notebook fills in by default: the repo is private and the dataset cannot be read without a token.
 - On the repo owner's machine `gh`'s active account is not the repo account. Run `gh` with `GH_TOKEN="$(gh auth token --user AuDuongKhang)"` instead of switching accounts.
 
 ## Architecture
@@ -42,7 +42,7 @@ All repo files (code, comments, docs, notebook UI, commits) are in English; Viet
 - `task.Task`: everything an agent may use. `history` user turns get ASR `text` (`audio_text` is stripped), `tools` are catalog specs for `installed_apps` + `sys.ask_missing_info`. `label` is set on train for oracle/debug only. A real agent must never read it.
 - `scoring.py`: local copy of the official metric, with our assumptions in its docstring. `evaluate.py` gets the gold hash by replaying `label.tool_calls` in a fresh ToolEnv, which reproduces `label.final_state` on all 1545 train samples.
 - `data.import_zaic_tools`: every split ships its **own** `zaic_tools` under the same module name, so one process handles one split. Steps that touch two splits run as subprocesses (see `tests/test_pipeline.py` and the notebook).
-- `notebooks/molab_run.py`: marimo notebook for molab (GPU). molab can't sync a private repo, so the team uploads this file once. It clones the repo itself (shallow, chosen branch, GitHub token), fetches data with `lifemate.fetch_data` from the team's private HF dataset (repo name and tokens typed in the UI, never stored in the repo), installs `requirements.txt`, runs infer (+ evaluate on train) in subprocesses, and offers downloads plus the RESULTS.md row. Team results are logged by hand in `RESULTS.md`.
+- `notebooks/molab_run.py`: marimo notebook for molab (GPU). molab can't sync a private repo, so the team uploads this file once. It clones the repo itself (shallow, chosen branch, GitHub token), fetches data with `lifemate.fetch_data` from the team's private HF dataset (dataset name filled in by default, tokens typed in the UI and never stored in the repo; the HF model owner is picked from the token's user and orgs), installs `requirements.txt`, runs infer (+ evaluate on train) in subprocesses, and offers downloads plus the RESULTS.md row. Team results are logged by hand in `RESULTS.md`.
 
 ## Rules that constrain the code
 

@@ -57,15 +57,17 @@ def history_messages(history: list[dict]) -> list[dict]:
 
 
 def build_messages(task: Task, count_tokens: Callable[[list[dict]], int], budget: int,
-                   prompt_version: str = DEFAULT_PROMPT) -> list[dict]:
+                   prompt_version: str = DEFAULT_PROMPT, examples_text: str = "") -> list[dict]:
     """[system, *history, user request]; drops the oldest history turns (a user turn and the replies after it)
-    until the prompt fits the token budget. The system prompt and the request are never dropped."""
+    until the prompt fits the token budget. The system prompt (with examples_text, when given) and the request are
+    never dropped."""
     turns: list[list[dict]] = []
     for msg in history_messages(task.history):
         if msg["role"] == "user" or not turns:
             turns.append([])
         turns[-1].append(msg)
-    head, tail = [{"role": "system", "content": system_prompt(task.context, prompt_version)}], [{"role": "user", "content": task.request}]
+    system = system_prompt(task.context, prompt_version) + (f"\n\n{examples_text}" if examples_text else "")
+    head, tail = [{"role": "system", "content": system}], [{"role": "user", "content": task.request}]
     while True:
         msgs = head + [m for turn in turns for m in turn] + tail
         if not turns or count_tokens(msgs) <= budget:

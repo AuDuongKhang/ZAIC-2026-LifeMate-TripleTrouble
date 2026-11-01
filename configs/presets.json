@@ -1,0 +1,19 @@
+{
+  "agent": {
+    "empty": {"agent": "empty", "agent_kw": {}},
+    "oracle": {"agent": "oracle", "agent_kw": {}},
+    "react-v1": {"agent": "react", "agent_kw": {}},
+    "react-v2-refs": {"agent": "react", "agent_kw": {"prompt_version": "v2", "check_refs": true}},
+    "react-fewshot-k2": {"agent": "react", "agent_kw": {"examples": 2}},
+    "react-fewshot-k4": {"agent": "react", "agent_kw": {"examples": 4}}
+  },
+  "asr": {
+    "gold": {"asr": "gold", "asr_kw": {}},
+    "none": {"asr": "none", "asr_kw": {}},
+    "pho-medium": {"asr": "whisper", "asr_kw": {"model": "vinai/PhoWhisper-medium"}},
+    "pho-large": {"asr": "whisper", "asr_kw": {"model": "vinai/PhoWhisper-large"}},
+    "pho-large-fp32": {"asr": "whisper", "asr_kw": {"model": "vinai/PhoWhisper-large", "dtype": "float32"}},
+    "phoasr-small-ft-a": {"asr": "whisper", "asr_kw": {"model": "${HF_MODEL_OWNER}/phoasr-small-ft-a"}},
+    "pho-large-ft-a": {"asr": "whisper", "asr_kw": {"model": "${HF_MODEL_OWNER}/pho-large-ft-a"}}
+  }
+}

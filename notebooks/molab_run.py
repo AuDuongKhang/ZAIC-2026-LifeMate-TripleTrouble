@@ -14,6 +14,7 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
+    import json
     import os
     import shlex
     import shutil
@@ -23,7 +24,7 @@ def _():
     from pathlib import Path
 
     import marimo as mo
-    return Path, datetime, mo, os, shlex, shutil, subprocess, sys
+    return Path, datetime, json, mo, os, shlex, shutil, subprocess, sys
 
 
 @app.cell
@@ -32,8 +33,11 @@ def _(mo):
     # LifeMate runner
 
     1. Turn on the GPU with the *notebook specs* button in the header.
-    2. Fill in the GitHub token (private repo) and the team's HF dataset + read token (data is fetched once per session).
-    3. Pick split, agent and ASR, then press **Pull + run**. Every press pulls the latest commit of the branch.
+    2. Fill in the GitHub token (private repo) and the HF read token (data is fetched once per session).
+    3. Press **Pull**: it pulls the latest commit of the branch, installs, fetches the data and lists the presets.
+    4. Pick an agent preset and an ASR preset (configs/presets.json on the pulled branch; `cached:<name>` entries are
+       the ASR caches in this session) and press **Run**. Add a new setup as one line in presets.json on the branch.
+       The HF model owner list holds the HF token's user and orgs; it fills `${HF_MODEL_OWNER}` in presets.
 
     On `train` the run is scored locally; on `public_test` download `submission.jsonl` and submit it on the portal.
 
@@ -52,24 +56,23 @@ def _(mo, os):
                           label="Repo", full_width=True)
     branch = mo.ui.text(value="main", label="Branch")
     token = mo.ui.text(kind="password", value=os.environ.get("GITHUB_TOKEN", ""), label="GitHub token (repo private)")
-    hf_repo = mo.ui.text(value=os.environ.get("LIFEMATE_HF_REPO", ""), label="HF dataset (user/name)")
+    hf_repo = mo.ui.text(value=os.environ.get("LIFEMATE_HF_REPO", "TripleTrouble/zaic2026-lifemate-data"),
+                         label="HF dataset (user/name)")
     hf_token = mo.ui.text(kind="password", value=os.environ.get("HF_TOKEN", ""), label="HF token (read)")
     data_url = mo.ui.text(value=os.environ.get("LIFEMATE_DATA_URL", ""), label="or data zip URL", full_width=True)
     split = mo.ui.dropdown(["train", "public_test"], value="train", label="Split")
-    agent = mo.ui.text(value="oracle", label="--agent")
-    asr = mo.ui.text(value="gold", label="--asr")
     limit = mo.ui.number(start=0, stop=100000, value=0, label="--limit (0 = all)")
     extra = mo.ui.text(value="", label="extra infer args", full_width=True)
     command = mo.ui.text(value="", label="or command instead of infer (lifemate.<command> args)", full_width=True)
-    run = mo.ui.run_button(label="Pull + run")
+    pull = mo.ui.run_button(label="Pull")
     mo.vstack([repo_url, mo.hstack([branch, token]), mo.hstack([hf_repo, hf_token]), data_url,
-               mo.hstack([split, agent, asr, limit]), extra, command, run])
-    return agent, asr, branch, command, data_url, extra, hf_repo, hf_token, limit, repo_url, run, split, token
+               mo.hstack([split, limit]), extra, command, pull])
+    return (branch, command, data_url, extra, hf_repo, hf_token, limit, pull, repo_url, split, token)
 
 
 @app.cell
-def _(Path, branch, data_url, hf_repo, hf_token, mo, os, repo_url, run, shutil, subprocess, sys, token):
-    mo.stop(not run.value, mo.md("_Press **Pull + run** to start._"))
+def _(Path, branch, data_url, hf_repo, hf_token, mo, os, pull, repo_url, shutil, subprocess, sys, token):
+    mo.stop(not pull.value, mo.md("_Press **Pull** to start._"))
 
     work = Path.cwd() / "lifemate_work"
     work.mkdir(exist_ok=True)
@@ -129,10 +132,47 @@ def _(Path, branch, data_url, hf_repo, hf_token, mo, os, repo_url, run, shutil, 
 
 
 @app.cell
-def _(agent, asr, command, commit, data_root, datetime, extra, hf_token, limit, os, repo_dir, shlex, split,
-      subprocess, sys, work):
+def _(hf_token, json, mo, os, repo_dir, split, subprocess, sys, work):
+    _r = subprocess.run([sys.executable, "-m", "lifemate.presets", "--list"], cwd=repo_dir, capture_output=True,
+                        text=True, env={**os.environ, "PYTHONPATH": str(repo_dir / "src")})
+    if _r.returncode:
+        raise RuntimeError(f"listing presets failed:\n{_r.stderr[-2000:]}")
+    _names = json.loads(_r.stdout)
+    _cache = work / "asr_cache" / split.value
+    _cached = [f"cached:{p.stem}" for p in sorted(_cache.glob("*.jsonl"))] if _cache.is_dir() else []
+    agent_preset = mo.ui.dropdown(_names["agent"], value="oracle" if "oracle" in _names["agent"] else _names["agent"][0],
+                                  label="Agent preset")
+    asr_preset = mo.ui.dropdown(_names["asr"] + _cached, value="gold" if "gold" in _names["asr"] else _names["asr"][0],
+                                label="ASR preset")
+    # HF accounts the token can publish under (its user and orgs); huggingface_hub is installed by Pull
+    _owners = []
+    if hf_token.value:
+        try:
+            from huggingface_hub import HfApi
+
+            _who = HfApi(token=hf_token.value).whoami()
+            _owners = [_who["name"]] + [o["name"] for o in _who.get("orgs", [])]
+        except Exception as e:  # a bad token only disables the dropdown; presets that need an owner then say so
+            print(f"HF whoami failed: {type(e).__name__}", flush=True)
+    _env_owner = os.environ.get("HF_MODEL_OWNER", "")
+    if _env_owner and _env_owner not in _owners:
+        _owners.insert(0, _env_owner)
+    # team models live under an org, so the first org comes before the user's own name
+    _default = _env_owner or (_owners[1] if len(_owners) > 1 else (_owners[0] if _owners else None))
+    hf_model_owner = mo.ui.dropdown(_owners, value=_default, label="HF model owner (fills ${HF_MODEL_OWNER})")
+    run = mo.ui.run_button(label="Run")
+    mo.vstack([mo.hstack([agent_preset, asr_preset, hf_model_owner], justify="start"), run])
+    return agent_preset, asr_preset, hf_model_owner, run
+
+
+@app.cell
+def _(agent_preset, asr_preset, command, commit, data_root, datetime, extra, hf_model_owner, hf_token, limit, mo, os,
+      repo_dir, run, shlex, split, subprocess, sys, work):
+    mo.stop(not run.value, mo.md("_Press **Run**._"))
     _env = {**os.environ, "PYTHONPATH": str(repo_dir / "src"), "LIFEMATE_DATA_ROOT": str(data_root), "PYTHONUTF8": "1",
             "LIFEMATE_ASR_CACHE": str(work / "asr_cache")}
+    if hf_model_owner.value:
+        _env["HF_MODEL_OWNER"] = hf_model_owner.value
     if hf_token.value:
         _env["HF_TOKEN"] = hf_token.value  # private model repos (fine-tuned ASR / LLM)
 
@@ -156,9 +196,10 @@ def _(agent, asr, command, commit, data_root, datetime, extra, hf_token, limit, 
         command_out = _stream([sys.executable, "-m", f"lifemate.{_module}", *_args], cwd=work)
         results_row = ""
     else:
-        run_dir = work / "runs" / f"{datetime.now():%Y%m%d-%H%M%S}_{commit}_{split.value}_{agent.value}_{asr.value}"
-        _cmd = [sys.executable, "-m", "lifemate.infer", "--split", split.value, "--agent", agent.value,
-                "--asr", asr.value, "--out", str(run_dir), *shlex.split(extra.value)]
+        _tag = f"{agent_preset.value}_{asr_preset.value}".replace(":", "-")
+        run_dir = work / "runs" / f"{datetime.now():%Y%m%d-%H%M%S}_{commit}_{split.value}_{_tag}"
+        _cmd = [sys.executable, "-m", "lifemate.infer", "--split", split.value, "--agent-preset", agent_preset.value,
+                "--asr-preset", asr_preset.value, "--out", str(run_dir), *shlex.split(extra.value)]
         if limit.value:
             _cmd += ["--limit", str(int(limit.value))]
         _stream(_cmd)
