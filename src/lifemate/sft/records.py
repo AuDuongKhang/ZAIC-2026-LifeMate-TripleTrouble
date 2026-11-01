@@ -23,14 +23,10 @@ from ..evaluate import label_kind
 from ..infer import build_task
 from ..splits import load_splits
 from .replay import replay
+from .tokenize import render
 
 RECORDS_DIR = REPO_ROOT / "train_records"
 SUBSETS = ("pool", "dev", "holdout", "all")
-
-
-def count_tokens(tokenizer, record: dict) -> int:
-    ids = tokenizer.apply_chat_template(record["messages"], tools=record["tools"], tokenize=True)
-    return len(ids["input_ids"] if hasattr(ids, "keys") else ids)
 
 
 def main(argv: list[str] | None = None) -> Path:
@@ -86,7 +82,7 @@ def main(argv: list[str] | None = None) -> Path:
 
         tok = AutoTokenizer.from_pretrained(args.tokenizer)
         with open(out, encoding="utf-8") as f:
-            lengths = [count_tokens(tok, json.loads(line)) for line in f]
+            lengths = [len(render(tok, r["messages"], r["tools"])) for r in map(json.loads, f)]
         if lengths:
             print(f"tokens per record: mean {sum(lengths) / len(lengths):.0f}, max {max(lengths)}, "
                   f"total {sum(lengths)}", flush=True)
