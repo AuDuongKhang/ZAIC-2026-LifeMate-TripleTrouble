@@ -24,6 +24,7 @@ import json
 import math
 import random
 import shutil
+import signal
 import tempfile
 import time
 from pathlib import Path
@@ -35,6 +36,9 @@ from .state import TrainState, batches, total_steps, truncate_log
 from .tokenize import MAX_LEN, encode_record
 
 BASE_MODEL = "Qwen/Qwen3-4B-Instruct-2507"
+# Arguments a resumed run must share with its checkpoint (the rest, such as --max-steps or --hf-repo, may change).
+RUN_KEYS = ("records", "model", "epochs", "lr", "warmup", "micro_bs", "grad_accum", "lora_r", "lora_alpha",
+            "lora_dropout", "max_len", "seed")
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
 
@@ -91,6 +95,8 @@ def main(argv: list[str] | None = None) -> Path:
 
         api = HfApi()
         api.create_repo(args.hf_repo, private=True, exist_ok=True)
+        if not args.resume and any(f.startswith(f"checkpoints/{run}/") for f in api.list_repo_files(args.hf_repo)):
+            raise SystemExit(f"{args.hf_repo} already holds checkpoints/{run}; pass --resume or use another run name")
     if args.resume and not ckpt.exists():
         if not api:
             raise SystemExit(f"--resume: no {ckpt} and no --hf-repo to download it from")
@@ -104,18 +110,24 @@ def main(argv: list[str] | None = None) -> Path:
     if args.resume:
         if not ckpt.exists():
             raise SystemExit(f"--resume: no checkpoint at {ckpt}")
-        saved = json.loads((ckpt / "run_config.json").read_text(encoding="utf-8")).get("records_sha")
-        if saved != records_sha:  # another file would shift the data order
+        saved = json.loads((ckpt / "run_config.json").read_text(encoding="utf-8"))
+        if saved.get("records_sha") != records_sha:  # another file would shift the data order
             raise SystemExit(f"--resume: train_records/{args.records}.jsonl differs from the one the checkpoint was "
-                             f"trained on (sha {records_sha} vs {saved}); rebuild it with the same code and options")
+                             f"trained on (sha {records_sha} vs {saved.get('records_sha')}); rebuild it with the same "
+                             "code and options")
+        changed = [f"--{k.replace('_', '-')} {saved.get(k)} -> {getattr(args, k)}" for k in RUN_KEYS
+                   if saved.get(k) != getattr(args, k)]
+        if changed:  # the schedule, the surviving records or the model would silently change mid-run
+            raise SystemExit(f"--resume: training arguments differ from the checkpoint's: {'; '.join(changed)}")
         if (ckpt / "train_log.jsonl").exists() and len(read_log(log_path)) < len(read_log(ckpt / "train_log.jsonl")):
             shutil.copy(ckpt / "train_log.jsonl", log_path)
         state = TrainState.from_json((ckpt / "state.json").read_text(encoding="utf-8"))
         truncate_log(log_path, state.step)  # steps after the checkpoint run again
         print(f"resuming {run} at step {state.step} (epoch {state.epoch}, position {state.pos})", flush=True)
     else:
-        if ckpt.exists() or read_log(log_path):
+        if ckpt.exists():
             raise SystemExit(f"{out} already holds a run; pass --resume or use another --out")
+        log_path.unlink(missing_ok=True)  # steps of a run stopped before its first checkpoint
         state = TrainState(epoch=0, pos=0, step=0, seed=args.seed)
     config = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}
     (out / "run_config.json").write_text(json.dumps({**config, "records_sha": records_sha}, indent=1), encoding="utf-8")
@@ -195,6 +207,13 @@ def main(argv: list[str] | None = None) -> Path:
             except Exception as e:  # a failed upload must not kill the run; the next save retries
                 print(f"upload to {args.hf_repo} failed: {type(e).__name__}: {e}", flush=True)
 
+    stop_file = out / "STOP"  # written by the notebook's Stop button: save at the next step, then exit
+    stop_file.unlink(missing_ok=True)
+    stop = {"signal": False}
+    try:
+        signal.signal(signal.SIGTERM, lambda *_: stop.update(signal=True))
+    except ValueError:  # not the main thread
+        pass
     prev = read_log(log_path)
     offset = prev[-1]["seconds"] if prev else 0.0
     t0 = last_save = step_start = time.time()
@@ -232,10 +251,14 @@ def main(argv: list[str] | None = None) -> Path:
             step_loss, step_count, step_tokens, step_start = 0.0, 0, 0, time.time()
             if state.step >= stop_at:
                 break
+            if stop["signal"] or stop_file.exists():
+                print(f"stop requested: saving at step {state.step}", flush=True)
+                break
             if time.time() - last_save >= args.save_minutes * 60:
                 save()
                 last_save = time.time()
     save()
+    stop_file.unlink(missing_ok=True)
     print(f"-> {ckpt} (step {state.step}/{total})", flush=True)
     return ckpt
 

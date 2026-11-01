@@ -38,8 +38,9 @@ def _(mo):
     4. **Start training**: renders the records (`lifemate.sft.records`, pool for training, dev for the eval loss), then
        runs `lifemate.sft.train` in the background. The log and plots below refresh every minute. Checkpoints go to
        `<model repo>/checkpoints/<run>/last` every 30 minutes and at the end.
-    5. A new session (or after **Stop**): tick *resume* and press **Start training** again with the same run name and
-       records; training continues from the last checkpoint.
+    5. **Stop** saves a checkpoint at the next optimizer step, then exits. In a new session (or after Stop) tick
+       *resume* and press **Start training** again with the same run name, records and extra args; training continues
+       from the last checkpoint. Do not press **Pull** or edit the fields above it while training runs.
     6. **Merge** once training has finished: merges the adapter into the base weights and uploads the model to the root of
        the model repo. Then add an agent preset with `"model": "${HF_MODEL_OWNER}/<repo name>"` on the branch.
     """)
@@ -168,7 +169,7 @@ def _(data_root, hf_write, model_repo, os, repo_dir, work):
 def _(eval_records, examples, extra, hf_write, max_steps, mo, procs, records, repo_dir, repo_name, resume, run_dir,
       run_name, shlex, start, step_env, stop, subprocess, sys):
     if stop.value and procs.get("train") and procs["train"].poll() is None:
-        procs["train"].terminate()
+        (run_dir(run_name.value) / "STOP").write_text("", encoding="utf-8")  # saves at the next step, then exits
     mo.stop(not start.value, mo.md("_Press **Start training**._"))
     if procs.get("train") and procs["train"].poll() is None:
         raise RuntimeError("training is already running; press Stop first")
@@ -241,7 +242,7 @@ def _(mo):
 
 
 @app.cell
-def _(merge, mo, procs, repo_dir, repo_name, run_dir, run_name, step_env, subprocess, sys, work):
+def _(examples, merge, mo, procs, repo_dir, repo_name, run_dir, run_name, step_env, subprocess, sys, work):
     mo.stop(not merge.value, mo.md("_**Merge** once training has finished._"))
     if procs.get("train") and procs["train"].poll() is None:
         raise RuntimeError("training is still running")
@@ -254,7 +255,7 @@ def _(merge, mo, procs, repo_dir, repo_name, run_dir, run_name, step_env, subpro
         raise RuntimeError(f"merge failed:\n{_r.stderr[-3000:]}")
     _name = repo_name().split("/")[-1] if repo_name() else "<repo name>"
     mo.md(f"```\n{_r.stdout[-2000:]}\n```\nPreset for `configs/presets.json`: "
-          f'`"{run_name.value}": {{"agent": "react", "agent_kw": {{"model": "${{HF_MODEL_OWNER}}/{_name}", "examples": 4}}}}`')
+          f'`"{run_name.value}": {{"agent": "react", "agent_kw": {{"model": "${{HF_MODEL_OWNER}}/{_name}", "examples": {int(examples.value)}}}}}`')
     return
 
 

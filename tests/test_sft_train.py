@@ -75,3 +75,61 @@ def test_merge_writes_a_plain_model(tiny, tmp_path):
     model = transformers.AutoModelForCausalLM.from_pretrained(out)
     assert not any("lora" in name for name, _ in model.named_parameters())
     assert (out / "tokenizer_config.json").exists()
+
+
+def test_resume_refuses_changed_training_args(tiny, tmp_path):
+    _train(tiny, tmp_path / "r", "--max-steps", "1")
+    with pytest.raises(SystemExit, match="epochs"):
+        _train(tiny, tmp_path / "r", "--resume", "--epochs", "2")
+
+
+def test_stop_file_saves_and_resume_finishes_the_same_run(tiny, tmp_path):
+    import threading
+    import time
+
+    full = tmp_path / "full"
+    _train(tiny, full, "--grad-accum", "1")
+    part = tmp_path / "part"
+
+    def request_stop():  # what the notebook's Stop button does, once the first step is logged
+        while not (part / "train_log.jsonl").exists():
+            time.sleep(0.05)
+        (part / "STOP").write_text("", encoding="utf-8")
+
+    threading.Thread(target=request_stop, daemon=True).start()
+    _train(tiny, part, "--grad-accum", "1")
+    stopped = _log(part)
+    assert len(stopped) < len(_log(full)) and not (part / "STOP").exists()
+    assert json.loads((part / "last" / "state.json").read_text(encoding="utf-8"))["step"] == stopped[-1]["step"]
+    _train(tiny, part, "--grad-accum", "1", "--resume")
+    assert [r["loss"] for r in _log(part)] == pytest.approx([r["loss"] for r in _log(full)], rel=1e-4)
+
+
+def test_orphan_log_without_checkpoint_does_not_block_a_fresh_run(tiny, tmp_path):
+    out = tmp_path / "o"
+    out.mkdir()
+    (out / "train_log.jsonl").write_text('{"step": 1, "loss": 9.0}\n', encoding="utf-8")
+    _train(tiny, out, "--max-steps", "1")
+    assert [r["loss"] for r in _log(out)] != [9.0]
+
+
+class FakeHfApi:
+    files: list[str] = []
+
+    def create_repo(self, *a, **k):
+        pass
+
+    def list_repo_files(self, *a, **k):
+        return self.files
+
+    def upload_folder(self, *a, **k):
+        pass
+
+
+def test_fresh_run_refuses_a_run_already_on_the_hub(tiny, tmp_path, monkeypatch):
+    import huggingface_hub
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", FakeHfApi)
+    monkeypatch.setattr(FakeHfApi, "files", ["checkpoints/h/last/state.json"])
+    with pytest.raises(SystemExit, match="--resume"):
+        _train(tiny, tmp_path / "h", "--hf-repo", "me/x")
