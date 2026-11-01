@@ -33,15 +33,16 @@ def _(mo):
 
     1. Turn on the GPU with the *notebook specs* button in the header.
     2. Fill in the GitHub token, the HF read token (data), the HF model repo and an HF **write** token for it.
-    3. **Pull**: pulls the branch, installs `requirements.txt` + `requirements-train.txt` (`--no-deps`, keeps molab's
-       torch), fetches the data.
+    3. **Pull repo**: pulls the branch, installs `requirements.txt` + `requirements-train.txt` (`--no-deps`, keeps
+       molab's torch). Press it again whenever the branch has new commits (not while training runs).
+       **Fetch data** once per session, after the first Pull repo; the data stays for the whole session.
     4. **Start training**: renders the records (`lifemate.sft.records`: pool for experiments, all train only for the final
        retrain; dev or holdout for the eval loss, never trained on), then
        runs `lifemate.sft.train` in the background. The log and plots below refresh every minute. Checkpoints go to
        `<model repo>/checkpoints/<run>/last` every 30 minutes and at the end.
     5. **Stop** saves a checkpoint at the next optimizer step, then exits. In a new session (or after Stop) tick
        *resume* and press **Start training** again with the same run name, records and extra args; training continues
-       from the checkpoint in the HF model repo (the session's own copy only when it is newer, e.g. a failed upload). Do not press **Pull** or edit the fields above it while training runs.
+       from the checkpoint in the HF model repo (the session's own copy only when it is newer, e.g. a failed upload). Do not press **Pull repo** or edit the fields above it while training runs.
     6. **Merge** once training has finished: merges the adapter into the base weights and uploads the model to the root of
        the model repo. Then add an agent preset with `"model": "${HF_MODEL_OWNER}/<repo name>"` on the branch.
     """)
@@ -59,19 +60,32 @@ def _(mo, os):
     hf_token = mo.ui.text(kind="password", value=os.environ.get("HF_TOKEN", ""), label="HF token (read)")
     model_repo = mo.ui.text(value="", label="HF model repo (owner/name, private)", placeholder="TripleTrouble/lifemate-sft-v1")
     hf_write = mo.ui.text(kind="password", value="", label="HF token (write)")
-    pull = mo.ui.run_button(label="Pull")
+    pull = mo.ui.run_button(label="Pull repo")
+    fetch = mo.ui.run_button(label="Fetch data")
     mo.vstack([repo_url, mo.hstack([branch, token]), mo.hstack([hf_repo, hf_token]), mo.hstack([model_repo, hf_write]),
-               pull])
-    return branch, hf_repo, hf_token, hf_write, model_repo, pull, repo_url, token
+               mo.hstack([pull, fetch], justify="start")])
+    return branch, fetch, hf_repo, hf_token, hf_write, model_repo, pull, repo_url, token
 
 
 @app.cell
-def _(Path, branch, hf_repo, hf_token, mo, os, pull, repo_url, shutil, subprocess, sys, token):
-    mo.stop(not pull.value, mo.md("_Press **Pull** to start._"))
-
+def _(Path):
     work = Path.cwd() / "lifemate_work"
     work.mkdir(exist_ok=True)
-    repo_dir = work / "repo"
+    repo_dir, data_root = work / "repo", work / "data"
+    return data_root, repo_dir, work
+
+
+@app.cell
+def _():
+    procs = {}  # the background training process, kept across cell reruns
+    return (procs,)
+
+
+@app.cell
+def _(branch, mo, procs, pull, repo_dir, repo_url, shutil, subprocess, sys, token):
+    mo.stop(not pull.value, mo.md("_Press **Pull repo** to start._"))
+    if procs.get("train") and procs["train"].poll() is None:
+        raise RuntimeError("training is running: Stop it (or wait for it to finish) before pulling the repo again")
 
     def _git(*args, cwd=None):
         r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
@@ -109,23 +123,30 @@ def _(Path, branch, hf_repo, hf_token, mo, os, pull, repo_url, shutil, subproces
     if _torch.returncode:
         raise RuntimeError(f"torch/peft import failed:\n{_torch.stderr[-2000:]}")
 
-    data_root = work / "data"
-    _fetch = [sys.executable, "-m", "lifemate.fetch_data", "--dest", str(data_root), "--hf-repo", hf_repo.value.strip()]
-    _fetch_env = {**os.environ, "PYTHONPATH": str(repo_dir / "src")}
-    if hf_token.value:
-        _fetch_env["HF_TOKEN"] = hf_token.value
-    _r = subprocess.run(_fetch, cwd=repo_dir, env=_fetch_env, capture_output=True, text=True)
-    if _r.returncode:
-        _err = _r.stderr[-2000:].replace(hf_token.value, "***") if hf_token.value else _r.stderr[-2000:]
-        raise RuntimeError(f"fetching data failed (HF dataset + token filled in?):\n{_err}")
-
     _gpu = "no GPU"
     if shutil.which("nvidia-smi"):
         _gpu = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
                               capture_output=True, text=True).stdout.strip()
-    mo.md(f"**commit** `{commit}` {commit_msg}  \n**torch** `{_torch.stdout.strip()}`  \n**data** `{data_root}`  \n"
-          f"**GPU** {_gpu}")
-    return commit, data_root, repo_dir, work
+    mo.md(f"**commit** `{commit}` {commit_msg}  \n**torch** `{_torch.stdout.strip()}`  \n**GPU** {_gpu}")
+    return (commit,)
+
+
+@app.cell
+def _(commit, data_root, fetch, hf_repo, hf_token, mo, os, repo_dir, subprocess, sys):
+    commit  # lifemate.fetch_data comes from the pulled repo; pulling again only re-checks the data, never refetches it
+    if fetch.value:
+        _fetch = [sys.executable, "-m", "lifemate.fetch_data", "--dest", str(data_root), "--hf-repo", hf_repo.value.strip()]
+        _fetch_env = {**os.environ, "PYTHONPATH": str(repo_dir / "src")}
+        if hf_token.value:
+            _fetch_env["HF_TOKEN"] = hf_token.value
+        _r = subprocess.run(_fetch, cwd=repo_dir, env=_fetch_env, capture_output=True, text=True)
+        if _r.returncode:
+            _err = _r.stderr[-2000:].replace(hf_token.value, "***") if hf_token.value else _r.stderr[-2000:]
+            raise RuntimeError(f"fetching data failed (HF dataset + token filled in?):\n{_err}")
+    _splits = sorted(p.name for p in data_root.iterdir() if p.is_dir()) if data_root.is_dir() else []
+    mo.md(f"**data** `{data_root}`: {', '.join(_splits)}" if _splits
+          else "**data**: _not fetched yet; press **Fetch data** (once per session)_")
+    return
 
 
 @app.cell
@@ -148,13 +169,8 @@ def _(mo):
 
 
 @app.cell
-def _():
-    procs = {}  # the background training process, kept across cell reruns
-    return (procs,)
-
-
-@app.cell
-def _(data_root, hf_write, model_repo, os, repo_dir, work):
+def _(commit, data_root, hf_write, model_repo, os, repo_dir, work):
+    commit  # everything below runs the pulled repo's code
     def step_env():
         env = {**os.environ, "PYTHONPATH": str(repo_dir / "src"), "LIFEMATE_DATA_ROOT": str(data_root), "PYTHONUTF8": "1"}
         if hf_write.value:
@@ -170,13 +186,15 @@ def _(data_root, hf_write, model_repo, os, repo_dir, work):
 
 
 @app.cell
-def _(eval_records, examples, extra, hf_write, max_steps, mo, procs, records, repo_dir, repo_name, resume, run_dir,
+def _(data_root, eval_records, examples, extra, hf_write, max_steps, mo, procs, records, repo_dir, repo_name, resume, run_dir,
       run_name, shlex, start, step_env, stop, subprocess, sys):
     if stop.value and procs.get("train") and procs["train"].poll() is None:
         (run_dir(run_name.value) / "STOP").write_text("", encoding="utf-8")  # saves at the next step, then exits
     mo.stop(not start.value, mo.md("_Press **Start training**._"))
     if procs.get("train") and procs["train"].poll() is None:
         raise RuntimeError("training is already running; press Stop first")
+    if not (data_root / "train").is_dir():
+        raise RuntimeError(f"no train data in {data_root}: press **Fetch data** first")
 
     def _run(cmd):
         r = subprocess.run(cmd, cwd=repo_dir, env=step_env(), capture_output=True, text=True, encoding="utf-8")
