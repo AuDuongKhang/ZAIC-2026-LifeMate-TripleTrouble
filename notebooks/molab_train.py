@@ -35,7 +35,8 @@ def _(mo):
     2. Fill in the GitHub token, the HF read token (data), the HF model repo and an HF **write** token for it.
     3. **Pull**: pulls the branch, installs `requirements.txt` + `requirements-train.txt` (`--no-deps`, keeps molab's
        torch), fetches the data.
-    4. **Start training**: renders the records (`lifemate.sft.records`, pool for training, dev for the eval loss), then
+    4. **Start training**: renders the records (`lifemate.sft.records`: pool for experiments, all train only for the final
+       retrain; dev or holdout for the eval loss, never trained on), then
        runs `lifemate.sft.train` in the background. The log and plots below refresh every minute. Checkpoints go to
        `<model repo>/checkpoints/<run>/last` every 30 minutes and at the end.
     5. **Stop** saves a checkpoint at the next optimizer step, then exits. In a new session (or after Stop) tick
@@ -130,8 +131,11 @@ def _(Path, branch, hf_repo, hf_token, mo, os, pull, repo_url, shutil, subproces
 @app.cell
 def _(mo):
     run_name = mo.ui.text(value="sft-v1", label="Run name")
-    records = mo.ui.text(value="gold-pool", label="Train records (pool)")
-    eval_records = mo.ui.text(value="gold-dev", label="Eval records (dev, empty = none)")
+    # Record files are named gold-<subset> (gold-<subset>-k<k> when k != 4), so the same choices find the same file again
+    records = mo.ui.dropdown({"pool (experiments)": "pool", "all train (final retrain only)": "all"},
+                             value="pool (experiments)", label="Train records")
+    eval_records = mo.ui.dropdown({"dev": "dev", "holdout": "holdout", "none": ""}, value="dev",
+                                  label="Eval loss records")
     examples = mo.ui.number(start=0, stop=8, value=4, label="few-shot examples in the records")
     resume = mo.ui.checkbox(value=False, label="resume from the last checkpoint")
     max_steps = mo.ui.number(start=0, stop=100000, value=0, label="--max-steps (0 = full run)")
@@ -180,17 +184,21 @@ def _(eval_records, examples, extra, hf_write, max_steps, mo, procs, records, re
         if r.returncode:
             raise RuntimeError(f"{cmd[2]} failed:\n{r.stderr[-3000:]}")
 
+    def _name(subset):
+        return f"gold-{subset}" + ("" if int(examples.value) == 4 else f"-k{int(examples.value)}")
+
     _k = ["--examples", str(int(examples.value)), "--tokenizer", "none"]
-    _run([sys.executable, "-m", "lifemate.sft.records", "--name", records.value, "--subset", "pool", *_k])
-    if eval_records.value.strip():
-        _run([sys.executable, "-m", "lifemate.sft.records", "--name", eval_records.value.strip(), "--subset", "dev", *_k])
+    _run([sys.executable, "-m", "lifemate.sft.records", "--name", _name(records.value), "--subset", records.value, *_k])
+    if eval_records.value:
+        _run([sys.executable, "-m", "lifemate.sft.records", "--name", _name(eval_records.value), "--subset",
+              eval_records.value, *_k])
 
     _out = run_dir(run_name.value)
     _out.mkdir(parents=True, exist_ok=True)
-    _cmd = [sys.executable, "-m", "lifemate.sft.train", "--records", records.value, "--out", str(_out),
+    _cmd = [sys.executable, "-m", "lifemate.sft.train", "--records", _name(records.value), "--out", str(_out),
             *shlex.split(extra.value)]
-    if eval_records.value.strip():
-        _cmd += ["--eval-records", eval_records.value.strip()]
+    if eval_records.value:
+        _cmd += ["--eval-records", _name(eval_records.value)]
     if repo_name():
         _cmd += ["--hf-repo", repo_name()]
     if resume.value:
