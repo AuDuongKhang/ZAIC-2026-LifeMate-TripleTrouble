@@ -33,9 +33,11 @@ def _(mo):
     # LifeMate runner
 
     1. Turn on the GPU with the *notebook specs* button in the header.
-    2. Fill in the GitHub token (private repo) and the HF read token (data is fetched once per session).
-    3. Press **Pull**: it pulls the latest commit of the branch, installs, fetches the data and lists the presets.
-    4. Pick an agent preset and an ASR preset (configs/presets.json on the pulled branch; `cached:<name>` entries are
+    2. Fill in the GitHub token (private repo) and the HF read token.
+    3. Press **Pull repo**: it pulls the latest commit of the branch, installs the requirements and lists the presets.
+       Press it again whenever the branch has new commits.
+    4. Press **Fetch data** once per session (after the first Pull repo); the data stays for the whole session.
+    5. Pick an agent preset and an ASR preset (configs/presets.json on the pulled branch; `cached:<name>` entries are
        the ASR caches in this session) and press **Run**. Add a new setup as one line in presets.json on the branch.
        The HF model owner list holds the HF token's user and orgs; it fills `${HF_MODEL_OWNER}` in presets.
 
@@ -64,19 +66,24 @@ def _(mo, os):
     limit = mo.ui.number(start=0, stop=100000, value=0, label="--limit (0 = all)")
     extra = mo.ui.text(value="", label="extra infer args", full_width=True)
     command = mo.ui.text(value="", label="or command instead of infer (lifemate.<command> args)", full_width=True)
-    pull = mo.ui.run_button(label="Pull")
+    pull = mo.ui.run_button(label="Pull repo")
+    fetch = mo.ui.run_button(label="Fetch data")
     mo.vstack([repo_url, mo.hstack([branch, token]), mo.hstack([hf_repo, hf_token]), data_url,
-               mo.hstack([split, limit]), extra, command, pull])
-    return (branch, command, data_url, extra, hf_repo, hf_token, limit, pull, repo_url, split, token)
+               mo.hstack([split, limit]), extra, command, mo.hstack([pull, fetch], justify="start")])
+    return (branch, command, data_url, extra, fetch, hf_repo, hf_token, limit, pull, repo_url, split, token)
 
 
 @app.cell
-def _(Path, branch, data_url, hf_repo, hf_token, mo, os, pull, repo_url, shutil, subprocess, sys, token):
-    mo.stop(not pull.value, mo.md("_Press **Pull** to start._"))
-
+def _(Path):
     work = Path.cwd() / "lifemate_work"
     work.mkdir(exist_ok=True)
-    repo_dir = work / "repo"
+    repo_dir, data_root = work / "repo", work / "data"
+    return data_root, repo_dir, work
+
+
+@app.cell
+def _(branch, mo, pull, repo_dir, repo_url, shutil, subprocess, sys, token):
+    mo.stop(not pull.value, mo.md("_Press **Pull repo** to start._"))
 
     def _git(*args, cwd=None):
         r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
@@ -107,32 +114,41 @@ def _(Path, branch, data_url, hf_repo, hf_token, mo, os, pull, repo_url, shutil,
     if _r.returncode:
         raise RuntimeError(f"installing requirements failed:\n{_r.stderr[-3000:]}")
 
-    # same command as on laptops; a no-op when this session already has the data
-    data_root = work / "data"
-    _fetch = [sys.executable, "-m", "lifemate.fetch_data", "--dest", str(data_root)]
-    if hf_repo.value.strip():
-        _fetch += ["--hf-repo", hf_repo.value.strip()]
-    elif data_url.value.strip():
-        _fetch += ["--url", data_url.value.strip()]
-    _fetch_env = {**os.environ, "PYTHONPATH": str(repo_dir / "src")}
-    if hf_token.value:
-        _fetch_env["HF_TOKEN"] = hf_token.value
-    _r = subprocess.run(_fetch, cwd=repo_dir, env=_fetch_env, capture_output=True, text=True)
-    print(_r.stdout[-2000:], flush=True)
-    if _r.returncode:
-        _err = _r.stderr[-2000:].replace(hf_token.value, "***") if hf_token.value else _r.stderr[-2000:]
-        raise RuntimeError(f"fetching data failed (HF dataset + token filled in?):\n{_err}")
-
     _gpu = "no GPU"
     if shutil.which("nvidia-smi"):
         _gpu = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
                               capture_output=True, text=True).stdout.strip()
-    mo.md(f"**commit** `{commit}` {commit_msg}  \n**data** `{data_root}`  \n**GPU** {_gpu}")
-    return commit, data_root, repo_dir, work
+    mo.md(f"**commit** `{commit}` {commit_msg}  \n**GPU** {_gpu}")
+    return (commit,)
 
 
 @app.cell
-def _(hf_token, json, mo, os, repo_dir, split, subprocess, sys, work):
+def _(commit, data_root, data_url, fetch, hf_repo, hf_token, mo, os, repo_dir, subprocess, sys):
+    commit  # lifemate.fetch_data comes from the pulled repo; pulling again only re-checks the data, never refetches it
+    if fetch.value:
+        # same command as on laptops; a no-op when this session already has the data
+        _fetch = [sys.executable, "-m", "lifemate.fetch_data", "--dest", str(data_root)]
+        if hf_repo.value.strip():
+            _fetch += ["--hf-repo", hf_repo.value.strip()]
+        elif data_url.value.strip():
+            _fetch += ["--url", data_url.value.strip()]
+        _fetch_env = {**os.environ, "PYTHONPATH": str(repo_dir / "src")}
+        if hf_token.value:
+            _fetch_env["HF_TOKEN"] = hf_token.value
+        _r = subprocess.run(_fetch, cwd=repo_dir, env=_fetch_env, capture_output=True, text=True)
+        print(_r.stdout[-2000:], flush=True)
+        if _r.returncode:
+            _err = _r.stderr[-2000:].replace(hf_token.value, "***") if hf_token.value else _r.stderr[-2000:]
+            raise RuntimeError(f"fetching data failed (HF dataset + token filled in?):\n{_err}")
+    _splits = sorted(p.name for p in data_root.iterdir() if p.is_dir()) if data_root.is_dir() else []
+    mo.md(f"**data** `{data_root}`: {', '.join(_splits)}" if _splits
+          else "**data**: _not fetched yet; press **Fetch data** (once per session)_")
+    return
+
+
+@app.cell
+def _(commit, hf_token, json, mo, os, repo_dir, split, subprocess, sys, work):
+    commit  # the presets of the pulled branch
     _r = subprocess.run([sys.executable, "-m", "lifemate.presets", "--list"], cwd=repo_dir, capture_output=True,
                         text=True, env={**os.environ, "PYTHONPATH": str(repo_dir / "src")})
     if _r.returncode:
@@ -196,6 +212,8 @@ def _(agent_preset, asr_preset, command, commit, data_root, datetime, extra, hf_
         command_out = _stream([sys.executable, "-m", f"lifemate.{_module}", *_args], cwd=work)
         results_row = ""
     else:
+        if not (data_root / split.value).is_dir():
+            raise RuntimeError(f"no {split.value} data in {data_root}: press **Fetch data** first")
         _tag = f"{agent_preset.value}_{asr_preset.value}".replace(":", "-")
         run_dir = work / "runs" / f"{datetime.now():%Y%m%d-%H%M%S}_{commit}_{split.value}_{_tag}"
         _cmd = [sys.executable, "-m", "lifemate.infer", "--split", split.value, "--agent-preset", agent_preset.value,
