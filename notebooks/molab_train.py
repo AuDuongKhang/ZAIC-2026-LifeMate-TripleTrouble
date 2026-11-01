@@ -41,7 +41,7 @@ def _(mo):
        `<model repo>/checkpoints/<run>/last` every 30 minutes and at the end.
     5. **Stop** saves a checkpoint at the next optimizer step, then exits. In a new session (or after Stop) tick
        *resume* and press **Start training** again with the same run name, records and extra args; training continues
-       from the last checkpoint. Do not press **Pull** or edit the fields above it while training runs.
+       from the checkpoint in the HF model repo (the session's own copy only when it is newer, e.g. a failed upload). Do not press **Pull** or edit the fields above it while training runs.
     6. **Merge** once training has finished: merges the adapter into the base weights and uploads the model to the root of
        the model repo. Then add an agent preset with `"model": "${HF_MODEL_OWNER}/<repo name>"` on the branch.
     """)

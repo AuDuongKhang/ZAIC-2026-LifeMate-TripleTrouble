@@ -10,7 +10,8 @@
 The loss is the mean cross-entropy over the labelled (assistant) tokens of each micro-batch; logits are computed only
 at those positions, so a 12k-token record does not need a full-vocabulary logit tensor. A checkpoint (adapter,
 optimizer, scheduler, RNG state and data position) is written every --save-minutes and at the end to <out>/last and
-uploaded to <hf-repo>/checkpoints/<run>/last. --resume continues from it with the same data order and LR schedule.
+uploaded to <hf-repo>/checkpoints/<run>/last. --resume continues from it with the same data order and LR schedule;
+with --hf-repo the HF copy is used (a local copy only when it is newer, e.g. after a failed upload).
 <out>/train_log.jsonl gets one line per optimizer step; loss.png, lr.png and grad_norm.png are redrawn at each save.
 --max-steps only stops early (smoke tests): the LR schedule is always that of the full run.
 
@@ -51,6 +52,11 @@ def load_encoded(name: str, tokenizer, max_len: int, records_dir: Path = RECORDS
     print(f"{path.name}: {len(encoded)} records, {len(records) - len(encoded)} skipped as longer than {max_len} "
           f"tokens, {tokens} tokens", flush=True)
     return encoded
+
+
+def checkpoint_step(folder: Path) -> int | None:
+    state = folder / "state.json"
+    return TrainState.from_json(state.read_text(encoding="utf-8")).step if state.exists() else None
 
 
 def labelled_count(enc: dict) -> int:
@@ -97,19 +103,25 @@ def main(argv: list[str] | None = None) -> Path:
         api.create_repo(args.hf_repo, private=True, exist_ok=True)
         if not args.resume and any(f.startswith(f"checkpoints/{run}/") for f in api.list_repo_files(args.hf_repo)):
             raise SystemExit(f"{args.hf_repo} already holds checkpoints/{run}; pass --resume or use another run name")
-    if args.resume and not ckpt.exists():
-        if not api:
-            raise SystemExit(f"--resume: no {ckpt} and no --hf-repo to download it from")
+    if args.resume and api:  # the HF copy is the reference; a local one wins only when newer (a failed upload)
         with tempfile.TemporaryDirectory() as tmp:
             snapshot_download(args.hf_repo, allow_patterns=[f"checkpoints/{run}/last/*"], local_dir=tmp)
-            src = Path(tmp) / "checkpoints" / run / "last"
-            if not src.exists():
-                raise SystemExit(f"--resume: {args.hf_repo} has no checkpoints/{run}/last")
-            shutil.copytree(src, ckpt)
+            hub = Path(tmp) / "checkpoints" / run / "last"
+            hub_step, local_step = checkpoint_step(hub), checkpoint_step(ckpt)
+            if hub_step is not None and (local_step is None or hub_step >= local_step):
+                shutil.rmtree(ckpt, ignore_errors=True)
+                shutil.copytree(hub, ckpt)
+                print(f"resume source: {args.hf_repo} checkpoints/{run}/last (step {hub_step})"
+                      + (f", replacing the local copy at step {local_step}" if local_step is not None else ""), flush=True)
+            elif local_step is not None:
+                print(f"resume source: local {ckpt} (step {local_step}); {args.hf_repo} has "
+                      + ("no checkpoint" if hub_step is None else f"an older one (step {hub_step})"), flush=True)
+    elif args.resume:
+        print(f"resume source: local {ckpt} (no --hf-repo)", flush=True)
     records_sha = hashlib.sha256((args.records_dir / f"{args.records}.jsonl").read_bytes()).hexdigest()[:16]
     if args.resume:
         if not ckpt.exists():
-            raise SystemExit(f"--resume: no checkpoint at {ckpt}")
+            raise SystemExit(f"--resume: no checkpoint at {ckpt}" + (f" nor in {args.hf_repo}" if api else ""))
         saved = json.loads((ckpt / "run_config.json").read_text(encoding="utf-8"))
         if saved.get("records_sha") != records_sha:  # another file would shift the data order
             raise SystemExit(f"--resume: train_records/{args.records}.jsonl differs from the one the checkpoint was "

@@ -1,6 +1,7 @@
 """End-to-end trainer check on a tiny random Qwen3 (CPU, a few seconds): a run stopped and resumed gives the same
 log as an uninterrupted one, and the adapter merges. Skipped without torch + peft (they are not in requirements.txt)."""
 import json
+from pathlib import Path
 
 import pytest
 
@@ -133,3 +134,29 @@ def test_fresh_run_refuses_a_run_already_on_the_hub(tiny, tmp_path, monkeypatch)
     monkeypatch.setattr(FakeHfApi, "files", ["checkpoints/h/last/state.json"])
     with pytest.raises(SystemExit, match="--resume"):
         _train(tiny, tmp_path / "h", "--hf-repo", "me/x")
+
+
+def test_resume_takes_the_newer_hub_checkpoint_over_a_stale_local_one(tiny, tmp_path, monkeypatch, capsys):
+    import shutil
+
+    import huggingface_hub
+
+    full = tmp_path / "full"
+    _train(tiny, full)
+    part, hub = tmp_path / "part", tmp_path / "hub"
+    _train(tiny, part, "--max-steps", "1")
+    shutil.copytree(part / "last", tmp_path / "stale")
+    _train(tiny, part, "--max-steps", "2", "--resume")
+    shutil.copytree(part / "last", hub / "checkpoints" / "part" / "last")  # what the upload at step 2 left on HF
+    shutil.rmtree(part / "last")
+    shutil.copytree(tmp_path / "stale", part / "last")  # the molab copy is older
+
+    def fake_download(repo_id, allow_patterns, local_dir, **kw):
+        shutil.copytree(hub / "checkpoints", Path(local_dir) / "checkpoints")
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", FakeHfApi)
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_download)
+    capsys.readouterr()
+    _train(tiny, part, "--resume", "--hf-repo", "me/x")
+    assert "resuming part at step 2" in capsys.readouterr().out
+    assert [r["loss"] for r in _log(part)] == pytest.approx([r["loss"] for r in _log(full)], rel=1e-4)
