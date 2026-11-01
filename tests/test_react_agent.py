@@ -151,3 +151,85 @@ def test_ref_check_is_off_by_default():
 def test_agent_info_records_prompt_and_options():
     agent = ReActAgent(llm=FakeLLM([]), prompt_version="v1", check_refs=False)
     assert agent.info["prompt"] == "v1" and agent.info["check_refs"] is False
+
+
+def test_trace_records_rejections_and_stop_reason():
+    llm = FakeLLM([CALL("alarm.delete", {}), "Xong."])
+    agent = ReActAgent(llm=llm)
+    agent.run(TASK, FakeEnv(bad={"alarm.delete"}))
+    assert agent.last_trace["steps"][0]["rejected"] == ["alarm.delete: missing contact_id"]
+    assert agent.last_trace["stop"] == "no_call"
+
+
+def test_ask_stops_with_asked():
+    agent = ReActAgent(llm=FakeLLM([CALL("sys.ask_missing_info", {"tool_name": "sms.send", "params": ["contact_id"]})]))
+    agent.run(TASK, FakeEnv())
+    assert agent.last_trace["stop"] == "asked"
+
+
+def test_trace_keeps_model_output_and_resets_between_runs():
+    agent = ReActAgent(llm=FakeLLM([CALL("alarm.list", {}), "Xong.", "Không làm được."]))
+    agent.run(TASK, FakeEnv())
+    assert [s["output"][:11] for s in agent.last_trace["steps"]] == ["<tool_call>", "Xong."]
+    agent.run(TASK, FakeEnv())
+    assert [s["output"] for s in agent.last_trace["steps"]] == ["Không làm được."]
+
+
+def test_stop_reasons_for_repeats_budget_and_steps():
+    repeat = ReActAgent(llm=FakeLLM([CALL("alarm.list", {})] * 5), max_invalid=1)
+    repeat.run(TASK, FakeEnv())
+    assert repeat.last_trace["stop"] == "invalid"
+    assert repeat.last_trace["steps"][1]["rejected"] == ["alarm.list: already called"]
+    loop = ReActAgent(llm=FakeLLM([CALL("alarm.list", {"n": i}) for i in range(5)]), max_steps=3)
+    loop.run(TASK, FakeEnv())
+    assert loop.last_trace["stop"] == "max_steps"
+    late = ReActAgent(llm=FakeLLM(["x"]), clock=lambda: 100.0)
+    late.run(dataclasses.replace(TASK, started_at=0.0), FakeEnv())
+    assert late.last_trace["stop"] == "time" and late.last_trace["steps"] == []
+
+
+def test_invalid_json_is_listed_as_rejected():
+    agent = ReActAgent(llm=FakeLLM(['<tool_call>{"name": </tool_call>', "Xong."]))
+    agent.run(TASK, FakeEnv())
+    assert agent.last_trace["steps"][0]["rejected"][0].startswith("invalid JSON")
+
+
+class StubBank:
+    def __init__(self, text):
+        self.text, self.asked = text, []
+
+    def __len__(self):
+        return 1
+
+    def select(self, request, installed_apps, k, exclude_id):
+        self.asked.append((request, installed_apps, k, exclude_id))
+        return [{"id": "e", "audio_text": self.text, "label": {"tool_calls": [], "tool_results": []}}]
+
+
+def test_examples_are_added_to_the_system_message():
+    bank, llm = StubBank("EXAMPLE BLOCK"), FakeLLM(["Xong."])
+    task = dataclasses.replace(TASK, context={**TASK.context, "installed_apps": {"alarm": {}}})
+    ReActAgent(llm=llm, examples=2, bank=bank).run(task, FakeEnv())
+    assert "EXAMPLE BLOCK" in llm.seen[0][0]["content"]
+    assert bank.asked == [("xoá báo thức sớm nhất", {"alarm"}, 2, "t")]
+
+
+def test_default_has_no_examples_and_builds_no_bank():
+    llm = FakeLLM(["Xong."])
+    agent = ReActAgent(llm=llm)
+    agent.run(TASK, FakeEnv())
+    assert agent.bank is None and "Examples" not in llm.seen[0][0]["content"]
+    assert agent.info["examples"] == 0
+
+
+def test_a_crashing_step_does_not_report_max_steps():
+    class Boom(FakeLLM):
+        def generate(self, messages, tools, max_time=None):
+            raise RuntimeError("cuda oom")
+
+    agent = ReActAgent(llm=Boom([]))
+    try:
+        agent.run(TASK, FakeEnv())
+    except RuntimeError:
+        pass
+    assert agent.last_trace["stop"] is None

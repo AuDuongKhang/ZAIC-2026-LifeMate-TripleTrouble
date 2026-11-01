@@ -9,6 +9,8 @@ class Agent:
     for every sample (load models in __init__); create no ToolEnv here, the runner passes the sample's only one."""
 
     name = "base"
+    # Per-sample diagnostics for trace.jsonl, reset at the start of every run; None for agents that keep none.
+    last_trace: dict | None = None
 
     def run(self, task: Task, env) -> None:
         raise NotImplementedError

@@ -1,0 +1,6 @@
+# Training-only packages (LLM SFT and ASR fine-tuning), on top of requirements.txt. Every one of them depends on torch,
+# so install with --no-deps to keep the preinstalled torch + torchvision of molab (see tests/test_requirements.py):
+#   pip install --no-deps -r requirements-train.txt
+# Shared by both tracks: ask the other track before pinning a version.
+peft>=0.13        # lifemate.sft.train / merge: LoRA adapters
+accelerate>=1.1.0 # imported by peft; HF Trainer in lifemate.train_asr

@@ -9,6 +9,8 @@ asr_cache/
 # Model weights / caches
 models/
 checkpoints/
+train_records/
+merged/
 *.safetensors
 *.bin
 *.gguf
