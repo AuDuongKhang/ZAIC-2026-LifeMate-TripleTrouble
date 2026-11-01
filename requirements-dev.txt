@@ -1,3 +1,4 @@
 -r requirements.txt
 pytest
 marimo
+matplotlib  # SFT/ASR training plots (tests/test_sft_state.py)
