@@ -18,6 +18,9 @@ python -m lifemate.infer --split train --agent oracle --asr gold --limit 50   # 
 python -m lifemate.infer --split public_test --agent empty --asr none --ids public_0001 public_0002
 python -m lifemate.evaluate runs/<run>          # train only: metrics.json + per_sample.jsonl + RESULTS.md row
 python -m lifemate.evaluate --row-only runs/<run>
+python -m lifemate.sft.records --name gold-pool --subset pool   # SFT records (gold replays) -> train_records/
+python -m lifemate.sft.train --records gold-pool --eval-records gold-dev --out checkpoints/sft-v1 --hf-repo <owner>/lifemate-sft-v1
+python -m lifemate.sft.merge --adapter checkpoints/sft-v1/last --out merged/sft-v1 --hf-repo <owner>/lifemate-sft-v1
 cd data && PYTHONPATH=public_test python -m zaic_tools --split public_test --root . --validate ../runs/<run>/submission.jsonl
 ```
 
@@ -42,6 +45,7 @@ All repo files (code, comments, docs, notebook UI, commits) are in English; Viet
 - `task.Task`: everything an agent may use. `history` user turns get ASR `text` (`audio_text` is stripped), `tools` are catalog specs for `installed_apps` + `sys.ask_missing_info`. `label` is set on train for oracle/debug only. A real agent must never read it.
 - `scoring.py`: local copy of the official metric, with our assumptions in its docstring. `evaluate.py` gets the gold hash by replaying `label.tool_calls` in a fresh ToolEnv, which reproduces `label.final_state` on all 1545 train samples.
 - `data.import_zaic_tools`: every split ships its **own** `zaic_tools` under the same module name, so one process handles one split. Steps that touch two splits run as subprocesses (see `tests/test_pipeline.py` and the notebook).
+- `sft/`: LoRA SFT. `records` renders each train sample by running `ReActAgent` with `ReplayLLM` (gold calls, then a fixed final text) in a fresh train `ToolEnv`, so training text equals inference text (few-shot examples included); `tokenize` labels only the agent's turns; `train` is plain PyTorch + peft with checkpoint/resume to a private HF repo; `merge` bakes the adapter in. Training deps are in `requirements-train.txt`, installed with `--no-deps`. `notebooks/molab_train.py` runs it on molab.
 - `notebooks/molab_run.py`: marimo notebook for molab (GPU). molab can't sync a private repo, so the team uploads this file once. It clones the repo itself (shallow, chosen branch, GitHub token), fetches data with `lifemate.fetch_data` from the team's private HF dataset (dataset name filled in by default, tokens typed in the UI and never stored in the repo; the HF model owner is picked from the token's user and orgs), installs `requirements.txt`, runs infer (+ evaluate on train) in subprocesses, and offers downloads plus the RESULTS.md row. Team results are logged by hand in `RESULTS.md`.
 
 ## Rules that constrain the code
