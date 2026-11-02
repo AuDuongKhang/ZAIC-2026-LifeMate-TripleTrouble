@@ -7,11 +7,13 @@ Only the pool is trained on in experiments (dev and holdout stay unseen); `--sub
 Few-shot examples (--examples, default 4 like the best Phase 1 agent) come from the same bank the agent uses at
 inference: the pool for pool/dev/holdout records, every train sample for `all`. A sample is never its own example.
 Replays that do not reproduce exactly the gold calls are dropped and counted, never written with partial calls.
+`--mask K` adds K function-masked copies after each record (lifemate.sft.mask), seeded by --seed and the sample id.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import random
 from collections import Counter
 from pathlib import Path
 
@@ -22,6 +24,7 @@ from ..data import REPO_ROOT, default_data_root, import_zaic_tools, load_catalog
 from ..evaluate import label_kind
 from ..infer import build_task
 from ..splits import load_splits
+from .mask import mask_record
 from .replay import replay
 from .tokenize import render
 
@@ -34,7 +37,7 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--name", required=True)
     ap.add_argument("--subset", choices=SUBSETS, required=True)
     ap.add_argument("--text", default="gold", help="gold transcripts (cache:<asr_name> comes in a later task)")
-    ap.add_argument("--mask", type=int, default=0, help="masked copies per record (a later task)")
+    ap.add_argument("--mask", type=int, default=0, help="function-masked copies per record, after the original")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--prompt", default=DEFAULT_PROMPT, choices=sorted(PROMPTS))
     ap.add_argument("--examples", type=int, default=4, help="few-shot examples in the system prompt (0 = none)")
@@ -45,8 +48,6 @@ def main(argv: list[str] | None = None) -> Path:
     args = ap.parse_args(argv)
     if args.text != "gold":
         ap.error("--text cache:<name> is not implemented yet; use --text gold")
-    if args.mask:
-        ap.error("--mask is not implemented yet; use --mask 0")
 
     zaic_tools = import_zaic_tools(args.data_root, "train")
     samples = load_samples(args.data_root, "train")
@@ -73,9 +74,13 @@ def main(argv: list[str] | None = None) -> Path:
                 continue
             rec["source"] = "gold"
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+            for k in range(args.mask):
+                masked = mask_record(rec, random.Random(f"{args.seed}:{sample['id']}:{k}"))
+                f.write(json.dumps(masked, ensure_ascii=False) + "\n")
             written[label_kind(sample["label"]["tool_calls"])] += 1
 
-    print(f"-> {out}: {sum(written.values())} records {dict(written)}, {len(dropped)} replays dropped"
+    print(f"-> {out}: {sum(written.values())} records {dict(written)}"
+          + (f" + {args.mask} masked copies each" if args.mask else "") + f", {len(dropped)} replays dropped"
           + (f" {dropped[:20]}" if dropped else ""), flush=True)
     if args.tokenizer != "none":
         from transformers import AutoTokenizer

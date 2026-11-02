@@ -69,7 +69,7 @@ def test_records_cli_uses_pool_only(train_samples, tmp_path):
     assert len(rows) == 30 and all(r["id"] in pool and r["source"] == "gold" for r in rows)
 
 
-@pytest.mark.parametrize("flag", [["--text", "cache:x"], ["--mask", "1"]])
+@pytest.mark.parametrize("flag", [["--text", "cache:x"]])
 def test_records_cli_rejects_later_options(train_samples, tmp_path, flag):
     with pytest.raises(SystemExit):
         records.main(["--name", "t", "--subset", "pool", "--tokenizer", "none", "--out-dir", str(tmp_path), *flag])
