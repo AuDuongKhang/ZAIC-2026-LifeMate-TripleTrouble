@@ -92,7 +92,7 @@ python -m lifemate.sft.train --records v2-pool --eval-records gold-dev --out che
 
 # 4. Merge the adapter into the base weights and upload the model; the agent preset points at it
 python -m lifemate.sft.merge --adapter checkpoints/sft-v2/last --out merged/sft-v2 --hf-repo <owner>/lifemate-sft-v2
-python -m lifemate.infer --split public_test --agent-preset sft-v2 --asr-preset pho-large-ft-a
+python -m lifemate.infer --split public_test --agent-preset sft-v2 --asr-preset pho-large-ft-b
 ```
 
 Experiments train on the pool only (`configs/splits.json`), so dev and holdout stay unseen. The shipped model is

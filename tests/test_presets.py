@@ -145,3 +145,8 @@ def test_infer_builds_the_fewshot_bank_from_the_given_data_root(tmp_path, monkey
 def test_sft_presets_name_their_merged_model_and_four_examples(name):
     assert resolve("agent", name, {"HF_MODEL_OWNER": "team"}) == (
         "react", {"model": f"team/lifemate-{name}", "examples": 4})
+
+
+def test_fine_tuned_asr_presets_name_their_hub_model():
+    for name in ("pho-large-ft-a", "pho-large-ft-b"):
+        assert resolve("asr", name, {"HF_MODEL_OWNER": "team"}) == ("whisper", {"model": f"team/{name}"})
