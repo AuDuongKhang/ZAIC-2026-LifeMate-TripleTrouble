@@ -6,6 +6,8 @@
 
 **Merges two plans:** `2026-10-29-agent-track.md` (Phases 3–4 stay as written there; this plan adds to them and does not replace them) and `2026-10-28-asr-models-and-data.md` (B1/B2 are done; this plan covers what is left after the fine-tuned ASR).
 
+**Execution details:** `2026-11-02-sprint-execution.md` turns K1, K3, K5b and K6 into step-by-step tasks and adds schema perturbation and the Docker package.
+
 ## Where the points are lost (sft-v1, gold transcripts)
 
 | Subset | act | ask | out-of-scope (empty) | overall |
