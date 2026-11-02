@@ -2,7 +2,9 @@
 
 Normalization: NFC, lowercase, punctuation and symbols stripped, standalone digit tokens spelled out in Vietnamese
 ("5 giờ" == "năm giờ"; digit strings with a leading 0, like phone numbers, digit by digit), and spelling variants
-unified ("ngàn" -> "nghìn", "linh" -> "lẻ"). Digits inside words ("4g", "vtv3", "ron95") are kept.
+unified ("ngàn" -> "nghìn", "linh" -> "lẻ"). Digits inside words ("4g", "vtv3", "ron95") are kept. Old and new tone
+placement are the same word ("hòa" == "hoà", "hủy" == "huỷ"), and colloquial tens read as written digits
+("chín lăm" == "95" == "chín mươi lăm").
 """
 from __future__ import annotations
 
@@ -14,6 +16,9 @@ DIGITS = "không một hai ba bốn năm sáu bảy tám chín".split()
 SCALES = ["", "nghìn", "triệu", "tỷ"]
 VARIANTS = {"ngàn": "nghìn", "linh": "lẻ"}
 _DIGIT_TOKEN = re.compile(r"[0-9]+")
+_TONE_MARKS = "̣̀́̃̉"
+_OLD_TONE = re.compile(rf"(o|u)([{_TONE_MARKS}])(a|e|y)(?![a-zđ])")  # NFD, lowercase, open syllable only
+_TENS = set(DIGITS[2:])
 
 
 def _group_words(n: int, full: bool) -> list[str]:
@@ -57,10 +62,26 @@ def _spell(token: str) -> list[str]:
     return number_words(int(token)).split()
 
 
+def _tone_style(text: str) -> str:
+    """Old-style tone placement ("hòa", "khóa", "hủy") -> new style ("hoà", "khoá", "huỷ"), as both appear in the data."""
+    return unicodedata.normalize("NFC", _OLD_TONE.sub(r"\1\3\2", unicodedata.normalize("NFD", text)))
+
+
+def _spoken_tens(words: list[str]) -> list[str]:
+    """Colloquial "chín lăm", "hai mốt" -> "chín mươi lăm", "hai mươi mốt", as digits are spelled ("95" -> ...)."""
+    out = []
+    for i, w in enumerate(words):
+        out.append(w)
+        if (w in _TENS and i + 1 < len(words) and words[i + 1] in ("lăm", "mốt")
+                and (i == 0 or words[i - 1] not in ("mươi", "mười"))):
+            out.append("mươi")
+    return out
+
+
 def normalize(text: str) -> list[str]:
-    text = unicodedata.normalize("NFC", text).lower()
+    text = _tone_style(unicodedata.normalize("NFC", text).lower())
     text = "".join(" " if unicodedata.category(ch)[0] in "PS" else ch for ch in text)
-    return [w for token in text.split() for w in _spell(token)]
+    return _spoken_tens([w for token in text.split() for w in _spell(token)])
 
 
 def _edit_distance(r: Sequence, h: Sequence) -> int:

@@ -1,8 +1,8 @@
 """Fine-tune a Whisper-family ASR (PhoWhisper, PhoASR-whisper) on the train pool clips (B2, run A).
 
     python -m lifemate.train_asr --model Qualcomm-AI-Research/PhoASR-whisper-small --out asr_runs/phoasr-small-ft-a
-    python -m lifemate.train_asr ... --hub-repo <user>/phoasr-small-ft-a            # checkpoints to a private HF repo
-    python -m lifemate.train_asr ... --hub-repo <user>/phoasr-small-ft-a --resume   # new session: continue from there
+    python -m lifemate.train_asr ... --hub-repo <org>/phoasr-small-ft-a             # final model to a private HF repo
+    python -m lifemate.train_asr ... --hub-repo <org>/x --hub-checkpoints [--resume] # long runs: resumable checkpoints
 
 Trains on every pool clip (final requests and history user turns), never on dev or holdout. Every --eval-steps it
 transcribes a fixed subset of dev + holdout clips greedily and logs WER/CER (lifemate.asr.wer, as asr_report), saves a
@@ -102,6 +102,9 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--grad-checkpointing", action="store_true", help="for large models on small GPUs")
     ap.add_argument("--limit", type=int, default=None, help="first N train clips only (smoke test)")
     ap.add_argument("--hub-repo", default=None, help="private HF model repo for checkpoints (token: HF_TOKEN)")
+    ap.add_argument("--hub-checkpoints", action="store_true",
+                    help="also push every checkpoint with its optimizer state (resumable after a lost session, but "
+                         "~3x the model size per push: slow for large models); default: push the final model only")
     ap.add_argument("--resume", action="store_true", help="continue from the last checkpoint (local, else --hub-repo)")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args(argv)
@@ -160,7 +163,7 @@ def main(argv: list[str] | None = None) -> Path:
         save_total_limit=2, load_best_model_at_end=True, metric_for_best_model="wer", greater_is_better=False,
         predict_with_generate=True, generation_max_length=225, generation_num_beams=1,
         logging_steps=25, dataloader_num_workers=2, remove_unused_columns=False, label_names=["labels"],
-        push_to_hub=bool(args.hub_repo), hub_model_id=args.hub_repo, hub_private_repo=True,
+        push_to_hub=bool(args.hub_repo and args.hub_checkpoints), hub_model_id=args.hub_repo, hub_private_repo=True,
         hub_strategy="checkpoint", hub_token=os.environ.get("HF_TOKEN"),
     )
     trainer = Seq2SeqTrainer(
@@ -191,8 +194,12 @@ def main(argv: list[str] | None = None) -> Path:
     plot_history(history, args.out)
     best = trainer.state.best_metric
     print(f"-> {final}  best eval WER {best:.4f} on {len(eval_rows)} clips" if best is not None else f"-> {final}")
-    if args.hub_repo:
-        trainer.push_to_hub(commit_message="final (best eval WER)")
+    if args.hub_repo:  # the best model + processor only: no optimizer state
+        from huggingface_hub import HfApi
+        api = HfApi(token=os.environ.get("HF_TOKEN"))
+        api.create_repo(args.hub_repo, private=True, exist_ok=True)
+        api.upload_folder(folder_path=str(final), repo_id=args.hub_repo, commit_message="final (best eval WER)")
+        print(f"-> https://huggingface.co/{args.hub_repo}")
     return final
 
 

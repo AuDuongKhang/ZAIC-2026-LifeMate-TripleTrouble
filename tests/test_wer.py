@@ -45,5 +45,16 @@ def test_digits_inside_words_are_kept():
     assert normalize("kênh S+ Sport 4G") == ["kênh", "s", "sport", "4g"]
 
 
+def test_old_and_new_tone_placement_match():
+    assert wer("Hủy gói, khóa cửa, bật điều hòa", "huỷ gói khoá cửa bật điều hoà") == 0.0
+    assert normalize("hoàn thành quý") == ["hoàn", "thành", "quý"]  # closed syllables and qu- untouched
+
+
+def test_colloquial_tens_match_digits():
+    assert wer("Xăng 95 bao nhiêu", "xăng chín lăm bao nhiêu") == 0.0
+    assert wer("21 người", "hai mốt người") == 0.0
+    assert normalize("mai mốt") == ["mai", "mốt"] and normalize("mười lăm") == ["mười", "lăm"]
+
+
 def test_cer():
     assert cer("đèn", "đen") == 1 / 3
