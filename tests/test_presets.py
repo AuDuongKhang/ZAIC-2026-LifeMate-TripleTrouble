@@ -139,3 +139,9 @@ def test_infer_builds_the_fewshot_bank_from_the_given_data_root(tmp_path, monkey
     meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
     assert meta["agent_info"]["examples"] == 2 and meta["agent_info"]["bank_size"] == 794
     assert "data_root" not in meta["agent_kw"]
+
+
+@pytest.mark.parametrize("name", ["sft-v1", "sft-v2", "sft-final"])
+def test_sft_presets_name_their_merged_model_and_four_examples(name):
+    assert resolve("agent", name, {"HF_MODEL_OWNER": "team"}) == (
+        "react", {"model": f"team/lifemate-{name}", "examples": 4})
