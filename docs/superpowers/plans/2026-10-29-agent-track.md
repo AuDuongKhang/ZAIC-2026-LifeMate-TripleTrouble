@@ -16,6 +16,17 @@
 - batch-1 Tasks 6–7 (few-shot) are Tasks 5–6 here, amended;
 - batch-1 Tasks 8–9 (ASR comparison) and `2026-10-28-asr-models-and-data.md` belong to the ASR owner.
 
+## Progress (as of `origin/main` ede28f0, 2 Nov)
+
+| Phase | Tasks | Status | Result |
+|---|---|---|---|
+| 1 | 1–6 | Done (PR #9, #11) | few-shot k4 chosen: dev 21.02 -> 38.35, holdout 27.65 -> 29.69; public_test 21.46 (whisper), 30.19 with `pho-large-ft-a` |
+| 2 | 7–11 | Done (PR #12) | `sft-v1`: dev 63.74, holdout 42.30 (+12.61, Gate 2 passed), public_test 47.85 with `pho-large-ft-a` |
+| 3 | 12–14 | Code in PR #14 (`feat/sft-v2`); molab runs pending | Tasks 12–13 done (masking, ASR-noisy records, notebook fields); Task 14 presets added, training/compare/final retrain not run yet |
+| 4 | 15 | Partly (PR #14) | `revision` kwarg and README training commands done; determinism check, timing and the pinned preset wait for the chosen model |
+
+Remaining weak spots from the `sft-v1` rows: holdout ask is 13.24 (dev 60.23), so apps unseen in training are the gap that Tasks 12–13 target. Next: merge PR #14, then Task 14 on molab (`sft-v2` with masked copies 1 and ASR cache `pho-large-fp16`). Freeze 14 Nov.
+
 ## Why this order (evidence from the 27 Oct runs)
 
 Error breakdown of the train-100 gold-transcript run (275 gold calls):
@@ -78,11 +89,11 @@ Batch-1 Tasks 1–5 are implemented on `origin/feat/experiments-infra`:
 
 Do not reimplement them.
 
-- [ ] **Step 1:** Check whether `feat/experiments-infra` is merged into `main` (`git log origin/main --oneline | grep "paired bootstrap"`).
+- [x] **Step 1:** Check whether `feat/experiments-infra` is merged into `main` (`git log origin/main --oneline | grep "paired bootstrap"`).
   - If it is, cut `feat/agent-infra` from `main`.
   - If not, cut it from `origin/feat/experiments-infra`, and rebase onto `main` once that PR merges. The agent PR then says it depends on that PR.
-- [ ] **Step 2:** `pytest -v` → all pass on the new branch before any change.
-- [ ] **Step 3:** Check the interfaces used below exist with these names:
+- [x] **Step 2:** `pytest -v` → all pass on the new branch before any change.
+- [x] **Step 3:** Check the interfaces used below exist with these names:
   - `lifemate.splits.load_splits() -> {"holdout_apps", "holdout", "dev", "pool", ...}`;
   - `lifemate.splits.sample_apps(sample)`;
   - `infer --subset`;
@@ -112,7 +123,7 @@ Do not reimplement them.
   - per sample, `fewer_calls` / `more_calls` than gold;
   - `stop` reasons counted from the trace when present.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 def test_trace_records_rejections_and_stop_reason():
@@ -129,11 +140,11 @@ def test_ask_stops_with_asked():
 ```
 
   In `tests/test_diagnose.py`, build a two-sample fake run folder in `tmp_path`, using train sample ids (skip without data). Its submission holds one exact gold copy and one copy with an added optional key. Assert `matched` and `extra_key[<tool>.<param>] == 1`.
-- [ ] **Step 2:** `pytest tests/test_react_agent.py tests/test_diagnose.py -v` → FAIL.
-- [ ] **Step 3:** Implement the code. Every `return` in `ReActAgent.run` sets `stop` first.
-- [ ] **Step 4:** `pytest -v` → all pass.
-- [ ] **Step 5:** Run `python -m lifemate.diagnose runs/20261027-045012_5a7ce91_train_react_gold` locally. Expect matched 67, extra_key total 74. No stop reasons, since that run predates the trace. Paste the output into the PR.
-- [ ] **Step 6:** Commit `Record agent steps and stop reason; add failure breakdown`.
+- [x] **Step 2:** `pytest tests/test_react_agent.py tests/test_diagnose.py -v` → FAIL.
+- [x] **Step 3:** Implement the code. Every `return` in `ReActAgent.run` sets `stop` first.
+- [x] **Step 4:** `pytest -v` → all pass.
+- [x] **Step 5:** Run `python -m lifemate.diagnose runs/20261027-045012_5a7ce91_train_react_gold` locally. Expect matched 67, extra_key total 74. No stop reasons, since that run predates the trace. Paste the output into the PR.
+- [x] **Step 6:** Commit `Record agent steps and stop reason; add failure breakdown`.
 
 ### Task 4: Named experiment presets and notebook dropdowns
 
@@ -170,7 +181,7 @@ Typing `--agent-kw` by hand makes runs hard to repeat and easy to get wrong. A p
 
   A new text field "HF model owner" is exported as `HF_MODEL_OWNER` to every step. **Run** calls `infer --agent-preset ... --asr-preset ...`, plus the existing extra-args field. Keep the split, limit, extra args and command mode as they are. The run folder name uses the preset names.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 def test_resolve_fills_env_vars(tmp_presets):
@@ -195,11 +206,11 @@ def test_infer_records_presets(tmp_path):  # skip without data/train
 ```
 
   `tmp_presets` is a fixture: a temporary presets file with one agent entry, `"sft-test": {"agent": "react", "agent_kw": {"model": "${HF_MODEL_OWNER}/lifemate-sft-test"}}`.
-- [ ] **Step 2:** `pytest tests/test_presets.py -v` → FAIL.
-- [ ] **Step 3:** Implement `presets.py` and the `infer` flags. Then update the notebook.
-- [ ] **Step 4:** `pytest -v` → all pass. Run `marimo check notebooks/molab_run.py` if marimo is installed.
-- [ ] **Step 5:** On molab, run preset `oracle` + `gold` with `--limit 5` on train. Expected score 100.0, and `meta.json` shows both preset names.
-- [ ] **Step 6:** Commit `Add named experiment presets and notebook dropdowns`. Tell the team to re-upload the notebook to molab.
+- [x] **Step 2:** `pytest tests/test_presets.py -v` → FAIL.
+- [x] **Step 3:** Implement `presets.py` and the `infer` flags. Then update the notebook.
+- [x] **Step 4:** `pytest -v` → all pass. Run `marimo check notebooks/molab_run.py` if marimo is installed.
+- [x] **Step 5:** On molab, run preset `oracle` + `gold` with `--limit 5` on train. Expected score 100.0, and `meta.json` shows both preset names.
+- [x] **Step 6:** Commit `Add named experiment presets and notebook dropdowns`. Tell the team to re-upload the notebook to molab.
 
 From here on, every task that adds an agent or ASR setting also adds its preset, and every molab run in this plan uses presets.
 
@@ -211,17 +222,17 @@ Implement batch-1 Task 6 (`src/lifemate/agents/fewshot.py`, `examples=k` on `ReA
 - The token-budget check (batch-1 Task 6 Step 5) runs on train **and** public_test with `examples=4`. Record both maxima in the PR.
 - Add the presets `react-fewshot-k2` and `react-fewshot-k4` (`examples=2` / `4`).
 
-- [ ] Steps 1–6 as in batch-1 Task 6, plus the test above.
+- [x] Steps 1–6 as in batch-1 Task 6, plus the test above.
 
 ### Task 6: Phase 1 runs on molab
 
 Branch `feat/agent-infra`, with presets chosen in the notebook. Download every run folder into `runs/`, then run `evaluate` and `diagnose` locally.
 
-- [ ] **Step 1:** Dev baseline: split `train`, agent preset `react-v1`, ASR preset `gold`, extra args `--subset dev`. Expected: 300 samples, 0 errors.
-- [ ] **Step 2:** The same with `react-fewshot-k2`, then `react-fewshot-k4`. Run `compare` of k0 against k2 and of k0 against k4. Put the `RESULTS.md` rows and both compare lines in the PR. Max seconds must stay < 15.
-- [ ] **Step 3:** For the best k, rerun on `--subset holdout` against k=0 on holdout. This checks the gain holds for apps that have no examples in the pool.
-- [ ] **Step 4:** If a k wins on dev, with the CI above 0, and does not lose on holdout, run full public_test with that k and the ASR owner's current best ASR. Validate with `zaic_tools --validate` and submit. Log the leaderboard score.
-- [ ] **Step 5:** Open the PR. In the description, give the decision: the k used from now on, or 0.
+- [x] **Step 1:** Dev baseline: split `train`, agent preset `react-v1`, ASR preset `gold`, extra args `--subset dev`. Expected: 300 samples, 0 errors.
+- [x] **Step 2:** The same with `react-fewshot-k2`, then `react-fewshot-k4`. Run `compare` of k0 against k2 and of k0 against k4. Put the `RESULTS.md` rows and both compare lines in the PR. Max seconds must stay < 15.
+- [x] **Step 3:** For the best k, rerun on `--subset holdout` against k=0 on holdout. This checks the gain holds for apps that have no examples in the pool.
+- [x] **Step 4:** If a k wins on dev, with the CI above 0, and does not lose on holdout, run full public_test with that k and the ASR owner's current best ASR. Validate with `zaic_tools --validate` and submit. Log the leaderboard score.
+- [x] **Step 5:** Open the PR. In the description, give the decision: the k used from now on, or 0.
 
 ---
 
@@ -243,7 +254,7 @@ Branch `feat/agent-infra`, with presets chosen in the notebook. Download every r
   - CLI `python -m lifemate.sft.records --name NAME --subset pool|all [--text gold|cache:<asr_name>] [--mask K] [--seed 0] [--prompt v1]` writes `train_records/NAME.jsonl`, one replayed conversation per line with `"source"` set to `gold`, `asr` or `masked`. It prints how many records were written, how many replays were dropped, and the max token count. `--text` and `--mask` are added in Tasks 12–13. In this task only `gold` and 0 work, and the others exit with a clear message.
 - One gold call per assistant step, in label order. This matches what the agent can execute at inference: one call, then the result, then the next.
 
-- [ ] **Step 1: Write the failing tests** (skip without data). Put the helper `replay_sample(sample) -> dict | None` in `tests/conftest.py`: it builds the task with gold ASR and a fresh train `ToolEnv`, then calls `replay`. Tasks 8 and 12 build their record fixtures with it.
+- [x] **Step 1: Write the failing tests** (skip without data). Put the helper `replay_sample(sample) -> dict | None` in `tests/conftest.py`: it builds the task with gold ASR and a fresh train `ToolEnv`, then calls `replay`. Tasks 8 and 12 build their record fixtures with it.
 
 ```python
 def test_replay_reproduces_gold_calls_for_every_kind(train_samples):
@@ -271,10 +282,10 @@ def test_records_cli_uses_pool_only(tmp_path, monkeypatch):
     ...
 ```
 
-- [ ] **Step 2:** `pytest tests/test_sft_replay.py -v` → FAIL.
-- [ ] **Step 3:** Implement `replay.py` and `records.py`. The CLI imports train `zaic_tools` once (`--split` is always train).
-- [ ] **Step 4:** `pytest -v` → all pass. Then run `python -m lifemate.sft.records --name gold-pool --subset pool` locally. Record in the PR: records written, replays dropped (expected 0; investigate any), max tokens.
-- [ ] **Step 5:** Commit `Render SFT records by replaying gold calls through the agent`.
+- [x] **Step 2:** `pytest tests/test_sft_replay.py -v` → FAIL.
+- [x] **Step 3:** Implement `replay.py` and `records.py`. The CLI imports train `zaic_tools` once (`--split` is always train).
+- [x] **Step 4:** `pytest -v` → all pass. Then run `python -m lifemate.sft.records --name gold-pool --subset pool` locally. Record in the PR: records written, replays dropped (expected 0; investigate any), max tokens.
+- [x] **Step 5:** Commit `Render SFT records by replaying gold calls through the agent`.
 
 ### Task 8: Tokenization with an assistant-only loss mask
 
@@ -286,7 +297,7 @@ def test_records_cli_uses_pool_only(tmp_path, monkeypatch):
 - Produces: `encode_record(record: dict, tokenizer, max_len: int = 12288) -> dict | None` returns `{"input_ids": list[int], "labels": list[int]}`, with labels −100 outside assistant turns. It returns `None` when the record is longer than `max_len`. The caller counts those, and they are never truncated.
 - Method: render with `tokenizer.apply_chat_template(messages[:i+1], tools=record["tools"], tokenize=True)` for every prefix that ends at an assistant message. The tokens added over the previous prefix, which was rendered with `add_generation_prompt=True`, are that assistant turn. Assert that each shorter render is a token prefix of the longer one, and raise `ValueError` naming the record id if it is not.
 
-- [ ] **Step 1: Write the failing tests.** Use the real `Qwen/Qwen3-4B-Instruct-2507` tokenizer from the local HF cache, and skip if it is not cached.
+- [x] **Step 1: Write the failing tests.** Use the real `Qwen/Qwen3-4B-Instruct-2507` tokenizer from the local HF cache, and skip if it is not cached.
 
 ```python
 def test_only_assistant_tokens_are_labelled(tok, two_call_record):
@@ -304,10 +315,10 @@ def test_too_long_record_is_skipped(tok, two_call_record):
     assert encode_record(two_call_record, tok, max_len=100) is None
 ```
 
-- [ ] **Step 2:** `pytest tests/test_sft_tokenize.py -v` → FAIL.
-- [ ] **Step 3:** Implement it.
-- [ ] **Step 4:** `pytest -v` → all pass. Then encode all of `train_records/gold-pool.jsonl` locally and record in the PR: labelled tokens per record (mean) and total tokens per epoch.
-- [ ] **Step 5:** Commit `Tokenize SFT records with an assistant-only loss mask`.
+- [x] **Step 2:** `pytest tests/test_sft_tokenize.py -v` → FAIL.
+- [x] **Step 3:** Implement it.
+- [x] **Step 4:** `pytest -v` → all pass. Then encode all of `train_records/gold-pool.jsonl` locally and record in the PR: labelled tokens per record (mean) and total tokens per epoch.
+- [x] **Step 5:** Commit `Tokenize SFT records with an assistant-only loss mask`.
 
 ### Task 9: LoRA trainer with checkpoint/resume, training log, plots and merge
 
@@ -331,7 +342,7 @@ def test_too_long_record_is_skipped(tok, two_call_record):
   - `plots.plot_log(log_path: Path, out_dir: Path)` writes `loss.png`, `lr.png` and `grad_norm.png`.
   - `python -m lifemate.sft.merge --adapter checkpoints/RUN/last --out merged/RUN --hf-repo USER/REPO` merges into bf16 base weights, saves the tokenizer alongside, and uploads. Inference then uses `--agent-kw model=USER/REPO` (or a local path) without peft.
 
-- [ ] **Step 1: Write the failing tests** for the pure-Python parts:
+- [x] **Step 1: Write the failing tests** for the pure-Python parts:
 
 ```python
 def test_resume_continues_the_same_order():
@@ -354,10 +365,10 @@ def test_plot_log_writes_pngs(tmp_path):
     ...
 ```
 
-- [ ] **Step 2:** `pytest tests/test_sft_state.py -v` → FAIL.
-- [ ] **Step 3:** Implement `state.py` and `plots.py`. Then implement `train.py` and `merge.py`, importing torch and peft inside `main()` so tests and the registry never import them. The training loop is plain PyTorch: loss = mean cross-entropy over labelled tokens per micro-batch, gradient clipping 1.0, `seed_everything(seed)` before building the model.
-- [ ] **Step 4:** `pytest -v` → all pass, `test_requirements` included.
-- [ ] **Step 5:** Commit `Add LoRA SFT trainer with checkpoint/resume, training log, plots and merge`.
+- [x] **Step 2:** `pytest tests/test_sft_state.py -v` → FAIL.
+- [x] **Step 3:** Implement `state.py` and `plots.py`. Then implement `train.py` and `merge.py`, importing torch and peft inside `main()` so tests and the registry never import them. The training loop is plain PyTorch: loss = mean cross-entropy over labelled tokens per micro-batch, gradient clipping 1.0, `seed_everything(seed)` before building the model.
+- [x] **Step 4:** `pytest -v` → all pass, `test_requirements` included.
+- [x] **Step 5:** Commit `Add LoRA SFT trainer with checkpoint/resume, training log, plots and merge`.
 
 ### Task 10: molab training notebook
 
@@ -380,15 +391,15 @@ It then:
 3. redraws the three plots from `train_log.jsonl` every 60 s while training runs;
 4. offers `sft.merge` as a button once training ends.
 
-- [ ] **Step 1:** Write the notebook. `marimo check notebooks/molab_train.py` passes (if marimo is installed locally), and `pytest -v` still passes.
-- [ ] **Step 2:** Commit `Add molab training notebook`. Tell the team to upload it to molab.
+- [x] **Step 1:** Write the notebook. `marimo check notebooks/molab_train.py` passes (if marimo is installed locally), and `pytest -v` still passes.
+- [x] **Step 2:** Commit `Add molab training notebook`. Tell the team to upload it to molab.
 
 ### Task 11: SFT v1 runs on molab
 
-- [ ] **Step 1: Smoke test**, `--max-steps 20`. Check that the loss goes down, then stop the run and restart it with `--resume`. The log continues at step 21 with no repeated step. Record tokens/s and the projected time for 2 epochs. If the projection is over 10 h, drop to 1 epoch.
-- [ ] **Step 2: Full run** on `gold-pool`, with eval records from dev (`--subset dev` records, used only for eval loss). Then merge to the HF repo `<owner>/lifemate-sft-v1`, and add the agent preset `sft-v1` (`model=${HF_MODEL_OWNER}/lifemate-sft-v1`, plus the Phase 1 winner's `examples` if any) to `configs/presets.json`.
-- [ ] **Step 3:** Run agent preset `sft-v1` with ASR preset `gold`, extra args `--subset dev`, then the same on holdout. Run `compare` against the best Phase 1 run on each subset. Run `diagnose` on the dev run. Watch three numbers: the `extra_key` total (expected to drop sharply), the ask column, and max seconds (< 15).
-- [ ] **Step 4:** If SFT v1 beats Phase 1 on dev and on holdout, run full public_test with it and the best ASR, validate it and submit. Add the `RESULTS.md` rows and open the PR. It records Gate 2 of the spec.
+- [x] **Step 1: Smoke test**, `--max-steps 20`. Check that the loss goes down, then stop the run and restart it with `--resume`. The log continues at step 21 with no repeated step. Record tokens/s and the projected time for 2 epochs. If the projection is over 10 h, drop to 1 epoch.
+- [x] **Step 2: Full run** on `gold-pool`, with eval records from dev (`--subset dev` records, used only for eval loss). Then merge to the HF repo `<owner>/lifemate-sft-v1`, and add the agent preset `sft-v1` (`model=${HF_MODEL_OWNER}/lifemate-sft-v1`, plus the Phase 1 winner's `examples` if any) to `configs/presets.json`.
+- [x] **Step 3:** Run agent preset `sft-v1` with ASR preset `gold`, extra args `--subset dev`, then the same on holdout. Run `compare` against the best Phase 1 run on each subset. Run `diagnose` on the dev run. Watch three numbers: the `extra_key` total (expected to drop sharply), the ask column, and max seconds (< 15).
+- [x] **Step 4:** If SFT v1 beats Phase 1 on dev and on holdout, run full public_test with it and the best ASR, validate it and submit. Add the `RESULTS.md` rows and open the PR. It records Gate 2 of the spec.
 
 ---
 
@@ -413,7 +424,7 @@ It then:
   - the tool order is shuffled.
 - `--mask K` writes K masked copies per gold record, in addition to the original.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 def test_mask_renames_consistently(ask_record):
@@ -442,10 +453,10 @@ def test_mask_is_deterministic(act_record):
     assert mask_record(act_record, random.Random(3)) == mask_record(act_record, random.Random(3))
 ```
 
-- [ ] **Step 2:** `pytest tests/test_sft_mask.py -v` → FAIL.
-- [ ] **Step 3:** Implement it.
-- [ ] **Step 4:** `pytest -v` → all pass.
-- [ ] **Step 5:** Commit `Add function masking for SFT records`.
+- [x] **Step 2:** `pytest tests/test_sft_mask.py -v` → FAIL.
+- [x] **Step 3:** Implement it.
+- [x] **Step 4:** `pytest -v` → all pass.
+- [x] **Step 5:** Commit `Add function masking for SFT records`.
 
 ### Task 13: ASR-noisy records
 
@@ -460,10 +471,10 @@ Depends on an ASR cache from the ASR owner, `asr_cache/train/<name>.jsonl` (writ
 **Interfaces:**
 - `--text cache:<name>` builds tasks with the existing `lifemate.asr.cached.CachedASR(name, split="train")` in place of `GoldTranscriptASR`. It writes records with `source="asr"`, and their gold calls and results are unchanged. A missing clip raises `CachedASR`'s `KeyError`, which names the file.
 
-- [ ] **Step 1:** Write two tests. With a two-line temporary cache, the request text in the record comes from the cache. A missing clip raises `KeyError` with the file name.
-- [ ] **Step 2:** Run them and watch them fail. Then implement.
-- [ ] **Step 3:** `pytest -v` → all pass.
-- [ ] **Step 4:** Commit `Build SFT records from cached ASR transcripts`.
+- [x] **Step 1:** Write two tests. With a two-line temporary cache, the request text in the record comes from the cache. A missing clip raises `KeyError` with the file name.
+- [x] **Step 2:** Run them and watch them fail. Then implement.
+- [x] **Step 3:** `pytest -v` → all pass.
+- [x] **Step 4:** Commit `Build SFT records from cached ASR transcripts`.
 
 ### Task 14: SFT v2 and the final retrain
 
