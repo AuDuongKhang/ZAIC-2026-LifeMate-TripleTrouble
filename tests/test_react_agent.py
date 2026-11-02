@@ -233,3 +233,41 @@ def test_a_crashing_step_does_not_report_max_steps():
     except RuntimeError:
         pass
     assert agent.last_trace["stop"] is None
+
+
+def test_agent_passes_the_model_revision_to_the_llm(monkeypatch):
+    import lifemate.agents.react as react
+
+    made = []
+    monkeypatch.setattr(react, "HFChatLLM", lambda model, **kw: made.append((model, kw)) or FakeLLM([]))
+    agent = ReActAgent(model="team/lifemate-sft-v2", revision="abc123")
+    assert made == [("team/lifemate-sft-v2", {"revision": "abc123"})]
+    assert agent.info["model"] == "team/lifemate-sft-v2" and agent.info["revision"] == "abc123"
+
+
+def test_hf_llm_loads_tokenizer_and_weights_at_the_revision(monkeypatch):
+    import sys
+    import types
+
+    from lifemate.agents.llm import HFChatLLM
+
+    calls = []
+
+    class Loaded:
+        eos_token, pad_token = "<|im_end|>", None
+
+        def to(self, device):
+            return self
+
+        def eval(self):
+            pass
+
+    def loader(kind):
+        return types.SimpleNamespace(from_pretrained=lambda name, **kw: calls.append((kind, name, kw)) or Loaded())
+
+    monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(bfloat16="bf16"))
+    monkeypatch.setitem(sys.modules, "transformers", types.SimpleNamespace(
+        AutoTokenizer=loader("tok"), AutoModelForCausalLM=loader("model")))
+    HFChatLLM("team/m", revision="abc123")
+    assert [(k, n, kw.get("revision")) for k, n, kw in calls] == [("tok", "team/m", "abc123"),
+                                                                   ("model", "team/m", "abc123")]

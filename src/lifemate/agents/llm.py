@@ -19,16 +19,19 @@ class HFChatLLM:
     """HF transformers model in its native chat template, greedy decoding. Returns the raw completion text,
     tool-call markup included (parsed by agents.parsing)."""
 
-    def __init__(self, model: str = "Qwen/Qwen3-4B-Instruct-2507", max_new_tokens: int = 384, dtype: str = "bfloat16"):
+    def __init__(self, model: str = "Qwen/Qwen3-4B-Instruct-2507", max_new_tokens: int = 384, dtype: str = "bfloat16",
+                 revision: str | None = None):
+        """revision: HF repo commit, branch or tag of the model (None = latest)."""
         import torch
         from transformers import AutoModelForCausalLM, AutoTokenizer
 
         self.torch = torch
         self.context_limit = CONTEXT_LIMIT
         self.max_new_tokens = max_new_tokens
-        self.tokenizer = AutoTokenizer.from_pretrained(model)
+        self.tokenizer = AutoTokenizer.from_pretrained(model, revision=revision)
         # .to() instead of device_map="cuda": device_map needs accelerate, which would pull its own torch
-        self.model = AutoModelForCausalLM.from_pretrained(model, dtype=getattr(torch, dtype)).to("cuda")
+        self.model = AutoModelForCausalLM.from_pretrained(model, dtype=getattr(torch, dtype),
+                                                          revision=revision).to("cuda")
         self.model.eval()
         # Strings to cut from the completion: end-of-turn markers, not the <tool_call> markup.
         self.stop_strings = {t for t in (self.tokenizer.eos_token, self.tokenizer.pad_token, "<|im_end|>", "<|endoftext|>") if t}

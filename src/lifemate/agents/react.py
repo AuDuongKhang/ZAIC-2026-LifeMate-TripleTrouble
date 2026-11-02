@@ -25,14 +25,15 @@ class ReActAgent(Agent):
                  max_invalid: int = 2, time_budget_s: float = 20.0, min_step_s: float = 3.0,
                  prompt_version: str = DEFAULT_PROMPT, check_refs: bool = False,
                  examples: int = 0, split: str = "train", data_root: Path | None = None, bank: ExampleBank | None = None,
-                 clock: Callable[[], float] = time.perf_counter):
+                 clock: Callable[[], float] = time.perf_counter, revision: str | None = None):
         """time_budget_s counts from task.started_at (sample start, ASR included) when the runner sets it.
         A step only starts with at least min_step_s left, and its generation is capped at the time remaining.
         check_refs holds back calls whose x-ref ids were never seen in a tool result (off by default: with it the
         model dodged the check, e.g. calling by phone_number instead of asking which contact).
         examples=k puts the k most similar solved training requests into the system prompt. split is the split being
-        run (infer sets it): on train the bank is the experiment pool, on any other split every train sample."""
-        self.llm = llm if llm is not None else HFChatLLM(model)
+        run (infer sets it): on train the bank is the experiment pool, on any other split every train sample.
+        revision pins the HF model repo commit (shipped presets set it, so a later push cannot change the system)."""
+        self.llm = llm if llm is not None else HFChatLLM(model, revision=revision)
         self.max_steps, self.max_invalid, self.clock = max_steps, max_invalid, clock
         self.time_budget_s, self.min_step_s = time_budget_s, min_step_s
         self.prompt_version, self.check_refs, self.examples = prompt_version, check_refs, examples
@@ -40,8 +41,8 @@ class ReActAgent(Agent):
         if self.bank is None and examples:
             self.bank = ExampleBank.from_data(data_root or default_data_root(), split)
         # Recorded in meta.json, so every RESULTS.md row traces back to its prompt and settings.
-        self.info = {"model": model if llm is None else type(llm).__name__, "prompt": prompt_version,
-                     "check_refs": check_refs, "max_steps": max_steps, "time_budget_s": time_budget_s,
+        self.info = {"model": model if llm is None else type(llm).__name__, "revision": revision,
+                     "prompt": prompt_version, "check_refs": check_refs, "max_steps": max_steps, "time_budget_s": time_budget_s,
                      "examples": examples, "bank_size": len(self.bank) if self.bank is not None else 0}
 
     def run(self, task: Task, env) -> None:

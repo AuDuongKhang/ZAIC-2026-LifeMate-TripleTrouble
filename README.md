@@ -69,6 +69,36 @@ Each run writes `runs/<time>_<split>_<agent>_<asr>/`:
 Reference scores on train: `oracle` 100.0 (checks the scorer), `empty` 7.18 (only out-of-scope samples score).
 Only train has labels, so public_test is scored on the leaderboard (5 submissions per day).
 
+## Training the agent model (LoRA SFT)
+
+The agent is Qwen3-4B-Instruct-2507 with a LoRA adapter merged into its weights. Training needs a CUDA GPU (molab:
+[`notebooks/molab_train.py`](notebooks/molab_train.py) runs the same steps from a UI). Install the training extras with
+`pip install --no-deps -r requirements-train.txt` (peft + accelerate; keeps the installed torch). Every step is
+deterministic with its default `--seed 0`.
+
+```bash
+# 1. Optional ASR-noisy text: transcribe the train clips with an ASR model NOT fine-tuned on them
+python -m lifemate.transcribe --split train --asr whisper --asr-kw model=vinai/PhoWhisper-large \
+    --name pho-large-fp16 --subset pool                              # -> asr_cache/train/pho-large-fp16.jsonl
+
+# 2. Training records: gold calls replayed through the agent (4 few-shot examples, like inference), plus
+#    function-masked copies (--mask) and an ASR-noisy copy (--text cache:...), all in one file
+python -m lifemate.sft.records --name v2-pool --subset pool --mask 1 --text gold --text cache:pho-large-fp16
+python -m lifemate.sft.records --name gold-dev --subset dev         # eval loss only, never trained on
+
+# 3. LoRA training (r 16, alpha 32, 2 epochs, lr 1e-4, batch 16), checkpoints + resume through a private HF repo
+python -m lifemate.sft.train --records v2-pool --eval-records gold-dev --out checkpoints/sft-v2 \
+    --hf-repo <owner>/lifemate-sft-v2
+
+# 4. Merge the adapter into the base weights and upload the model; the agent preset points at it
+python -m lifemate.sft.merge --adapter checkpoints/sft-v2/last --out merged/sft-v2 --hf-repo <owner>/lifemate-sft-v2
+python -m lifemate.infer --split public_test --agent-preset sft-v2 --asr-preset pho-large-ft-b
+```
+
+Experiments train on the pool only (`configs/splits.json`), so dev and holdout stay unseen. The shipped model is
+retrained with the same recipe on `--subset all` (records and transcription) and no eval records. `RESULTS.md` notes
+give the exact command, presets and model revision of the shipped system.
+
 ## Running on molab (GPU)
 
 [`notebooks/molab_run.py`](notebooks/molab_run.py) is a marimo notebook for [molab](https://molab.marimo.io). Each press
