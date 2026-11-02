@@ -37,8 +37,11 @@ def _(mo):
        molab's torch). Press it again whenever the branch has new commits (not while training runs).
        **Fetch data** once per session, after the first Pull repo; the data stays for the whole session.
     4. **Start training**: renders the records (`lifemate.sft.records`: pool for experiments, all train only for the final
-       retrain; dev or holdout for the eval loss, never trained on), then
-       runs `lifemate.sft.train` in the background. The log and plots below refresh every minute. Checkpoints go to
+       retrain; dev or holdout for the eval loss, never trained on), then runs `lifemate.sft.train` in the background.
+       *masked copies* adds function-masked copies of each train record. *ASR-noisy copy* adds a copy whose user turns
+       come from an ASR cache; clips missing from this session's cache are transcribed first (about 15 minutes for the
+       pool) with the model given, which must **not** be fine-tuned on the pool clips (keep the off-the-shelf
+       `vinai/PhoWhisper-large`). The log and plots below refresh every minute. Checkpoints go to
        `<model repo>/checkpoints/<run>/last` every 30 minutes and at the end.
     5. **Stop** saves a checkpoint at the next optimizer step, then exits. In a new session (or after Stop) tick
        *resume* and press **Start training** again with the same run name, records and extra args; training continues
@@ -158,21 +161,26 @@ def _(mo):
     eval_records = mo.ui.dropdown({"dev": "dev", "holdout": "holdout", "none": ""}, value="dev",
                                   label="Eval loss records")
     examples = mo.ui.number(start=0, stop=8, value=4, label="few-shot examples in the records")
+    masked = mo.ui.number(start=0, stop=4, value=0, label="function-masked copies per record (--mask)")
+    asr_cache = mo.ui.text(value="", label="ASR-noisy copy from cache (empty = none)", placeholder="pho-large-fp16")
+    asr_model = mo.ui.text(value="vinai/PhoWhisper-large", label="ASR model that writes that cache")
     resume = mo.ui.checkbox(value=False, label="resume from the last checkpoint")
     max_steps = mo.ui.number(start=0, stop=100000, value=0, label="--max-steps (0 = full run)")
     extra = mo.ui.text(value="", label="extra train args (e.g. --epochs 1)", full_width=True)
     start = mo.ui.run_button(label="Start training")
     stop = mo.ui.run_button(label="Stop")
     mo.vstack([mo.hstack([run_name, records, eval_records], justify="start"),
-               mo.hstack([examples, max_steps, resume], justify="start"), extra, mo.hstack([start, stop], justify="start")])
-    return eval_records, examples, extra, max_steps, records, resume, run_name, start, stop
+               mo.hstack([examples, masked, max_steps, resume], justify="start"),
+               mo.hstack([asr_cache, asr_model], justify="start"), extra, mo.hstack([start, stop], justify="start")])
+    return asr_cache, asr_model, eval_records, examples, extra, masked, max_steps, records, resume, run_name, start, stop
 
 
 @app.cell
 def _(commit, data_root, hf_write, model_repo, os, repo_dir, work):
     commit  # everything below runs the pulled repo's code
     def step_env():
-        env = {**os.environ, "PYTHONPATH": str(repo_dir / "src"), "LIFEMATE_DATA_ROOT": str(data_root), "PYTHONUTF8": "1"}
+        env = {**os.environ, "PYTHONPATH": str(repo_dir / "src"), "LIFEMATE_DATA_ROOT": str(data_root), "PYTHONUTF8": "1",
+               "LIFEMATE_ASR_CACHE": str(work / "asr_cache")}
         if hf_write.value:
             env["HF_TOKEN"] = hf_write.value  # writes checkpoints and the merged model
         return env
@@ -186,8 +194,8 @@ def _(commit, data_root, hf_write, model_repo, os, repo_dir, work):
 
 
 @app.cell
-def _(data_root, eval_records, examples, extra, hf_write, max_steps, mo, procs, records, repo_dir, repo_name, resume, run_dir,
-      run_name, shlex, start, step_env, stop, subprocess, sys):
+def _(asr_cache, asr_model, data_root, eval_records, examples, extra, hf_write, masked, max_steps, mo, procs, records,
+      repo_dir, repo_name, resume, run_dir, run_name, shlex, start, step_env, stop, subprocess, sys):
     if stop.value and procs.get("train") and procs["train"].poll() is None:
         (run_dir(run_name.value) / "STOP").write_text("", encoding="utf-8")  # saves at the next step, then exits
     mo.stop(not start.value, mo.md("_Press **Start training**._"))
@@ -202,18 +210,27 @@ def _(data_root, eval_records, examples, extra, hf_write, max_steps, mo, procs, 
         if r.returncode:
             raise RuntimeError(f"{cmd[2]} failed:\n{r.stderr[-3000:]}")
 
-    def _name(subset):
-        return f"gold-{subset}" + ("" if int(examples.value) == 4 else f"-k{int(examples.value)}")
+    _mask, _asr = int(masked.value), asr_cache.value.strip()
+
+    def _name(subset, train=False):
+        extras = (f"-m{_mask}" if train and _mask else "") + (f"-asr-{_asr}" if train and _asr else "")
+        return f"gold-{subset}{extras}" + ("" if int(examples.value) == 4 else f"-k{int(examples.value)}")
 
     _k = ["--examples", str(int(examples.value)), "--tokenizer", "none"]
-    _run([sys.executable, "-m", "lifemate.sft.records", "--name", _name(records.value), "--subset", records.value, *_k])
+    _train_k = ["--mask", str(_mask)] if _mask else []
+    if _asr:  # resumable: only clips missing from this session's cache are transcribed
+        _run([sys.executable, "-m", "lifemate.transcribe", "--split", "train", "--asr", "whisper", "--asr-kw",
+              f"model={asr_model.value.strip()}", "--name", _asr, *(["--subset", "pool"] if records.value == "pool" else [])])
+        _train_k += ["--text", "gold", "--text", f"cache:{_asr}"]
+    _run([sys.executable, "-m", "lifemate.sft.records", "--name", _name(records.value, train=True), "--subset",
+          records.value, *_k, *_train_k])
     if eval_records.value:
         _run([sys.executable, "-m", "lifemate.sft.records", "--name", _name(eval_records.value), "--subset",
               eval_records.value, *_k])
 
     _out = run_dir(run_name.value)
     _out.mkdir(parents=True, exist_ok=True)
-    _cmd = [sys.executable, "-m", "lifemate.sft.train", "--records", _name(records.value), "--out", str(_out),
+    _cmd = [sys.executable, "-m", "lifemate.sft.train", "--records", _name(records.value, train=True), "--out", str(_out),
             *shlex.split(extra.value)]
     if eval_records.value:
         _cmd += ["--eval-records", _name(eval_records.value)]

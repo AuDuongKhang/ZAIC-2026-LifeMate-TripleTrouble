@@ -69,7 +69,57 @@ def test_records_cli_uses_pool_only(train_samples, tmp_path):
     assert len(rows) == 30 and all(r["id"] in pool and r["source"] == "gold" for r in rows)
 
 
-@pytest.mark.parametrize("flag", [["--text", "cache:x"]])
-def test_records_cli_rejects_later_options(train_samples, tmp_path, flag):
+def _write_cache(root, name, samples, text_of):
+    from lifemate.asr.cached import cache_path, sample_clips
+
+    path = cache_path("train", name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = [{"audio": clip, "text": text_of(clip), "nbest": []} for s in samples for clip in sample_clips(s)]
+    path.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), encoding="utf-8")
+
+
+def _first_pool(train_samples, n):
+    pool = set(load_splits()["pool"])
+    return [s for s in train_samples if s["id"] in pool][:n]
+
+
+def test_records_cli_takes_the_request_text_from_an_asr_cache(train_samples, tmp_path, monkeypatch):
+    monkeypatch.setenv("LIFEMATE_ASR_CACHE", str(tmp_path / "cache"))
+    first = _first_pool(train_samples, 2)
+    _write_cache(tmp_path, "noisy", first, lambda clip: f"nghe nhầm {clip}")
+    out = records.main(["--name", "t", "--subset", "pool", "--limit", "2", "--examples", "0", "--text", "cache:noisy",
+                        "--tokenizer", "none", "--out-dir", str(tmp_path)])
+    rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    assert [r["source"] for r in rows] == ["asr", "asr"]
+    for s, r in zip(first, rows):
+        users = [m["content"] for m in r["messages"] if m["role"] == "user"]
+        assert users[-1] == f"nghe nhầm {s['audio']}"
+        assert all(u.startswith("nghe nhầm ") for u in users)
+        calls = [(c["name"], c["arguments"]) for c in _calls(r)]
+        gold = [(g["name"], g["arguments"]) for g in s["label"]["tool_calls"]]
+        assert calls[len(calls) - len(gold):] == gold  # history calls first, then the unchanged gold calls
+
+
+def test_records_cli_raises_on_a_clip_missing_from_the_cache(train_samples, tmp_path, monkeypatch):
+    monkeypatch.setenv("LIFEMATE_ASR_CACHE", str(tmp_path / "cache"))
+    first = _first_pool(train_samples, 2)
+    _write_cache(tmp_path, "partial", first[:1], lambda clip: "x")
+    with pytest.raises(KeyError, match=first[1]["audio"]):
+        records.main(["--name", "t", "--subset", "pool", "--limit", "2", "--examples", "0", "--text", "cache:partial",
+                      "--tokenizer", "none", "--out-dir", str(tmp_path)])
+
+
+def test_records_cli_writes_gold_masked_and_asr_copies_in_one_file(train_samples, tmp_path, monkeypatch):
+    monkeypatch.setenv("LIFEMATE_ASR_CACHE", str(tmp_path / "cache"))
+    _write_cache(tmp_path, "noisy", _first_pool(train_samples, 3), lambda clip: "y")
+    out = records.main(["--name", "t", "--subset", "pool", "--limit", "3", "--examples", "0", "--text", "gold",
+                        "--text", "cache:noisy", "--mask", "1", "--tokenizer", "none", "--out-dir", str(tmp_path)])
+    rows = [json.loads(line) for line in out.read_text(encoding="utf-8").splitlines()]
+    assert [r["source"] for r in rows] == ["gold", "masked", "asr"] * 3
+
+
+@pytest.mark.parametrize("text", ["whisper", "cache:"])
+def test_records_cli_rejects_unknown_text_sources(train_samples, tmp_path, text):
     with pytest.raises(SystemExit):
-        records.main(["--name", "t", "--subset", "pool", "--tokenizer", "none", "--out-dir", str(tmp_path), *flag])
+        records.main(["--name", "t", "--subset", "pool", "--tokenizer", "none", "--out-dir", str(tmp_path),
+                      "--text", text])
