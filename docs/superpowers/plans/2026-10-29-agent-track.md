@@ -22,10 +22,10 @@
 |---|---|---|---|
 | 1 | 1–6 | Done (PR #9, #11) | few-shot k4 chosen: dev 21.02 -> 38.35, holdout 27.65 -> 29.69; public_test 21.46 (whisper), 30.19 with `pho-large-ft-a` |
 | 2 | 7–11 | Done (PR #12) | `sft-v1`: dev 63.74, holdout 42.30 (+12.61, Gate 2 passed), public_test 47.85 with `pho-large-ft-a` |
-| 3 | 12–14 | Not started | function masking, ASR-noisy records, `sft-v2`, final retrain |
-| 4 | 15 | Not started | determinism check twice on public_test, pin revision, README training commands |
+| 3 | 12–14 | Code in PR #14 (`feat/sft-v2`); molab runs pending | Tasks 12–13 done (masking, ASR-noisy records, notebook fields); Task 14 presets added, training/compare/final retrain not run yet |
+| 4 | 15 | Partly (PR #14) | `revision` kwarg and README training commands done; determinism check, timing and the pinned preset wait for the chosen model |
 
-Remaining weak spots from the `sft-v1` rows: holdout ask is 13.24 (dev 60.23), so apps unseen in training are the gap that Tasks 12–13 target. Next: Task 12, then Task 13 if time allows. Freeze 14 Nov.
+Remaining weak spots from the `sft-v1` rows: holdout ask is 13.24 (dev 60.23), so apps unseen in training are the gap that Tasks 12–13 target. Next: merge PR #14, then Task 14 on molab (`sft-v2` with masked copies 1 and ASR cache `pho-large-fp16`). Freeze 14 Nov.
 
 ## Why this order (evidence from the 27 Oct runs)
 
@@ -424,7 +424,7 @@ It then:
   - the tool order is shuffled.
 - `--mask K` writes K masked copies per gold record, in addition to the original.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```python
 def test_mask_renames_consistently(ask_record):
@@ -453,10 +453,10 @@ def test_mask_is_deterministic(act_record):
     assert mask_record(act_record, random.Random(3)) == mask_record(act_record, random.Random(3))
 ```
 
-- [ ] **Step 2:** `pytest tests/test_sft_mask.py -v` → FAIL.
-- [ ] **Step 3:** Implement it.
-- [ ] **Step 4:** `pytest -v` → all pass.
-- [ ] **Step 5:** Commit `Add function masking for SFT records`.
+- [x] **Step 2:** `pytest tests/test_sft_mask.py -v` → FAIL.
+- [x] **Step 3:** Implement it.
+- [x] **Step 4:** `pytest -v` → all pass.
+- [x] **Step 5:** Commit `Add function masking for SFT records`.
 
 ### Task 13: ASR-noisy records
 
@@ -471,10 +471,10 @@ Depends on an ASR cache from the ASR owner, `asr_cache/train/<name>.jsonl` (writ
 **Interfaces:**
 - `--text cache:<name>` builds tasks with the existing `lifemate.asr.cached.CachedASR(name, split="train")` in place of `GoldTranscriptASR`. It writes records with `source="asr"`, and their gold calls and results are unchanged. A missing clip raises `CachedASR`'s `KeyError`, which names the file.
 
-- [ ] **Step 1:** Write two tests. With a two-line temporary cache, the request text in the record comes from the cache. A missing clip raises `KeyError` with the file name.
-- [ ] **Step 2:** Run them and watch them fail. Then implement.
-- [ ] **Step 3:** `pytest -v` → all pass.
-- [ ] **Step 4:** Commit `Build SFT records from cached ASR transcripts`.
+- [x] **Step 1:** Write two tests. With a two-line temporary cache, the request text in the record comes from the cache. A missing clip raises `KeyError` with the file name.
+- [x] **Step 2:** Run them and watch them fail. Then implement.
+- [x] **Step 3:** `pytest -v` → all pass.
+- [x] **Step 4:** Commit `Build SFT records from cached ASR transcripts`.
 
 ### Task 14: SFT v2 and the final retrain
 
