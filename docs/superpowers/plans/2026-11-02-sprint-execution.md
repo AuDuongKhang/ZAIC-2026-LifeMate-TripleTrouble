@@ -48,24 +48,28 @@
 
 ## Sprint schedule
 
-Owners: **K** = agent/LLM (Khang), **P** = ASR (partner), **D** = Docker owner (decide in Q4; until then K).
+Owners: **K** = agent/LLM (Khang), **P** = ASR + shipping (partner). **Every task has exactly one owner.** P takes Docker because P's ASR work gets lighter after P3, while K's tasks run back to back; P6 (ASR timing) is the same A30 run as Task 10.
 
-| Dates | K | P | D / shared | Submission |
-|---|---|---|---|---|
-| 2–3 Nov | Task 1: final retrain, dev `check_refs`, presets PR | P3 with `sft-v2` (Task 1 Step 4) | Sync: Q1–Q7 | `sft-final` + `pho-large-ft-b` |
-| 3–5 Nov | Task 2 code + `sft-v3` run and gate | P4 only if P3 says ASR costs > 5 pts | Task 9 skeleton (`empty` agent in Docker) | – |
-| 4–8 Nov | Tasks 3–6 if Q1/Q2 = yes (synthetic) | P5 final ASR retrain | Task 9 with real models | best gated system |
-| 6–9 Nov | Task 7 (simulator), Task 8 only if the simulator says so | – | – | – |
-| 9–11 Nov | Final retrain with the winning recipe (Task 1 Steps 1–2 again, run name `sft-final2`) | – | Task 10 Steps 1–3 on a rented A30 | final candidate |
-| 12–14 Nov | Task 10 freeze | P6 | Task 10 image, checksum, upload | freeze 14 Nov 23:59 |
-| 15–16 Nov | buffer: fixes only | – | submit Docker form | deadline 16 Nov 23:59 |
+| Dates | K | P | Submission |
+|---|---|---|---|
+| 2–3 Nov | Task 1: final retrain, dev `check_refs`, presets PR | P3 with `sft-v2` (below) | `sft-final` + `pho-large-ft-b` |
+| 3–5 Nov | Task 2 code + `sft-v3` run and gate | Task 9 skeleton (`empty` agent in Docker); P4 only if P3 says ASR costs > 5 pts | – |
+| 4–8 Nov | Tasks 3–6 if Q1/Q2 = yes (synthetic) | P5 final ASR retrain; Task 9 with real models | best gated system |
+| 6–9 Nov | Task 7 (simulator), Task 8 only if the simulator says so | Task 9 done (PR merged) | – |
+| 9–11 Nov | Final retrain with the winning recipe (Task 1 Steps 1–2 again, run name `sft-final2`); hand P the presets and revisions | Task 10 Steps 1–3 on a rented A30 (covers P6) | final candidate |
+| 12–14 Nov | review P's Docker PR; fixes only | Task 10 Steps 4–6: freeze, checksum, upload | freeze 14 Nov 23:59 |
+| 15–16 Nov | buffer | submit the Docker form | deadline 16 Nov 23:59 |
+
+**P's work in this sprint:** P3, P4, P5 of the umbrella plan, plus Tasks 9 and 10 of this plan. P3 now runs with `sft-v2` instead of `sft-v1`: `notebooks/molab_run.py`, split `train`, extra `--subset holdout`, agent preset `sft-v2`, ASR preset `pho-large-ft-b`, then `python -m lifemate.compare runs/20261102-080138_263ebdc_train_sft-v2_gold_holdout runs/<new run>`. Loss < 5 points → skip P4; > 10 points → P4 first, and tell K to add the `contacts.search` name fallback (K4 of the umbrella plan).
+
+**K's work in this sprint:** Tasks 1–8 of this plan.
 
 Anything not gated by 11 Nov stays out of the shipped system.
 
 ## Questions to settle at the next sync
 
 - **Q1/Q2** (umbrella plan): is a paid teacher (Claude API) wanted, and may train text and train tool results go to it? Tasks 3–6 run only with Q1 = yes. With Q2 = no, Task 4's `--no-train-text` mode sends schemas, probe results and context only.
-- **Q4:** who owns Docker from 12 Nov?
+- **Q4:** this plan gives Docker to P (Tasks 9–10). Confirm, or swap Tasks 9–10 with a K task.
 - **Q6 (new):** the few-shot bank reads `train/train.jsonl` at inference, so the image carries train text, and the organisers ask for a public Google Drive link. The guidance asks for "training code, inference code, and data", which suggests this is expected; confirm with the organisers if anyone doubts it.
 - **Q7 (new):** budget for ~3 hours of a rented A30 (or the closest 24 GB Ampere card) for Task 10 timing. molab's GPU is several times faster, so molab timings cannot prove the 30 s limit.
 
@@ -83,8 +87,7 @@ Anything not gated by 11 Nov stays out of the shipped system.
 - [ ] **Step 1: Final retrain on molab** (`notebooks/molab_train.py`, branch `main`): run name `sft-final`, model repo `TripleTrouble/lifemate-sft-final`, *Train records* = all train, *Eval loss records* = none, few-shot 4, masked copies 1, ASR-noisy copy `pho-large-fp16`, ASR model `vinai/PhoWhisper-large`, extra args empty, max-steps 0. Expected: about 1.6× the 2 h 15 min of `sft-v2`; the log ends at epoch 2.0 with no eval loss. If the session dies, tick *resume* and press Start with identical fields.
 - [ ] **Step 2: Merge and record the revision.** Press *Merge and upload*. Read the commit hash with `python -c "from huggingface_hub import HfApi; print(HfApi().model_info('TripleTrouble/lifemate-sft-final').sha)"` (HF_TOKEN set). Expected: a 40-character hash; write it down for Task 10.
 - [ ] **Step 3: Dev gate for `check_refs`** (`notebooks/molab_run.py`): split `train`, extra `--subset dev --agent-kw check_refs=true`, agent preset `sft-v2`, ASR preset `gold`. Then `python -m lifemate.compare runs/20261102-074734_263ebdc_train_sft-v2_gold_dev runs/<new dev run>`. Pass: the interval's upper end ≥ 0 (dev must not get worse; holdout already passed).
-- [ ] **Step 4: ASR cost (P3, run by whoever is free):** split `train`, extra `--subset holdout`, agent preset `sft-v2`, ASR preset `pho-large-ft-b`; compare with `runs/20261102-080138_263ebdc_train_sft-v2_gold_holdout`. Decision for P: loss < 5 points → skip P4; > 10 points → P4 first, and K adds the `contacts.search` name fallback (K4 of the umbrella plan) to the backlog.
-- [ ] **Step 5: Write the failing preset test** in `tests/test_presets.py`:
+- [ ] **Step 4: Write the failing preset test** in `tests/test_presets.py`:
 
 ```python
 def test_check_refs_presets():
@@ -95,11 +98,11 @@ def test_check_refs_presets():
 ```
 
   with `CHECK_REFS_IN_FINAL = True` if Step 3 passed, else `None`.
-- [ ] **Step 6:** `pytest tests/test_presets.py -v`. Expected: FAIL (unknown preset `sft-v2-refs`).
-- [ ] **Step 7:** Add the presets. Move the uncommitted `RESULTS.md` edit onto branch `exp/check-refs` (`git stash`, `git switch -c exp/check-refs origin/main`, `git stash pop`), fix the note "prompt v1rompt v1", add the Step 3/4 rows and the compare lines.
-- [ ] **Step 8:** `pytest`. Expected: all pass.
-- [ ] **Step 9: Public submission:** split `public_test`, agent preset `sft-final`, ASR preset `pho-large-ft-b` (plus extra `--agent-kw check_refs=true` if Step 3 passed and the PR is not merged yet). Submit `submission.jsonl`, add the leaderboard score to its `RESULTS.md` row.
-- [ ] **Step 10: Commit and PR**
+- [ ] **Step 5:** `pytest tests/test_presets.py -v`. Expected: FAIL (unknown preset `sft-v2-refs`).
+- [ ] **Step 6:** Add the presets. Move the uncommitted `RESULTS.md` edit onto branch `exp/check-refs` (`git stash`, `git switch -c exp/check-refs origin/main`, `git stash pop`), fix the note "prompt v1rompt v1", add the Step 3 row (and P3's row if P has it) with the compare lines.
+- [ ] **Step 7:** `pytest`. Expected: all pass.
+- [ ] **Step 8: Public submission:** split `public_test`, agent preset `sft-final`, ASR preset `pho-large-ft-b` (plus extra `--agent-kw check_refs=true` if Step 3 passed and the PR is not merged yet). Submit `submission.jsonl`, add the leaderboard score to its `RESULTS.md` row.
+- [ ] **Step 9: Commit and PR**
 
 ```bash
 git add configs/presets.json tests/test_presets.py RESULTS.md
@@ -277,7 +280,7 @@ Behaviour:
 ### Task 6: Synthetic run and `sft-v4` (K, only if Q1 = yes)
 
 - [ ] **Step 1: Pilot:** `python -m lifemate.sft.synth pilot --name synth-pilot --subset pool --limit 20 --scenarios 3` (add `--no-train-text` if Q2 = no). Expected: a report with accept rate; aim for ≥ 50% of scenarios accepted.
-- [ ] **Step 2: Read all accepted pilot scenarios by hand** (K and P, 15 minutes) with this checklist: the request sounds spoken and Vietnamese; the calls are what you would expect; asks are asked for a real reason; empty requests really have no app; argument style matches train (names, quantities, ISO times). If more than 3 of 20 fail the checklist, change the system prompt and repeat Step 1. Do not go to Step 3 until it passes.
+- [ ] **Step 2: Read all accepted pilot scenarios by hand** (K, 15 minutes) with this checklist: the request sounds spoken and Vietnamese; the calls are what you would expect; asks are asked for a real reason; empty requests really have no app; argument style matches train (names, quantities, ISO times). If more than 3 of 20 fail the checklist, change the system prompt and repeat Step 1. Do not go to Step 3 until it passes.
 - [ ] **Step 3: Bulk:** `submit --name synth-v1 --subset pool --scenarios 3` (≈ 2,800 scenarios), then `collect` once the batch has ended. Cost cap: check `usage` on the pilot's responses, multiply by 948/20, halve for the batch discount; stop and ask the team if the estimate is over the budget agreed in Q1.
 - [ ] **Step 4:** Upload `train_records/synth/synth-v1.jsonl` to the team's private HF dataset under `synth/` (`huggingface_hub.upload_file`, repo type dataset). Never commit it.
 - [ ] **Step 5: Train `sft-v4`:** the best recipe so far (Task 2 result) plus the synthetic file, pool records, eval dev. Merge, add the preset.
@@ -334,7 +337,7 @@ Decide the ask rule from data before touching the agent. The simulator replays t
 
 ---
 
-### Task 9: Docker package (D)
+### Task 9: Docker package (P)
 
 **Files:**
 - Create: `Dockerfile`, `.dockerignore`, `configs/shipped.json`, `src/lifemate/docker_entry.py`, `scripts/docker_build.sh`
@@ -371,9 +374,9 @@ Image layout:
 
 ---
 
-### Task 10: A30 rehearsal, freeze and hand-off (D + K)
+### Task 10: A30 rehearsal, freeze and hand-off (P)
 
-- [ ] **Step 1: Fill `configs/shipped.json`** with the final agent and ASR presets, `check_refs` / guard kwargs if they passed, and both revisions. Rebuild.
+- [ ] **Step 1: Fill `configs/shipped.json`** with the values K hands over (Task 1 Step 2, final retrain): the final agent and ASR presets, `check_refs` / guard kwargs if they passed, and both revisions. Rebuild.
 - [ ] **Step 2: A30 run** (Q7): on a rented A30 (or the nearest 24 GB Ampere card; write down which), `docker load`, then run the image on public_test with `--gpus all --network none`, **twice**. Expected: `cmp` finds the two files identical; `meta.json` shows max seconds per sample < 25 (5 s of margin under 30). If max ≥ 25: lower `time_budget_s` in the shipped `agent_kw` (it counts from the sample start, ASR included) and re-run; never ship over 25.
 - [ ] **Step 3: Cross-check** the A30 submission against the molab run of the same config: count samples whose `tool_calls` differ. bf16 numerics can differ between GPUs; more than ~2% different samples means something else differs (revision, preset, data). Find out what before freezing.
 - [ ] **Step 4: Freeze (by 14 Nov 23:59):** tag the commit `final-<date>`; write in `RESULTS.md` notes the image tag, sha256, both model revisions, the presets and the A30 timing; add the Docker run command and the training commands (records, synth, train, merge, with seeds) to `README.md`.
