@@ -38,7 +38,8 @@ def _(mo):
        **Fetch data** once per session, after the first Pull repo; the data stays for the whole session.
     4. **Start training**: renders the records (`lifemate.sft.records`: pool for experiments, all train only for the final
        retrain; dev or holdout for the eval loss, never trained on), then runs `lifemate.sft.train` in the background.
-       *masked copies* adds function-masked copies of each train record. *ASR-noisy copy* adds a copy whose user turns
+       *masked copies* adds function-masked copies of each train record; *perturb* also shuffles their schema
+       properties and drops optional ones the record never uses. *ASR-noisy copy* adds a copy whose user turns
        come from an ASR cache; clips missing from this session's cache are transcribed first (about 15 minutes for the
        pool) with the model given, which must **not** be fine-tuned on the pool clips (keep the off-the-shelf
        `vinai/PhoWhisper-large`). The log and plots below refresh every minute. Checkpoints go to
@@ -162,6 +163,7 @@ def _(mo):
                                   label="Eval loss records")
     examples = mo.ui.number(start=0, stop=8, value=4, label="few-shot examples in the records")
     masked = mo.ui.number(start=0, stop=4, value=0, label="function-masked copies per record (--mask)")
+    perturb = mo.ui.checkbox(value=False, label="perturb masked schemas (--perturb)")
     asr_cache = mo.ui.text(value="", label="ASR-noisy copy from cache (empty = none)", placeholder="pho-large-fp16")
     asr_model = mo.ui.text(value="vinai/PhoWhisper-large", label="ASR model that writes that cache")
     resume = mo.ui.checkbox(value=False, label="resume from the last checkpoint")
@@ -170,9 +172,10 @@ def _(mo):
     start = mo.ui.run_button(label="Start training")
     stop = mo.ui.run_button(label="Stop")
     mo.vstack([mo.hstack([run_name, records, eval_records], justify="start"),
-               mo.hstack([examples, masked, max_steps, resume], justify="start"),
+               mo.hstack([examples, masked, perturb, max_steps, resume], justify="start"),
                mo.hstack([asr_cache, asr_model], justify="start"), extra, mo.hstack([start, stop], justify="start")])
-    return asr_cache, asr_model, eval_records, examples, extra, masked, max_steps, records, resume, run_name, start, stop
+    return (asr_cache, asr_model, eval_records, examples, extra, masked, max_steps, perturb, records, resume, run_name,
+            start, stop)
 
 
 @app.cell
@@ -194,8 +197,8 @@ def _(commit, data_root, hf_write, model_repo, os, repo_dir, work):
 
 
 @app.cell
-def _(asr_cache, asr_model, data_root, eval_records, examples, extra, hf_write, masked, max_steps, mo, procs, records,
-      repo_dir, repo_name, resume, run_dir, run_name, shlex, start, step_env, stop, subprocess, sys):
+def _(asr_cache, asr_model, data_root, eval_records, examples, extra, hf_write, masked, max_steps, mo, perturb, procs,
+      records, repo_dir, repo_name, resume, run_dir, run_name, shlex, start, step_env, stop, subprocess, sys):
     if stop.value and procs.get("train") and procs["train"].poll() is None:
         (run_dir(run_name.value) / "STOP").write_text("", encoding="utf-8")  # saves at the next step, then exits
     mo.stop(not start.value, mo.md("_Press **Start training**._"))
@@ -211,13 +214,15 @@ def _(asr_cache, asr_model, data_root, eval_records, examples, extra, hf_write, 
             raise RuntimeError(f"{cmd[2]} failed:\n{r.stderr[-3000:]}")
 
     _mask, _asr = int(masked.value), asr_cache.value.strip()
+    _perturb = bool(_mask and perturb.value)  # only masked copies are perturbed
 
     def _name(subset, train=False):
-        extras = (f"-m{_mask}" if train and _mask else "") + (f"-asr-{_asr}" if train and _asr else "")
+        extras = ((f"-m{_mask}" if train and _mask else "") + ("-p" if train and _perturb else "")
+                  + (f"-asr-{_asr}" if train and _asr else ""))
         return f"gold-{subset}{extras}" + ("" if int(examples.value) == 4 else f"-k{int(examples.value)}")
 
     _k = ["--examples", str(int(examples.value)), "--tokenizer", "none"]
-    _train_k = ["--mask", str(_mask)] if _mask else []
+    _train_k = (["--mask", str(_mask)] if _mask else []) + (["--perturb"] if _perturb else [])
     if _asr:  # resumable: only clips missing from this session's cache are transcribed
         _run([sys.executable, "-m", "lifemate.transcribe", "--split", "train", "--asr", "whisper", "--asr-kw",
               f"model={asr_model.value.strip()}", "--name", _asr, *(["--subset", "pool"] if records.value == "pool" else [])])
