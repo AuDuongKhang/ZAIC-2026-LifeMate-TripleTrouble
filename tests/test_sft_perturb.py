@@ -99,3 +99,17 @@ def test_records_cli_perturbs_only_masked_copies(train_samples, tmp_path):
     assert [r["source"] for r in rows] == ["gold", "masked"] * 3
     assert all("perturbed" not in r for r in rows if r["source"] == "gold")
     assert all(r["perturbed"] is True for r in rows if r["source"] == "masked")
+
+
+def test_perturb_keeps_the_parameters_a_one_of_group_lists():
+    """tool_schema turns x-one-of into "Provide one of: ..." with optional parameters; dropping them would leave a
+    description that names parameters the schema no longer has (phone.call could not be called at all)."""
+    tool = {"type": "function", "function": {
+        "name": "phone.call", "description": "Gọi điện Provide one of: contact_id | phone_number + label.",
+        "parameters": {"type": "object", "required": [], "properties": {
+            "contact_id": {"type": "string"}, "phone_number": {"type": "string"}, "label": {"type": "string"},
+            "speaker": {"type": "boolean"}}}}}
+    rec = {"id": "x", "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],
+           "tools": [tool]}
+    props = perturb_record(rec, random.Random(0), drop_p=1.0)["tools"][0]["function"]["parameters"]["properties"]
+    assert set(props) == {"contact_id", "phone_number", "label"}
