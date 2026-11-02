@@ -145,3 +145,26 @@ def test_records_cli_writes_masked_copies(train_samples, tmp_path):
     again = records.main(["--name", "t2", "--subset", "pool", "--limit", "5", "--examples", "0", "--mask", "2",
                           "--tokenizer", "none", "--out-dir", str(tmp_path)])
     assert again.read_text(encoding="utf-8") == out.read_text(encoding="utf-8")  # same seed, same copies
+
+
+def _tool(name, description, props):
+    return {"type": "function", "function": {"name": name, "description": description, "parameters": {
+        "type": "object", "required": [], "properties": props}}}
+
+
+def test_descriptions_rename_only_the_tools_own_parameters():
+    rec = {"id": "x", "messages": [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}], "tools": [
+        _tool("contacts.update", "Sửa số/email liên hệ Provide one of: phone | email.",
+              {"phone": {"type": "string"}, "email": {"type": "string"}}),
+        _tool("email.send", "Gửi email",
+              {"to": {"type": "array", "description": "lấy từ contacts.update (trường email)"},
+               "cc": {"type": "array", "description": "cùng định dạng với to"}})]}
+    m = mask_record(rec, random.Random(0))
+    back = {v: k for k, v in m["name_map"].items()}
+    send = next(t["function"] for t in m["tools"] if m["name_map"][t["function"]["name"]] == "email.send")
+    update = next(t["function"] for t in m["tools"] if m["name_map"][t["function"]["name"]] == "contacts.update")
+    assert send["description"] == "Gửi email"  # another tool's parameter name, used as a plain word
+    assert send["parameters"]["properties"][back["to"]]["description"] == (
+        f"lấy từ {back['contacts.update']} (trường email)")  # a result field: results are not renamed
+    assert send["parameters"]["properties"][back["cc"]]["description"] == f"cùng định dạng với {back['to']}"
+    assert update["description"].endswith(f"Provide one of: {back['phone']} | {back['email']}.")

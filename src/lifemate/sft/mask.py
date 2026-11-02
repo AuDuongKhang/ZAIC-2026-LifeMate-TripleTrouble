@@ -4,11 +4,11 @@ read the descriptions instead of relying on names it memorised. Unseen apps in t
 
 The same renaming is applied everywhere a name occurs: tool schemas (names, property keys, `required`), every
 assistant tool call (history, the agent's own steps, the few-shot example calls in the system prompt), the
-`tool_name`/`params` values of `sys.ask_missing_info`, and whole-word occurrences inside descriptions (the
-`Provide one of: a + b` suffix, mentions in the text; the `(id from <app>.<collection>)` notes get only
-the app prefix renamed). Everything else is kept: other
-description text, enum values, argument values, user text, tool results. Only top-level parameters are renamed; keys
-inside array items (food_delivery.place_order `items`) stay.
+`tool_name`/`params` values of `sys.ask_missing_info`, and whole-word occurrences inside descriptions: tool names
+anywhere, a tool's own parameter names in its own descriptions (such as the `Provide one of: a + b` suffix), and only
+the app prefix of the `(id from <app>.<collection>)` notes. Everything else is kept: other description text, enum
+values, argument values, user text, tool results. Only top-level parameters are renamed; keys inside array items
+(food_delivery.place_order `items`) stay.
 """
 from __future__ import annotations
 
@@ -60,18 +60,22 @@ def _identifiers(originals: list[str], words: list[str], rng: random.Random, tak
 
 
 class _Renamer:
-    """Whole-word renaming inside description text: tool names; other dotted names of a renamed app, such as the
-    `(id from music.playlists)` notes, get only their app prefix renamed (the rest is a hint, like a description);
-    parameter names that are not part of a dotted name."""
+    """Whole-word renaming inside one tool's description texts: tool names; other dotted names of a renamed app, such
+    as the `(id from music.playlists)` notes, get only their app prefix renamed (the rest is a hint, like a
+    description); the tool's own parameter names when not part of a dotted name. Another tool's parameter name is left
+    alone: in a description it is a plain word ("Gửi email") or a result field ("trường email"), and results keep
+    their keys."""
 
     def __init__(self, tool_map: dict[str, str], app_map: dict[str, str], param_map: dict[str, str]):
         self.tool_map, self.app_map, self.param_map = tool_map, app_map, param_map
-        alts = [rf"(?<![\w.]){re.escape(n)}(?!\w)" for n in sorted(tool_map, key=len, reverse=True)]
+        self.names = [rf"(?<![\w.]){re.escape(n)}(?!\w)" for n in sorted(tool_map, key=len, reverse=True)]
         if app_map:
             apps = "|".join(re.escape(a) for a in sorted(app_map, key=len, reverse=True))
-            alts.append(rf"(?<![\w.])(?:{apps})\.\w+")
-        alts += [rf"(?<![\w.]){re.escape(n)}(?!\w|\.\w)" for n in sorted(param_map, key=len, reverse=True)]
-        self.pattern = re.compile("|".join(alts)) if alts else None
+            self.names.append(rf"(?<![\w.])(?:{apps})\.\w+")
+
+    def _pattern(self, own: list[str]) -> re.Pattern | None:
+        alts = self.names + [rf"(?<![\w.]){re.escape(n)}(?!\w|\.\w)" for n in sorted(own, key=len, reverse=True)]
+        return re.compile("|".join(alts)) if alts else None
 
     def _one(self, m: re.Match) -> str:
         word = m.group(0)
@@ -82,16 +86,20 @@ class _Renamer:
         app, _, rest = word.partition(".")
         return f"{self.app_map[app]}.{rest}"
 
-    def text(self, text: str) -> str:
-        return self.pattern.sub(self._one, text) if self.pattern else text
+    def descriptions(self, node, own: list[str]):
+        """node with every "description" string renamed; own = the original names of the tool's parameters."""
+        pattern = self._pattern(own)
+        if pattern is None:
+            return node
 
-    def descriptions(self, node):
-        if isinstance(node, dict):
-            return {k: (self.text(v) if k == "description" and isinstance(v, str) else self.descriptions(v))
-                    for k, v in node.items()}
-        if isinstance(node, list):
-            return [self.descriptions(v) for v in node]
-        return node
+        def walk(n):
+            if isinstance(n, dict):
+                return {k: (pattern.sub(self._one, v) if k == "description" and isinstance(v, str) else walk(v))
+                        for k, v in n.items()}
+            if isinstance(n, list):
+                return [walk(v) for v in n]
+            return n
+        return walk(node)
 
 
 def _rename_call(name: str, arguments: dict, tool_map: dict[str, str], param_map: dict[str, str]) -> tuple[str, dict]:
@@ -148,14 +156,15 @@ def mask_record(record: dict, rng: random.Random) -> dict:
     for t in record["tools"]:
         fn = t["function"]
         if fn["name"] == SYS_TOOL:
-            new_tools.append(renamer.descriptions(copy.deepcopy(t)))
+            new_tools.append(renamer.descriptions(copy.deepcopy(t), []))  # its own parameters keep their names
             continue
         params_schema = dict(fn["parameters"])
         params_schema["properties"] = {param_map[k]: v for k, v in fn["parameters"].get("properties", {}).items()}
         if "required" in params_schema:
             params_schema["required"] = [param_map.get(p, p) for p in params_schema["required"]]
         new_fn = dict(fn, name=tool_map[fn["name"]], parameters=params_schema)
-        new_tools.append(renamer.descriptions(copy.deepcopy(dict(t, function=new_fn))))
+        own = list(fn["parameters"].get("properties", {}))
+        new_tools.append(renamer.descriptions(copy.deepcopy(dict(t, function=new_fn)), own))
     rng.shuffle(new_tools)
 
     messages = []
