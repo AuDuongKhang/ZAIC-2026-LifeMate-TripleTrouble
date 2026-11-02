@@ -35,7 +35,7 @@ Public test: 47.85 with `pho-large-ft-a` (ASR WER 0.096 on dev + holdout). Unkno
 | 8–11 Nov | K5 distillation (gated); K3 tuning | P5 final ASR retrain | best system |
 | 11–14 Nov | K6 final SFT retrain, Task 15 | P6 timing and determinism of ASR; both: hand-off | freeze 14 Nov |
 
-Docker (deadline 16 Nov 23:59 GMT+7) needs one owner from 12 Nov. It is not planned here; decide in Q4.
+Docker (deadline 16 Nov 23:59 GMT+7) is planned in `2026-11-02-sprint-execution.md` (Tasks 9–10, owner K). Synthetic data (K5b) moved to P on 2 Nov; see the owner note there.
 
 ---
 
