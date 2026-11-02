@@ -23,6 +23,8 @@ python -m lifemate.sft.records --name v2-pool --subset pool --mask 1 --text gold
 python -m lifemate.sft.train --records gold-pool --eval-records gold-dev --out checkpoints/sft-v1 --hf-repo <owner>/lifemate-sft-v1
 python -m lifemate.sft.merge --adapter checkpoints/sft-v1/last --out merged/sft-v1 --hf-repo <owner>/lifemate-sft-v1
 cd data && PYTHONPATH=public_test python -m zaic_tools --split public_test --root . --validate ../runs/<run>/submission.jsonl
+HF_TOKEN=... bash scripts/docker_build.sh       # final image from configs/shipped.json (presets + pinned revisions)
+docker run --rm --gpus all --network none -v $PWD/data/public_test:/data:ro -v $PWD/out:/app/result lifemate:<sha>
 ```
 
 Without the editable install (e.g. the user's base Anaconda, whose torch/numpy are broken), set `PYTHONPATH=src`. On Windows, set `PYTHONUTF8=1` for Vietnamese output. `LIFEMATE_DATA_ROOT` overrides the data folder (default `data/`). Reference numbers on train: oracle 100.0, empty 7.18.
@@ -47,6 +49,7 @@ All repo files (code, comments, docs, notebook UI, commits) are in English; Viet
 - `scoring.py`: local copy of the official metric, with our assumptions in its docstring. `evaluate.py` gets the gold hash by replaying `label.tool_calls` in a fresh ToolEnv, which reproduces `label.final_state` on all 1545 train samples.
 - `data.import_zaic_tools`: every split ships its **own** `zaic_tools` under the same module name, so one process handles one split. Steps that touch two splits run as subprocesses (see `tests/test_pipeline.py` and the notebook).
 - `sft/`: LoRA SFT. `records` renders each train sample by running `ReActAgent` with `ReplayLLM` (gold calls, then a fixed final text) in a fresh train `ToolEnv`, so training text equals inference text (few-shot examples included); `mask` writes Hammer-style function-masked copies (renamed apps/tools/params, shuffled tools); `--text cache:<name>` takes user turns from an ASR cache; `tokenize` labels only the agent's turns; `train` is plain PyTorch + peft with checkpoint/resume to a private HF repo; `merge` bakes the adapter in. Training deps are in `requirements-train.txt`, installed with `--no-deps`. `notebooks/molab_train.py` runs it on molab.
+- `docker_entry.py` + `Dockerfile`: the final solution. `/data` is the split folder itself (name from its `<split>_tools_catalog.json`); the entry sets the HF offline flags, links it under a work data root next to a copy of `data/train/train.jsonl` + train catalog (few-shot bank), runs `infer` with `configs/shipped.json`, and writes `result/submission.jsonl`. The build downloads the same models at the same revisions with the HF token as a BuildKit secret.
 - `notebooks/molab_run.py`: marimo notebook for molab (GPU). molab can't sync a private repo, so the team uploads this file once. It clones the repo itself (shallow, chosen branch, GitHub token), fetches data with `lifemate.fetch_data` from the team's private HF dataset (dataset name filled in by default, tokens typed in the UI and never stored in the repo; the HF model owner is picked from the token's user and orgs), installs `requirements.txt`, runs infer (+ evaluate on train) in subprocesses, and offers downloads plus the RESULTS.md row. Team results are logged by hand in `RESULTS.md`.
 
 ## Rules that constrain the code

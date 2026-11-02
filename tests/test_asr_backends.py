@@ -20,3 +20,20 @@ def test_qwen3_asr_without_package_names_the_install(monkeypatch):
     monkeypatch.setitem(sys.modules, "nagisa", None)
     with pytest.raises(ImportError, match="--no-deps qwen-asr"):
         build_asr("qwen3-asr")
+
+
+def test_whisper_passes_the_revision(monkeypatch):
+    import types
+
+    from lifemate.asr.whisper import WhisperASR
+
+    seen = {}
+
+    def fake_pipeline(task, **kw):
+        seen.update(kw)
+        return types.SimpleNamespace(model=types.SimpleNamespace(generation_config=types.SimpleNamespace()))
+
+    monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(float16="fp16", float32="fp32"))
+    monkeypatch.setitem(sys.modules, "transformers", types.SimpleNamespace(pipeline=fake_pipeline))
+    WhisperASR(model="team/pho-large-ft-b", revision="abc123")
+    assert seen["model"] == "team/pho-large-ft-b" and seen["revision"] == "abc123"

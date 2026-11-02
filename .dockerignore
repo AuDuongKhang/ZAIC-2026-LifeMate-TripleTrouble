@@ -1,0 +1,19 @@
+# Only what the Dockerfile copies; never the data package except the two few-shot bank files.
+.git
+.venv
+venv
+runs
+checkpoints
+train_records
+merged
+models
+asr_cache
+.superpowers
+.pytest_cache
+**/__pycache__
+*.tar.gz
+data/*
+!data/train
+data/train/*
+!data/train/train.jsonl
+!data/train/train_tools_catalog.json
