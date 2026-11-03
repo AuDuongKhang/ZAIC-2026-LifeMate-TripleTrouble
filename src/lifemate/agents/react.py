@@ -53,12 +53,22 @@ def vote_key(call: dict, spec: dict | None) -> tuple:
                                       if (props.get(k) or {}).get("x-match") != "fuzzy"))
 
 
-def output_key(text: str | None, specs: dict[str, dict]) -> tuple:
-    """The vote of one proposal: its calls' vote keys in order; INVALID when a block does not parse (or no text)."""
+def decides(calls: list[dict], specs: dict[str, dict]) -> bool:
+    """The calls include a write or an ask: the step where the prompt vote happens, and the only kind of proposal
+    that can win it."""
+    return any(c["name"] == SYS_TOOL or (specs.get(c["name"]) or {}).get("kind") == "write" for c in calls)
+
+
+def output_key(text: str | None, specs: dict[str, dict]) -> tuple[tuple, bool]:
+    """(key, eligible) of one proposal. The key is its calls' vote keys in order, INVALID when a block does not parse
+    (or there is no text). Only a valid proposal with a write or an ask is eligible to win; plain answers, read-only
+    and invalid proposals are recorded but never counted, so the vote cannot turn an action into an answer or a read."""
     if text is None:
-        return INVALID
+        return INVALID, False
     calls, errors = parse_tool_calls(text)
-    return INVALID if errors else tuple(vote_key(c, specs.get(c["name"])) for c in calls)
+    if errors:
+        return INVALID, False
+    return tuple(vote_key(c, specs.get(c["name"])) for c in calls), decides(calls, specs)
 
 
 def is_empty_result(result) -> bool:
@@ -97,7 +107,8 @@ class ReActAgent(Agent):
         vote_prompts=K (0 = off) votes once per sample, at the first step whose output has a write call or an ask:
         K-1 more proposals for that step come from the same conversation with the system message showing the next
         examples (variant i: ranks i*k+1 .. i*k+k), and the majority proposal (at least 2 votes, ties to the original)
-        is used instead (vote_apply=False only records the vote). Greedy decoding stays; only the used proposal is
+        is used instead (vote_apply=False only records the vote). Only proposals with a write or an ask can win;
+        plain answers, read-only and invalid proposals are recorded but not counted, so the original is the fallback. Greedy decoding stays; only the used proposal is
         sent. The vote is skipped when less than K * min_step_s is left after the original proposal."""
         if vote_prompts and not examples:
             raise ValueError("vote_prompts needs examples (the variants differ only in their examples)")
@@ -148,8 +159,7 @@ class ReActAgent(Agent):
                 return
             text = self.llm.generate(messages, tools, max_time=remaining)
             calls, errors = parse_tool_calls(text)
-            if not voted and any(c["name"] == SYS_TOOL or (specs.get(c["name"]) or {}).get("kind") == "write"
-                                 for c in calls):
+            if not voted and decides(calls, specs):
                 voted = True
                 text = self._vote(task, messages, tools, specs, text, start, budget)
                 calls, errors = parse_tool_calls(text)
@@ -229,8 +239,9 @@ class ReActAgent(Agent):
             fits = self.llm.count_tokens(variant, tools) <= budget  # a variant that does not fit gets no vote
             texts.append(self.llm.generate(variant, tools, max_time=self.time_budget_s - (self.clock() - start))
                          if fits else None)
-        keys = [output_key(t, specs) for t in texts]
-        counts = Counter(k for k in keys if k != INVALID)  # an invalid proposal never wins
+        keyed = [output_key(t, specs) for t in texts]
+        keys = [k for k, _ in keyed]
+        counts = Counter(k for k, eligible in keyed if eligible)  # only write/ask proposals can win (output_key)
         best = max(counts.values(), default=0)
         top = [k for k, n in counts.items() if n == best]
         winner = keys.index(top[0]) if best >= 2 and len(top) == 1 else 0  # the lowest index with the winning key

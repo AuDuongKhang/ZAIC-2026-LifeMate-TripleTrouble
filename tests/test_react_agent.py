@@ -1,6 +1,8 @@
 import dataclasses
 import json
 
+import pytest
+
 from lifemate.agents.react import ReActAgent
 from lifemate.task import Task
 
@@ -541,8 +543,21 @@ def test_vote_off_by_default():
     assert agent.info["vote_prompts"] == 0 and agent.info["vote_apply"] is True
 
 
-def test_vote_needs_examples():
-    import pytest
+def test_plain_answer_majority_does_not_win():
+    agent, llm, env, _ = vote_run([DEL("a1"), "Không làm được.", "Không làm được.", "Xong."])
+    assert env.called == [("alarm.delete", {"alarm_id": "a1"})] and agent.last_trace["steps"][0]["output"] == DEL("a1")
+    vote = agent.last_trace["vote"]
+    assert vote["winner"] == 0 and vote["keys"][1] == vote["keys"][2] == "[]"
 
+
+def test_read_only_majority_does_not_win():
+    read = CALL("alarm.list", {})
+    agent, llm, env, _ = vote_run([DEL("a1"), read, read, "Xong."])
+    assert env.called == [("alarm.delete", {"alarm_id": "a1"})] and len(llm.seen) == 4
+    vote = agent.last_trace["vote"]
+    assert vote["winner"] == 0 and vote["step"] == 0 and vote["keys"][1] == vote["keys"][2] != vote["keys"][0]
+
+
+def test_vote_needs_examples():
     with pytest.raises(ValueError, match="vote_prompts"):
         ReActAgent(llm=FakeLLM([]), vote_prompts=3)
