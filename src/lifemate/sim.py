@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Callable
 
 from .agents.freetext import freetext_rewrite
+from .agents.minimal_reads import minimal_reads_rewrite
 from .compare import compare, load_scores, verdict
 from .data import default_data_root, import_zaic_tools, load_catalog
 from .evaluate import evaluate
@@ -25,7 +26,7 @@ from .utils import parse_kw
 
 Rewrite = Callable[[dict, "dict[str, dict]"], "list[dict] | None"]
 
-REWRITES: dict[str, Callable[..., Rewrite]] = {"freetext": freetext_rewrite}
+REWRITES: dict[str, Callable[..., Rewrite]] = {"freetext": freetext_rewrite, "minimal_reads": minimal_reads_rewrite}
 
 
 def rewrite_run(run: Path, data_root: Path, name: str, rewrite: Rewrite, out_dir: Path | None = None) -> dict:
