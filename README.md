@@ -115,6 +115,23 @@ download buttons and the row to paste into `RESULTS.md`.
 molab notebooks are public by link, so keep secrets and data out of them. molab's GPU (RTX Pro 6000, 96 GB) is much
 stronger than the scoring A30 (24 GB) while its CPU is weaker (4 vs 16 cores), so treat molab timings as optimistic.
 
+## Docker (final solution)
+
+The image runs the shipped system offline on one split. `configs/shipped.json` names the agent and ASR presets,
+extra kwargs and the pinned model revisions; the build downloads exactly those weights and the entry
+(`lifemate.docker_entry`) loads them with the Hugging Face offline flags set.
+
+```bash
+HF_TOKEN=... bash scripts/docker_build.sh            # BuildKit secret; writes lifemate_<sha>.tar.gz + .sha256
+docker run --rm --gpus all --network none \
+    -v $PWD/data/public_test:/data:ro -v $PWD/out:/app/result lifemate:<sha>   # -> out/submission.jsonl, out/meta.json
+```
+
+`/data` is the split folder itself; the split name comes from its `<split>_tools_catalog.json`. The image carries
+`data/train/train.jsonl` and the train catalog for the few-shot bank, never audio or environments. The entry exits
+with an error if the submission does not have one line per sample. Pass `--build-arg BASE=pytorch/pytorch:<tag>` to
+match molab's torch version (CUDA 12.x).
+
 ## Contributing
 
 Never commit to `main` directly: molab runs it, so it must always work. Branch off `main` (`feat/…`, `fix/…`,
@@ -131,6 +148,7 @@ Fill in the leaderboard score by hand for public_test submissions, and say what 
 ```text
 src/lifemate/
   infer.py        runner: per sample ASR -> Task -> agent.run(task, env); writes the run folder
+  docker_entry.py Docker entry: offline run of configs/shipped.json on the split mounted at /data
   evaluate.py     local metric on train, per-group breakdown, RESULTS.md row
   scoring.py      re-implementation of the official metric (assumptions in its docstring)
   task.py         Task: what an agent sees (request, history, context, tool specs)
