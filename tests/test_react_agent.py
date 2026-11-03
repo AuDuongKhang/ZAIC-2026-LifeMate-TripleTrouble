@@ -470,6 +470,11 @@ def test_vote_majority_replaces_the_pick():
     assert llm.seen[3][0] == llm.seen[0][0]  # later steps keep the original prompt
 
 
+def test_vote_variants_keep_the_date_table():
+    agent, llm, env, _ = vote_run([DEL("a1"), DEL("a1"), DEL("a1"), "Xong."], date_hints=True)
+    assert all("Calendar (weeks start on Monday)" in llm.seen[i][0]["content"] for i in range(3))
+
+
 def test_vote_tie_keeps_the_first_prompt():
     agent, llm, env, _ = vote_run([DEL("a1"), DEL("a2"), DEL("a3"), "Xong."])
     assert env.called == [("alarm.delete", {"alarm_id": "a1"})] and agent.last_trace["vote"]["winner"] == 0
