@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -85,6 +86,37 @@ def plot_history(history: list[dict], out: Path) -> None:
     print(f"-> {out / 'training.png'}")
 
 
+def checkpoint_global_step(folder: Path) -> int | None:
+    """Step of a Trainer checkpoint; None without trainer_state.json, which the Trainer writes last (a save cut short)."""
+    state = folder / "trainer_state.json"
+    return json.loads(state.read_text(encoding="utf-8"))["global_step"] if state.exists() else None
+
+
+def resume_checkpoint(out: Path, hub_repo: str | None) -> Path | None:
+    """The newest complete checkpoint: the latest local checkpoint-*, or <hub_repo>/last-checkpoint when it is newer or
+    the session has none (a new molab session). Only the hub's trainer_state.json is read before deciding."""
+    local = max((c for c in out.glob("checkpoint-*") if checkpoint_global_step(c) is not None),
+                key=checkpoint_global_step, default=None)
+    local_step = None if local is None else checkpoint_global_step(local)
+    if hub_repo:
+        from huggingface_hub import hf_hub_download, snapshot_download
+
+        token = os.environ.get("HF_TOKEN")
+        try:
+            hub_state = Path(hf_hub_download(hub_repo, "last-checkpoint/trainer_state.json", token=token))
+            hub_step = json.loads(hub_state.read_text(encoding="utf-8"))["global_step"]
+        except Exception as e:  # no checkpoint pushed yet (or no --hub-checkpoints)
+            print(f"{hub_repo} has no usable last-checkpoint: {type(e).__name__}: {e}", flush=True)
+            hub_step = None
+        if hub_step is not None and (local_step is None or hub_step > local_step):
+            shutil.rmtree(out / "last-checkpoint", ignore_errors=True)
+            snapshot_download(hub_repo, allow_patterns=["last-checkpoint/*"], local_dir=out, token=token)
+            print(f"resume source: {hub_repo} last-checkpoint (step {hub_step})"
+                  + ("" if local_step is None else f", newer than the local step {local_step}"), flush=True)
+            return out / "last-checkpoint"
+    return local
+
+
 def main(argv: list[str] | None = None) -> Path:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--model", default="Qualcomm-AI-Research/PhoASR-whisper-small")
@@ -105,7 +137,8 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--hub-checkpoints", action="store_true",
                     help="also push every checkpoint with its optimizer state (resumable after a lost session, but "
                          "~3x the model size per push: slow for large models); default: push the final model only")
-    ap.add_argument("--resume", action="store_true", help="continue from the last checkpoint (local, else --hub-repo)")
+    ap.add_argument("--resume", action="store_true",
+                    help="continue from the newest complete checkpoint (local or --hub-repo)")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args(argv)
 
@@ -175,16 +208,12 @@ def main(argv: list[str] | None = None) -> Path:
 
     resume = None
     if args.resume:
-        local = sorted(args.out.glob("checkpoint-*"), key=lambda p: int(p.name.split("-")[1]))
-        if local:
-            resume = str(local[-1])
-        elif args.hub_repo:
-            from huggingface_hub import snapshot_download
-            snapshot_download(args.hub_repo, allow_patterns=["last-checkpoint/*"], local_dir=args.out,
-                              token=os.environ.get("HF_TOKEN"))
-            resume = str(args.out / "last-checkpoint")
+        resume = resume_checkpoint(args.out, args.hub_repo)
+        if resume is None:
+            raise SystemExit(f"--resume: no complete checkpoint in {args.out}"
+                             + (f" nor {args.hub_repo} last-checkpoint" if args.hub_repo else ""))
         print(f"resuming from {resume}", flush=True)
-    trainer.train(resume_from_checkpoint=resume)
+    trainer.train(resume_from_checkpoint=None if resume is None else str(resume))
 
     final = args.out / "final"
     trainer.save_model(str(final))  # the best checkpoint by eval WER (load_best_model_at_end)

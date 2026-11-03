@@ -178,7 +178,7 @@ def _(mo):
     batch = mo.ui.number(start=1, stop=64, value=8, label="batch")
     grad_accum = mo.ui.number(start=1, stop=16, value=2, label="grad accum")
     eval_steps = mo.ui.number(start=25, stop=5000, step=25, value=100, label="eval steps")
-    resume = mo.ui.checkbox(value=False, label="resume from the last local checkpoint")
+    resume = mo.ui.checkbox(value=False, label="resume from the newest checkpoint (local or HF)")
     train_extra = mo.ui.text(value="", label="extra train_asr args (e.g. --grad-checkpointing --limit 64)", full_width=True)
     start = mo.ui.run_button(label="Start training")
     stop = mo.ui.run_button(label="Stop")

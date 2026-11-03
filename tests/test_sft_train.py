@@ -1,6 +1,7 @@
 """End-to-end trainer check on a tiny random Qwen3 (CPU, a few seconds): a run stopped and resumed gives the same
 log as an uninterrupted one, and the adapter merges. Skipped without torch + peft (they are not in requirements.txt)."""
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -159,4 +160,58 @@ def test_resume_takes_the_newer_hub_checkpoint_over_a_stale_local_one(tiny, tmp_
     capsys.readouterr()
     _train(tiny, part, "--resume", "--hf-repo", "me/x")
     assert "resuming part at step 2" in capsys.readouterr().out
+    assert [r["loss"] for r in _log(part)] == pytest.approx([r["loss"] for r in _log(full)], rel=1e-4)
+
+
+def _fake_hub(hub):
+    def fake_download(repo_id, allow_patterns, local_dir, ignore_patterns=(), **kw):
+        shutil.copytree(hub / "checkpoints", Path(local_dir) / "checkpoints",
+                        ignore=shutil.ignore_patterns(*ignore_patterns))
+    return fake_download
+
+
+def test_merge_takes_the_hub_adapter_when_the_local_folder_is_incomplete(tiny, tmp_path, monkeypatch, capsys):
+    import huggingface_hub
+
+    from lifemate.sft import merge
+
+    hub = tmp_path / "hub"
+    shutil.copytree(_train(tiny, tmp_path / "run", "--max-steps", "1"), hub / "checkpoints" / "run" / "last")
+    local = tmp_path / "session" / "run" / "last"
+    local.mkdir(parents=True)
+    (local / "state.json").write_text((hub / "checkpoints" / "run" / "last" / "state.json").read_text())  # cut short
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", _fake_hub(hub))
+    out = merge.main(["--adapter", str(local), "--adapter-repo", "me/x", "--out", str(tmp_path / "merged")])
+    assert "adapter source: me/x checkpoints/run/last (step 1)" in capsys.readouterr().out
+    assert not (local / "optimizer.pt").exists()  # merging needs the adapter only
+    model = transformers.AutoModelForCausalLM.from_pretrained(out)
+    assert not any("lora" in name for name, _ in model.named_parameters())
+
+
+def test_merge_without_an_adapter_anywhere_says_so(tiny, tmp_path, monkeypatch):
+    import huggingface_hub
+
+    from lifemate.sft import merge
+
+    (tmp_path / "hub" / "checkpoints").mkdir(parents=True)
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", _fake_hub(tmp_path / "hub"))
+    with pytest.raises(SystemExit, match="no complete adapter"):
+        merge.main(["--adapter", str(tmp_path / "run" / "last"), "--adapter-repo", "me/x", "--out", str(tmp_path / "m")])
+
+
+def test_resume_replaces_an_incomplete_local_checkpoint_with_the_hub_one(tiny, tmp_path, monkeypatch, capsys):
+    import huggingface_hub
+
+    full = tmp_path / "full"
+    _train(tiny, full)
+    part, hub = tmp_path / "part", tmp_path / "hub"
+    _train(tiny, part, "--max-steps", "1")
+    shutil.copytree(part / "last", hub / "checkpoints" / "part" / "last")
+    _train(tiny, part, "--max-steps", "2", "--resume")
+    (part / "last" / "adapter_model.safetensors").unlink()  # newer than the hub, but the session died during a save
+    monkeypatch.setattr(huggingface_hub, "HfApi", FakeHfApi)
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", _fake_hub(hub))
+    capsys.readouterr()
+    _train(tiny, part, "--resume", "--hf-repo", "me/x")
+    assert "resuming part at step 1" in capsys.readouterr().out
     assert [r["loss"] for r in _log(part)] == pytest.approx([r["loss"] for r in _log(full)], rel=1e-4)

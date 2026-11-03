@@ -11,7 +11,8 @@ The loss is the mean cross-entropy over the labelled (assistant) tokens of each 
 at those positions, so a 12k-token record does not need a full-vocabulary logit tensor. A checkpoint (adapter,
 optimizer, scheduler, RNG state and data position) is written every --save-minutes and at the end to <out>/last and
 uploaded to <hf-repo>/checkpoints/<run>/last. --resume continues from it with the same data order and LR schedule;
-with --hf-repo the HF copy is used (a local copy only when it is newer, e.g. after a failed upload).
+with --hf-repo the HF copy is used (a local copy only when it is complete and newer, e.g. after a failed
+upload).
 <out>/train_log.jsonl gets one line per optimizer step; loss.png, lr.png and grad_norm.png are redrawn at each save.
 --max-steps only stops early (smoke tests): the LR schedule is always that of the full run.
 
@@ -33,7 +34,7 @@ from pathlib import Path
 from ..utils import seed_everything
 from .plots import plot_log, read_log
 from .records import RECORDS_DIR
-from .state import TrainState, batches, total_steps, truncate_log
+from .state import TrainState, batches, checkpoint_step, total_steps, truncate_log
 from .tokenize import MAX_LEN, encode_record
 
 BASE_MODEL = "Qwen/Qwen3-4B-Instruct-2507"
@@ -52,11 +53,6 @@ def load_encoded(name: str, tokenizer, max_len: int, records_dir: Path = RECORDS
     print(f"{path.name}: {len(encoded)} records, {len(records) - len(encoded)} skipped as longer than {max_len} "
           f"tokens, {tokens} tokens", flush=True)
     return encoded
-
-
-def checkpoint_step(folder: Path) -> int | None:
-    state = folder / "state.json"
-    return TrainState.from_json(state.read_text(encoding="utf-8")).step if state.exists() else None
 
 
 def labelled_count(enc: dict) -> int:
@@ -120,8 +116,8 @@ def main(argv: list[str] | None = None) -> Path:
         print(f"resume source: local {ckpt} (no --hf-repo)", flush=True)
     records_sha = hashlib.sha256((args.records_dir / f"{args.records}.jsonl").read_bytes()).hexdigest()[:16]
     if args.resume:
-        if not ckpt.exists():
-            raise SystemExit(f"--resume: no checkpoint at {ckpt}" + (f" nor in {args.hf_repo}" if api else ""))
+        if checkpoint_step(ckpt) is None:  # also a folder left incomplete by a dead session
+            raise SystemExit(f"--resume: no complete checkpoint at {ckpt}" + (f" nor in {args.hf_repo}" if api else ""))
         saved = json.loads((ckpt / "run_config.json").read_text(encoding="utf-8"))
         if saved.get("records_sha") != records_sha:  # another file would shift the data order
             raise SystemExit(f"--resume: train_records/{args.records}.jsonl differs from the one the checkpoint was "

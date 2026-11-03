@@ -31,6 +31,20 @@ class TrainState:
         return cls(**json.loads(text))
 
 
+# Files of a checkpoint folder written by lifemate.sft.train: merging needs the adapter, resuming needs them all.
+ADAPTER_FILES = ("adapter_config.json", "adapter_model.safetensors")
+MERGE_FILES = ADAPTER_FILES + ("state.json",)
+RESUME_FILES = MERGE_FILES + ("run_config.json", "optimizer.pt", "scheduler.pt", "rng.pt")
+
+
+def checkpoint_step(folder: Path, needs: tuple[str, ...] = RESUME_FILES) -> int | None:
+    """Optimizer step of the checkpoint in folder; None when it is missing or lacks one of needs (a save or a copy
+    cut short, e.g. a molab session that died), so callers fall back to the HF copy instead of failing on it."""
+    if not all((folder / name).exists() for name in needs):
+        return None
+    return TrainState.from_json((folder / "state.json").read_text(encoding="utf-8")).step
+
+
 def batches(n: int, state: TrainState, micro_bs: int, epochs: int) -> Iterator[list[int]]:
     """Micro-batches of example indices from (state.epoch, state.pos) to the end of the last epoch. state advances
     before each yield, so a checkpoint saved after the optimizer step that used a batch resumes after it."""

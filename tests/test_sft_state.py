@@ -58,3 +58,20 @@ def test_plot_log_writes_pngs(tmp_path):
     log.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     plot_log(log, tmp_path)
     assert all((tmp_path / f).exists() for f in ("loss.png", "lr.png", "grad_norm.png"))
+
+
+def test_checkpoint_step_ignores_an_incomplete_folder(tmp_path):
+    from lifemate.sft.state import ADAPTER_FILES, RESUME_FILES, checkpoint_step
+
+    assert checkpoint_step(tmp_path / "missing") is None
+    ckpt = tmp_path / "last"
+    ckpt.mkdir()
+    (ckpt / "state.json").write_text(TrainState(epoch=1, pos=3, step=7, seed=0).to_json(), encoding="utf-8")
+    assert checkpoint_step(ckpt) is None  # a save or copy cut short: state.json alone is not a checkpoint
+    for name in ADAPTER_FILES:
+        (ckpt / name).write_text("", encoding="utf-8")
+    assert checkpoint_step(ckpt) is None
+    assert checkpoint_step(ckpt, ADAPTER_FILES + ("state.json",)) == 7  # enough to merge
+    for name in set(RESUME_FILES) - set(ADAPTER_FILES) - {"state.json"}:
+        (ckpt / name).write_text("", encoding="utf-8")
+    assert checkpoint_step(ckpt) == 7
