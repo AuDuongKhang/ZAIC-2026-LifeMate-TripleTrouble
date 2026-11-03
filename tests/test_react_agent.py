@@ -384,3 +384,46 @@ def test_refusal_check_off_by_default():
     agent.run(PARKING_TASK, FakeEnv())
     assert len(llm.seen) == 1 and agent.info["refusal_check"] is False and agent.info["refusal_min_hits"] == 1
     assert "refusal_check" not in agent.last_trace
+
+
+SMS_SPEC = {"name": "sms.send", "description": "Gửi tin nhắn",
+            "parameters": {"type": "object", "properties": {
+                "phone_number": {"type": "string"},
+                "content": {"type": "string", "x-match": "fuzzy"}}}}
+SMS_TASK = dataclasses.replace(TASK, request="nhắn cho mẹ là tối nay về ăn cơm", tools=[SMS_SPEC])
+LEAK = "Not sent: content repeats your closing reply. Write the content the user asked for."
+
+
+def test_closing_text_as_content_is_rejected():
+    env = FakeEnv()
+    llm = FakeLLM([CALL("sms.send", {"phone_number": "0901", "content": "Đã xong."}), "Xong."])
+    agent = ReActAgent(llm=llm, leak_guard=True)
+    agent.run(SMS_TASK, env)
+    assert env.called == [] and llm.seen[1][-1] == {"role": "tool", "content": LEAK}
+    assert agent.last_trace["steps"][0]["rejected"] == ["sms.send: content repeats your closing reply"]
+    # folded equality: case, diacritics and punctuation do not matter; the refusal text counts too
+    env = FakeEnv()
+    llm = FakeLLM([CALL("sms.send", {"content": "da xong"}), CALL("sms.send", {"content": "Xin lỗi, tôi không làm được việc này"}),
+                   "Xong."])
+    ReActAgent(llm=llm, leak_guard=True).run(SMS_TASK, env)
+    assert env.called == []
+
+
+def test_real_content_is_sent():
+    env = FakeEnv()
+    args = {"phone_number": "0901", "content": "Tối nay về ăn cơm"}
+    ReActAgent(llm=FakeLLM([CALL("sms.send", args), "Xong."]), leak_guard=True).run(SMS_TASK, env)
+    assert env.called == [("sms.send", args)]
+    # a non-fuzzy param that happens to equal the closing text is left alone
+    env = FakeEnv()
+    args = {"phone_number": "Đã xong.", "content": "Tối nay về ăn cơm"}
+    ReActAgent(llm=FakeLLM([CALL("sms.send", args), "Xong."]), leak_guard=True).run(SMS_TASK, env)
+    assert env.called == [("sms.send", args)]
+
+
+def test_leak_guard_off_by_default():
+    env, llm = FakeEnv(), FakeLLM([CALL("sms.send", {"content": "Đã xong."}), "Xong."])
+    agent = ReActAgent(llm=llm)
+    agent.run(SMS_TASK, env)
+    assert env.called == [("sms.send", {"content": "Đã xong."})] and agent.info["leak_guard"] is False
+    assert ReActAgent(llm=FakeLLM([]), leak_guard=True).info["leak_guard"] is True

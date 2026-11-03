@@ -8,13 +8,10 @@ import json
 
 from ..agents.fewshot import ExampleBank
 from ..agents.parsing import BLOCK, parse_tool_calls
-from ..agents.prompts import DEFAULT_PROMPT
+from ..agents.prompts import DEFAULT_PROMPT, FINAL_TEXT, REFUSAL_TEXT
 from ..agents.react import ReActAgent
 from ..evaluate import label_kind
 from ..task import Task
-
-FINAL_TEXT = "Đã xong."  # act samples end on this after their last call
-REFUSAL_TEXT = "Xin lỗi, tôi không làm được việc này."  # out-of-scope samples answer this without any call
 
 
 class ReplayLLM:
