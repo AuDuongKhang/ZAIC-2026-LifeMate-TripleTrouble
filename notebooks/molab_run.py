@@ -41,6 +41,7 @@ def _(mo):
        the ASR caches in this session) and press **Run**. Add a new setup as one line in presets.json on the branch.
        The HF model owner list holds the HF token's user and orgs; it fills `${HF_MODEL_OWNER}` in presets.
 
+    On `train`, **Train subset** picks `dev`, `holdout` or `pool` (`all` = the whole split); it is ignored on `public_test`.
     On `train` the run is scored locally; on `public_test` download `submission.jsonl` and submit it on the portal.
 
     **Command** (optional) runs one other step instead of infer, as `python -m lifemate.<command>` from the work folder,
@@ -63,14 +64,15 @@ def _(mo, os):
     hf_token = mo.ui.text(kind="password", value=os.environ.get("HF_TOKEN", ""), label="HF token (read)")
     data_url = mo.ui.text(value=os.environ.get("LIFEMATE_DATA_URL", ""), label="or data zip URL", full_width=True)
     split = mo.ui.dropdown(["train", "public_test"], value="train", label="Split")
+    subset = mo.ui.dropdown(["all", "dev", "holdout", "pool"], value="all", label="Train subset (--subset)")
     limit = mo.ui.number(start=0, stop=100000, value=0, label="--limit (0 = all)")
     extra = mo.ui.text(value="", label="extra infer args", full_width=True)
     command = mo.ui.text(value="", label="or command instead of infer (lifemate.<command> args)", full_width=True)
     pull = mo.ui.run_button(label="Pull repo")
     fetch = mo.ui.run_button(label="Fetch data")
     mo.vstack([repo_url, mo.hstack([branch, token]), mo.hstack([hf_repo, hf_token]), data_url,
-               mo.hstack([split, limit]), extra, command, mo.hstack([pull, fetch], justify="start")])
-    return (branch, command, data_url, extra, fetch, hf_repo, hf_token, limit, pull, repo_url, split, token)
+               mo.hstack([split, subset, limit]), extra, command, mo.hstack([pull, fetch], justify="start")])
+    return (branch, command, data_url, extra, fetch, hf_repo, hf_token, limit, pull, repo_url, split, subset, token)
 
 
 @app.cell
@@ -183,7 +185,7 @@ def _(commit, hf_token, json, mo, os, repo_dir, split, subprocess, sys, work):
 
 @app.cell
 def _(agent_preset, asr_preset, command, commit, data_root, datetime, extra, hf_model_owner, hf_token, limit, mo, os,
-      repo_dir, run, shlex, split, subprocess, sys, work):
+      repo_dir, run, shlex, split, subprocess, subset, sys, work):
     mo.stop(not run.value, mo.md("_Press **Run**._"))
     _env = {**os.environ, "PYTHONPATH": str(repo_dir / "src"), "LIFEMATE_DATA_ROOT": str(data_root), "PYTHONUTF8": "1",
             "LIFEMATE_ASR_CACHE": str(work / "asr_cache")}
@@ -215,9 +217,12 @@ def _(agent_preset, asr_preset, command, commit, data_root, datetime, extra, hf_
         if not (data_root / split.value).is_dir():
             raise RuntimeError(f"no {split.value} data in {data_root}: press **Fetch data** first")
         _tag = f"{agent_preset.value}_{asr_preset.value}".replace(":", "-")
-        run_dir = work / "runs" / f"{datetime.now():%Y%m%d-%H%M%S}_{commit}_{split.value}_{_tag}"
+        _subset = subset.value if split.value == "train" and subset.value != "all" else None  # --subset is train only
+        run_dir = work / "runs" / (f"{datetime.now():%Y%m%d-%H%M%S}_{commit}_{split.value}_{_tag}"
+                                   + (f"_{_subset}" if _subset else ""))
         _cmd = [sys.executable, "-m", "lifemate.infer", "--split", split.value, "--agent-preset", agent_preset.value,
-                "--asr-preset", asr_preset.value, "--out", str(run_dir), *shlex.split(extra.value)]
+                "--asr-preset", asr_preset.value, "--out", str(run_dir),
+                *(["--subset", _subset] if _subset else []), *shlex.split(extra.value)]
         if limit.value:
             _cmd += ["--limit", str(int(limit.value))]
         _stream(_cmd)
