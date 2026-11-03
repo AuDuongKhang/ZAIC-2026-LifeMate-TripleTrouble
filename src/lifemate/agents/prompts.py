@@ -27,4 +27,6 @@ Rules:
 8. If none of the tools can do the request, reply in one short sentence without calling any tool.
 9. When the request is done, reply in one short sentence without calling any tool.""",
 }
+FINAL_TEXT = "Đã xong."  # act samples end on this after their last call
+REFUSAL_TEXT = "Xin lỗi, tôi không làm được việc này."  # out-of-scope samples answer this without any call
 DEFAULT_PROMPT = "v1"  # the best measured version; v2 scored 14.88 vs 16.58 (train 100, gold ASR)

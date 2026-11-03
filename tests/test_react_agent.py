@@ -280,3 +280,150 @@ def test_hf_llm_loads_tokenizer_and_weights_at_the_revision(monkeypatch):
     HFChatLLM("team/m", revision="abc123")
     assert [(k, n, kw.get("revision")) for k, n, kw in calls] == [("tok", "team/m", "abc123"),
                                                                    ("model", "team/m", "abc123")]
+
+
+EMPTY_FLIGHTS = {"flights.search": {"ok": True, "flights": []}}
+HINT = ("\nNo results. Try once more with other values: another date (up to 7 days away), fewer optional filters or a "
+        "shorter query. If that also finds nothing, reply in one short sentence without calling any tool.")
+SEARCH = CALL("flights.search", {"to": "Hue"})
+
+
+def test_empty_result_gets_a_hint():
+    llm = FakeLLM([SEARCH, "Không có chuyến bay."])
+    ReActAgent(llm=llm, empty_hint=True).run(TASK, FakeEnv(results=EMPTY_FLIGHTS))
+    last = llm.seen[1][-1]
+    assert last["role"] == "tool" and last["content"] == json.dumps({"ok": True, "flights": []}) + HINT
+
+
+def test_empty_hint_changes_only_the_message():
+    outputs = [SEARCH, CALL("flights.search", {"to": "Hue", "date": "2026-11-14"}), SEARCH, "Xong."]
+    runs = []
+    for flag in (False, True):
+        env = FakeEnv(results=EMPTY_FLIGHTS)
+        ReActAgent(llm=FakeLLM(outputs), empty_hint=flag).run(TASK, env)
+        runs.append(env.called)
+    assert runs[0] == runs[1] and len(runs[0]) == 2
+
+
+def test_repeat_of_an_empty_call_gets_the_empty_text():
+    llm = FakeLLM([SEARCH, SEARCH, "Xong."])
+    ReActAgent(llm=llm, empty_hint=True).run(TASK, FakeEnv(results=EMPTY_FLIGHTS))
+    assert llm.seen[2][-1]["content"] == "Already called and it returned nothing. Change the arguments as suggested, or stop."
+    other = FakeLLM([CALL("alarm.list", {})] * 2 + ["Xong."])  # a repeat of a non-empty call keeps today's text
+    ReActAgent(llm=other, empty_hint=True).run(TASK, FakeEnv())
+    assert other.seen[2][-1]["content"] == "Already called; reuse the earlier result."
+
+
+def test_empty_hint_off_by_default():
+    llm = FakeLLM([SEARCH, SEARCH, "Xong."])
+    agent = ReActAgent(llm=llm)
+    agent.run(TASK, FakeEnv(results=EMPTY_FLIGHTS))
+    assert llm.seen[1][-1]["content"] == json.dumps({"ok": True, "flights": []})
+    assert llm.seen[2][-1]["content"] == "Already called; reuse the earlier result."
+    assert agent.info["empty_hint"] is False
+
+
+def test_is_empty_result():
+    from lifemate.agents.react import is_empty_result
+
+    assert is_empty_result([]) and is_empty_result({"ok": True, "flights": []})
+    assert is_empty_result({"ok": True, "a": [], "b": []})
+    assert not is_empty_result({"ok": True}) and not is_empty_result({"ok": True, "done": False})
+    assert not is_empty_result({"flights": [], "hotels": [{"id": 1}]}) and not is_empty_result([{"id": 1}])
+    assert not is_empty_result("") and not is_empty_result(None)
+
+
+REFUSE = "Không làm được."
+END_SPEC = {"name": "parking.end_session", "description": "Kết thúc phiên gửi xe",
+            "parameters": {"type": "object", "properties": {}}}
+PARKING_TASK = dataclasses.replace(TASK, request="kết thúc phiên gửi xe", tools=[END_SPEC])
+CHECK = ("Check again: the installed tool(s) parking.end_session may handle this request. If one does, call it. "
+         "If the request is out of scope or the user cancelled it, reply in one short sentence without calling any tool.")
+
+
+def test_refusal_check_fires_once():
+    llm, env = FakeLLM([REFUSE, REFUSE]), FakeEnv()
+    agent = ReActAgent(llm=llm, refusal_check=True)
+    agent.run(PARKING_TASK, env)
+    assert len(llm.seen) == 2 and env.called == [] and agent.last_trace["stop"] == "no_call"
+    assert llm.seen[1][-2:] == [{"role": "assistant", "content": REFUSE, "tool_calls": []},
+                                {"role": "user", "content": CHECK}]
+    assert agent.last_trace["refusal_check"] == ["parking.end_session"]
+
+
+def test_refusal_check_lets_the_model_call():
+    llm, env = FakeLLM([REFUSE, CALL("parking.end_session", {}), "Xong."]), FakeEnv()
+    ReActAgent(llm=llm, refusal_check=True).run(PARKING_TASK, env)
+    assert env.called == [("parking.end_session", {})] and len(llm.seen) == 3
+
+
+def test_no_refusal_check_after_a_call():
+    llm = FakeLLM([CALL("parking.end_session", {}), "Xong."])
+    agent = ReActAgent(llm=llm, refusal_check=True)
+    agent.run(PARKING_TASK, FakeEnv())
+    assert len(llm.seen) == 2 and not any(m["content"] == CHECK for m in llm.seen[1] if m["role"] == "user")
+    assert "refusal_check" not in agent.last_trace
+
+
+def test_no_refusal_check_without_a_matching_tool():
+    llm = FakeLLM([REFUSE])
+    agent = ReActAgent(llm=llm, refusal_check=True)
+    agent.run(dataclasses.replace(PARKING_TASK, request="bật đèn phòng khách"), FakeEnv())
+    assert len(llm.seen) == 1 and "refusal_check" not in agent.last_trace
+
+
+def test_refusal_min_hits_is_passed_on():
+    llm = FakeLLM([REFUSE])
+    ReActAgent(llm=llm, refusal_check=True, refusal_min_hits=5).run(PARKING_TASK, FakeEnv())
+    assert len(llm.seen) == 1
+
+
+def test_refusal_check_off_by_default():
+    llm = FakeLLM([REFUSE, REFUSE])
+    agent = ReActAgent(llm=llm)
+    agent.run(PARKING_TASK, FakeEnv())
+    assert len(llm.seen) == 1 and agent.info["refusal_check"] is False and agent.info["refusal_min_hits"] == 1
+    assert "refusal_check" not in agent.last_trace
+
+
+SMS_SPEC = {"name": "sms.send", "description": "Gửi tin nhắn",
+            "parameters": {"type": "object", "properties": {
+                "phone_number": {"type": "string"},
+                "content": {"type": "string", "x-match": "fuzzy"}}}}
+SMS_TASK = dataclasses.replace(TASK, request="nhắn cho mẹ là tối nay về ăn cơm", tools=[SMS_SPEC])
+LEAK = "Not sent: content repeats your closing reply. Write the content the user asked for."
+
+
+def test_closing_text_as_content_is_rejected():
+    env = FakeEnv()
+    llm = FakeLLM([CALL("sms.send", {"phone_number": "0901", "content": "Đã xong."}), "Xong."])
+    agent = ReActAgent(llm=llm, leak_guard=True)
+    agent.run(SMS_TASK, env)
+    assert env.called == [] and llm.seen[1][-1] == {"role": "tool", "content": LEAK}
+    assert agent.last_trace["steps"][0]["rejected"] == ["sms.send: content repeats your closing reply"]
+    # folded equality: case, diacritics and punctuation do not matter; the refusal text counts too
+    env = FakeEnv()
+    llm = FakeLLM([CALL("sms.send", {"content": "da xong"}), CALL("sms.send", {"content": "Xin lỗi, tôi không làm được việc này"}),
+                   "Xong."])
+    ReActAgent(llm=llm, leak_guard=True).run(SMS_TASK, env)
+    assert env.called == []
+
+
+def test_real_content_is_sent():
+    env = FakeEnv()
+    args = {"phone_number": "0901", "content": "Tối nay về ăn cơm"}
+    ReActAgent(llm=FakeLLM([CALL("sms.send", args), "Xong."]), leak_guard=True).run(SMS_TASK, env)
+    assert env.called == [("sms.send", args)]
+    # a non-fuzzy param that happens to equal the closing text is left alone
+    env = FakeEnv()
+    args = {"phone_number": "Đã xong.", "content": "Tối nay về ăn cơm"}
+    ReActAgent(llm=FakeLLM([CALL("sms.send", args), "Xong."]), leak_guard=True).run(SMS_TASK, env)
+    assert env.called == [("sms.send", args)]
+
+
+def test_leak_guard_off_by_default():
+    env, llm = FakeEnv(), FakeLLM([CALL("sms.send", {"content": "Đã xong."}), "Xong."])
+    agent = ReActAgent(llm=llm)
+    agent.run(SMS_TASK, env)
+    assert env.called == [("sms.send", {"content": "Đã xong."})] and agent.info["leak_guard"] is False
+    assert ReActAgent(llm=FakeLLM([]), leak_guard=True).info["leak_guard"] is True
