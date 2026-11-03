@@ -280,3 +280,54 @@ def test_hf_llm_loads_tokenizer_and_weights_at_the_revision(monkeypatch):
     HFChatLLM("team/m", revision="abc123")
     assert [(k, n, kw.get("revision")) for k, n, kw in calls] == [("tok", "team/m", "abc123"),
                                                                    ("model", "team/m", "abc123")]
+
+
+EMPTY_FLIGHTS = {"flights.search": {"ok": True, "flights": []}}
+HINT = ("\nNo results. Try once more with other values: another date (up to 7 days away), fewer optional filters or a "
+        "shorter query. If that also finds nothing, reply in one short sentence without calling any tool.")
+SEARCH = CALL("flights.search", {"to": "Hue"})
+
+
+def test_empty_result_gets_a_hint():
+    llm = FakeLLM([SEARCH, "Không có chuyến bay."])
+    ReActAgent(llm=llm, empty_hint=True).run(TASK, FakeEnv(results=EMPTY_FLIGHTS))
+    last = llm.seen[1][-1]
+    assert last["role"] == "tool" and last["content"] == json.dumps({"ok": True, "flights": []}) + HINT
+
+
+def test_empty_hint_changes_only_the_message():
+    outputs = [SEARCH, CALL("flights.search", {"to": "Hue", "date": "2026-11-14"}), SEARCH, "Xong."]
+    runs = []
+    for flag in (False, True):
+        env = FakeEnv(results=EMPTY_FLIGHTS)
+        ReActAgent(llm=FakeLLM(outputs), empty_hint=flag).run(TASK, env)
+        runs.append(env.called)
+    assert runs[0] == runs[1] and len(runs[0]) == 2
+
+
+def test_repeat_of_an_empty_call_gets_the_empty_text():
+    llm = FakeLLM([SEARCH, SEARCH, "Xong."])
+    ReActAgent(llm=llm, empty_hint=True).run(TASK, FakeEnv(results=EMPTY_FLIGHTS))
+    assert llm.seen[2][-1]["content"] == "Already called and it returned nothing. Change the arguments as suggested, or stop."
+    other = FakeLLM([CALL("alarm.list", {})] * 2 + ["Xong."])  # a repeat of a non-empty call keeps today's text
+    ReActAgent(llm=other, empty_hint=True).run(TASK, FakeEnv())
+    assert other.seen[2][-1]["content"] == "Already called; reuse the earlier result."
+
+
+def test_empty_hint_off_by_default():
+    llm = FakeLLM([SEARCH, SEARCH, "Xong."])
+    agent = ReActAgent(llm=llm)
+    agent.run(TASK, FakeEnv(results=EMPTY_FLIGHTS))
+    assert llm.seen[1][-1]["content"] == json.dumps({"ok": True, "flights": []})
+    assert llm.seen[2][-1]["content"] == "Already called; reuse the earlier result."
+    assert agent.info["empty_hint"] is False
+
+
+def test_is_empty_result():
+    from lifemate.agents.react import is_empty_result
+
+    assert is_empty_result([]) and is_empty_result({"ok": True, "flights": []})
+    assert is_empty_result({"ok": True, "a": [], "b": []})
+    assert not is_empty_result({"ok": True}) and not is_empty_result({"ok": True, "done": False})
+    assert not is_empty_result({"flights": [], "hotels": [{"id": 1}]}) and not is_empty_result([{"id": 1}])
+    assert not is_empty_result("") and not is_empty_result(None)
