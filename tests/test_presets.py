@@ -143,10 +143,19 @@ def test_infer_builds_the_fewshot_bank_from_the_given_data_root(tmp_path, monkey
 
 @pytest.mark.parametrize("name", ["sft-v1", "sft-v2", "sft-final"])
 def test_sft_presets_name_their_merged_model_and_four_examples(name):
-    assert resolve("agent", name, {"HF_MODEL_OWNER": "team"}) == (
-        "react", {"model": f"team/lifemate-{name}", "examples": 4})
+    backend, kw = resolve("agent", name, {"HF_MODEL_OWNER": "team"})
+    assert backend == "react" and kw["model"] == f"team/lifemate-{name}" and kw["examples"] == 4
 
 
 def test_fine_tuned_asr_presets_name_their_hub_model():
     for name in ("pho-large-ft-a", "pho-large-ft-b"):
         assert resolve("asr", name, {"HF_MODEL_OWNER": "team"}) == ("whisper", {"model": f"team/{name}"})
+
+
+def test_check_refs_presets():
+    """check_refs passed its gate on sft-v2: holdout +0.60 [+0.03, +1.47], dev +0.0 (all 300 samples unchanged)."""
+    env = {"HF_MODEL_OWNER": "team"}
+    assert resolve("agent", "sft-v2-refs", env) == (
+        "react", {"model": "team/lifemate-sft-v2", "examples": 4, "check_refs": True})
+    assert resolve("agent", "sft-final", env) == (
+        "react", {"model": "team/lifemate-sft-final", "examples": 4, "check_refs": True})
