@@ -153,6 +153,15 @@ def test_agent_info_records_prompt_and_options():
     assert agent.info["prompt"] == "v1" and agent.info["check_refs"] is False
 
 
+def test_date_hints_reach_the_system_prompt_and_info():
+    llm = FakeLLM(["Xong."])
+    agent = ReActAgent(llm=llm, date_hints=True)
+    agent.run(TASK, FakeEnv())
+    assert agent.info["date_hints"] is True
+    assert "Calendar (weeks start on Monday):" in llm.seen[0][0]["content"]
+    assert ReActAgent(llm=FakeLLM([])).info["date_hints"] is False
+
+
 def test_trace_records_rejections_and_stop_reason():
     llm = FakeLLM([CALL("alarm.delete", {}), "Xong."])
     agent = ReActAgent(llm=llm)

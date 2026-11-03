@@ -69,6 +69,15 @@ def test_records_cli_uses_pool_only(train_samples, tmp_path):
     assert len(rows) == 30 and all(r["id"] in pool and r["source"] == "gold" for r in rows)
 
 
+def test_records_cli_date_hints_put_the_table_in_the_system_prompt(train_samples, tmp_path):
+    from lifemate.agents.dates import date_table
+    out = records.main(["--name", "t", "--subset", "pool", "--limit", "3", "--examples", "0", "--tokenizer", "none",
+                        "--date-hints", "--out-dir", str(tmp_path)])
+    s = {x["id"]: x for x in train_samples}
+    for row in map(json.loads, out.read_text(encoding="utf-8").splitlines()):
+        assert row["messages"][0]["content"].endswith("\n\n" + date_table(s[row["id"]]["context"]["current_time"]))
+
+
 def _write_cache(root, name, samples, text_of):
     from lifemate.asr.cached import cache_path, sample_clips
 

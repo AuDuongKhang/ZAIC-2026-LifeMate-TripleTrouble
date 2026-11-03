@@ -51,6 +51,7 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--prompt", default=DEFAULT_PROMPT, choices=sorted(PROMPTS))
     ap.add_argument("--examples", type=int, default=4, help="few-shot examples in the system prompt (0 = none)")
+    ap.add_argument("--date-hints", action="store_true", help="add the weekday table to the system prompt")
     ap.add_argument("--limit", type=int, default=None, help="first N samples of the subset only")
     ap.add_argument("--tokenizer", default="Qwen/Qwen3-4B-Instruct-2507", help="for the token report; 'none' skips it")
     ap.add_argument("--data-root", type=Path, default=default_data_root())
@@ -84,7 +85,7 @@ def main(argv: list[str] | None = None) -> Path:
             for i, (asr, source) in enumerate(sources):
                 task = build_task(sample, asr, catalog, args.data_root, "train")  # CachedASR: KeyError on a missing clip
                 env = zaic_tools.ToolEnv("train", sample["id"], root=args.data_root)  # fresh env per record
-                rec = replay(sample, task, env, args.prompt, args.examples, bank)
+                rec = replay(sample, task, env, args.prompt, args.examples, bank, args.date_hints)
                 if rec is None:
                     dropped.append(f"{sample['id']}:{source}")
                     continue

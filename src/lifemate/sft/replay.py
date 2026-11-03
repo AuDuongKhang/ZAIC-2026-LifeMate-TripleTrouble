@@ -55,12 +55,13 @@ def assistant_message(output: str) -> dict:
 
 
 def replay(sample: dict, task: Task, env, prompt_version: str = DEFAULT_PROMPT, examples: int = 0,
-           bank: ExampleBank | None = None) -> dict | None:
+           bank: ExampleBank | None = None, date_hints: bool = False) -> dict | None:
     """{"id", "messages", "tools"}: the agent's last prompt plus the gold answer to it, or None when the agent did not
     send exactly the gold calls (a rejected or repeated call, calls after an ask). Never a record with partial calls."""
     gold = sample["label"]["tool_calls"]
     llm = ReplayLLM(gold, final_text(gold))
-    agent = ReActAgent(llm=llm, prompt_version=prompt_version, examples=examples, bank=bank, clock=lambda: 0.0)
+    agent = ReActAgent(llm=llm, prompt_version=prompt_version, examples=examples, bank=bank, clock=lambda: 0.0,
+                       date_hints=date_hints)
     agent.run(task, env)
     if [(c["name"], c["arguments"]) for c in env.get_tool_calls()] != [(c["name"], c["arguments"]) for c in gold]:
         return None
