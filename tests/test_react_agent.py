@@ -331,3 +331,56 @@ def test_is_empty_result():
     assert not is_empty_result({"ok": True}) and not is_empty_result({"ok": True, "done": False})
     assert not is_empty_result({"flights": [], "hotels": [{"id": 1}]}) and not is_empty_result([{"id": 1}])
     assert not is_empty_result("") and not is_empty_result(None)
+
+
+REFUSE = "Không làm được."
+END_SPEC = {"name": "parking.end_session", "description": "Kết thúc phiên gửi xe",
+            "parameters": {"type": "object", "properties": {}}}
+PARKING_TASK = dataclasses.replace(TASK, request="kết thúc phiên gửi xe", tools=[END_SPEC])
+CHECK = ("Check again: the installed tool(s) parking.end_session may handle this request. If one does, call it. "
+         "If the request is out of scope or the user cancelled it, reply in one short sentence without calling any tool.")
+
+
+def test_refusal_check_fires_once():
+    llm, env = FakeLLM([REFUSE, REFUSE]), FakeEnv()
+    agent = ReActAgent(llm=llm, refusal_check=True)
+    agent.run(PARKING_TASK, env)
+    assert len(llm.seen) == 2 and env.called == [] and agent.last_trace["stop"] == "no_call"
+    assert llm.seen[1][-2:] == [{"role": "assistant", "content": REFUSE, "tool_calls": []},
+                                {"role": "user", "content": CHECK}]
+    assert agent.last_trace["refusal_check"] == ["parking.end_session"]
+
+
+def test_refusal_check_lets_the_model_call():
+    llm, env = FakeLLM([REFUSE, CALL("parking.end_session", {}), "Xong."]), FakeEnv()
+    ReActAgent(llm=llm, refusal_check=True).run(PARKING_TASK, env)
+    assert env.called == [("parking.end_session", {})] and len(llm.seen) == 3
+
+
+def test_no_refusal_check_after_a_call():
+    llm = FakeLLM([CALL("parking.end_session", {}), "Xong."])
+    agent = ReActAgent(llm=llm, refusal_check=True)
+    agent.run(PARKING_TASK, FakeEnv())
+    assert len(llm.seen) == 2 and not any(m["content"] == CHECK for m in llm.seen[1] if m["role"] == "user")
+    assert "refusal_check" not in agent.last_trace
+
+
+def test_no_refusal_check_without_a_matching_tool():
+    llm = FakeLLM([REFUSE])
+    agent = ReActAgent(llm=llm, refusal_check=True)
+    agent.run(dataclasses.replace(PARKING_TASK, request="bật đèn phòng khách"), FakeEnv())
+    assert len(llm.seen) == 1 and "refusal_check" not in agent.last_trace
+
+
+def test_refusal_min_hits_is_passed_on():
+    llm = FakeLLM([REFUSE])
+    ReActAgent(llm=llm, refusal_check=True, refusal_min_hits=5).run(PARKING_TASK, FakeEnv())
+    assert len(llm.seen) == 1
+
+
+def test_refusal_check_off_by_default():
+    llm = FakeLLM([REFUSE, REFUSE])
+    agent = ReActAgent(llm=llm)
+    agent.run(PARKING_TASK, FakeEnv())
+    assert len(llm.seen) == 1 and agent.info["refusal_check"] is False and agent.info["refusal_min_hits"] == 1
+    assert "refusal_check" not in agent.last_trace
