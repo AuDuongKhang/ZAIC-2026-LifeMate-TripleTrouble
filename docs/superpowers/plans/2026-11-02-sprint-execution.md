@@ -48,28 +48,39 @@
 
 ## Sprint schedule
 
-Owners: **K** = agent/LLM (Khang), **P** = ASR + shipping (partner). **Every task has exactly one owner.** P takes Docker because P's ASR work gets lighter after P3, while K's tasks run back to back; P6 (ASR timing) is the same A30 run as Task 10.
+Owners: **K** = agent/LLM + shipping (Khang), **P** = ASR + synthetic data (partner). **Every task has exactly one owner.** Changed on 2 Nov: P had already answered Q1/Q2 and started generating synthetic data and writing its code, so Tasks 3–6 moved to P and Tasks 9–10 (Docker) to K. P6 (ASR timing) is still the same A30 run as Task 10, which K runs with P's ASR settings.
+
+## Progress (2 Nov)
+
+| Task | Status |
+|---|---|
+| 1 | waiting for the `sft-final` retrain |
+| 2 | code in PR #18 (perturbation, one-of parameters kept after review); `sft-v3` run and gate pending |
+| 3–6 | P, in progress |
+| 7 | done, PR #19: the guard loses at every setting (dev −14.93 at best, holdout −6.64), not shipped |
+| 8 | dropped (Task 7's decision rule) |
+| 9 | K, started on `feat/docker` |
+| 10 | K, after Task 9 and the final models |
 
 | Dates | K | P | Submission |
 |---|---|---|---|
-| 2–3 Nov | Task 1: final retrain, dev `check_refs`, presets PR | P3 with `sft-v2` (below) | `sft-final` + `pho-large-ft-b` |
-| 3–5 Nov | Task 2 code + `sft-v3` run and gate | Task 9 skeleton (`empty` agent in Docker); P4 only if P3 says ASR costs > 5 pts | – |
-| 4–8 Nov | Tasks 3–6 if Q1/Q2 = yes (synthetic) | P5 final ASR retrain; Task 9 with real models | best gated system |
-| 6–9 Nov | Task 7 (simulator), Task 8 only if the simulator says so | Task 9 done (PR merged) | – |
-| 9–11 Nov | Final retrain with the winning recipe (Task 1 Steps 1–2 again, run name `sft-final2`); hand P the presets and revisions | Task 10 Steps 1–3 on a rented A30 (covers P6) | final candidate |
-| 12–14 Nov | review P's Docker PR; fixes only | Task 10 Steps 4–6: freeze, checksum, upload | freeze 14 Nov 23:59 |
-| 15–16 Nov | buffer | submit the Docker form | deadline 16 Nov 23:59 |
+| 2–3 Nov | Task 1: final retrain, dev `check_refs`, presets PR; Task 9 skeleton (`empty` agent in Docker) | P3 with `sft-v2` (below); Tasks 3–5 code | `sft-final` + `pho-large-ft-b` |
+| 3–5 Nov | Task 2 `sft-v3` run and gate; Task 9 with real models | Task 6 pilot and bulk; P4 only if P3 says ASR costs > 5 pts | – |
+| 4–8 Nov | Task 9 done (PR merged); review P's synthetic PR | Task 6 `sft-v4` run and gate; P5 final ASR retrain | best gated system |
+| 9–11 Nov | Final retrain with the winning recipe (Task 1 Steps 1–2 again, run name `sft-final2`); Task 10 Steps 1–3 on a rented A30 (covers P6) | hand K the final ASR preset and revision | final candidate |
+| 12–14 Nov | Task 10 Steps 4–6: freeze, checksum, upload | review K's Docker PR; fixes only | freeze 14 Nov 23:59 |
+| 15–16 Nov | submit the Docker form | buffer | deadline 16 Nov 23:59 |
 
-**P's work in this sprint:** P3, P4, P5 of the umbrella plan, plus Tasks 9 and 10 of this plan. P3 now runs with `sft-v2` instead of `sft-v1`: `notebooks/molab_run.py`, split `train`, extra `--subset holdout`, agent preset `sft-v2`, ASR preset `pho-large-ft-b`, then `python -m lifemate.compare runs/20261102-080138_263ebdc_train_sft-v2_gold_holdout runs/<new run>`. Loss < 5 points → skip P4; > 10 points → P4 first, and tell K to add the `contacts.search` name fallback (K4 of the umbrella plan).
+**P's work in this sprint:** P3, P4, P5 of the umbrella plan, plus Tasks 3–6 of this plan. P3 now runs with `sft-v2` instead of `sft-v1`: `notebooks/molab_run.py`, split `train`, extra `--subset holdout`, agent preset `sft-v2`, ASR preset `pho-large-ft-b`, then `python -m lifemate.compare runs/20261102-080138_263ebdc_train_sft-v2_gold_holdout runs/<new run>`. Loss < 5 points → skip P4; > 10 points → P4 first, and tell K to add the `contacts.search` name fallback (K4 of the umbrella plan). P's synthetic code may differ from Tasks 3–5 in shape; K's review checks it against Review Focus 1 and the Global Constraints (pool-only environments, replay verification, nothing from public_test, no data committed, rendering through `records`, the same gate).
 
-**K's work in this sprint:** Tasks 1–8 of this plan.
+**K's work in this sprint:** Tasks 1, 2, 7 (done), 9 and 10 of this plan.
 
 Anything not gated by 11 Nov stays out of the shipped system.
 
 ## Questions to settle at the next sync
 
-- **Q1/Q2** (umbrella plan): is a paid teacher (Claude API) wanted, and may train text and train tool results go to it? Tasks 3–6 run only with Q1 = yes. With Q2 = no, Task 4's `--no-train-text` mode sends schemas, probe results and context only.
-- **Q4:** this plan gives Docker to P (Tasks 9–10). Confirm, or swap Tasks 9–10 with a K task.
+- **Q1/Q2** (umbrella plan): answered by P, who is running Tasks 3–6. Record the answers (teacher model, cost cap, whether train text is sent) in P's PR.
+- **Q4:** settled: K owns Docker (Tasks 9–10).
 - **Q6 (new):** the few-shot bank reads `train/train.jsonl` at inference, so the image carries train text, and the organisers ask for a public Google Drive link. The guidance asks for "training code, inference code, and data", which suggests this is expected; confirm with the organisers if anyone doubts it.
 - **Q7 (new):** budget for ~3 hours of a rented A30 (or the closest 24 GB Ampere card) for Task 10 timing. molab's GPU is several times faster, so molab timings cannot prove the 30 s limit.
 
@@ -146,7 +157,7 @@ Behaviour of `perturb_record`:
 
 ---
 
-### Task 3: Synthetic scenarios: probe, verify, write (K, only if Q1 = yes)
+### Task 3: Synthetic scenarios: probe, verify, write (P)
 
 The teacher (Task 4) needs to see the sample's app data, and its output must be proven executable before anything is trained on it. This task holds the parts that need no API.
 
@@ -187,7 +198,7 @@ The teacher (Task 4) needs to see the sample's app data, and its output must be 
 
 ---
 
-### Task 4: Claude teacher and the batch CLI (K, only if Q1 = yes)
+### Task 4: Claude teacher and the batch CLI (P)
 
 **Files:**
 - Create: `src/lifemate/sft/teacher.py`
@@ -250,7 +261,7 @@ python -m lifemate.sft.synth collect --name synth-v1 --batch <batch id>
 
 ---
 
-### Task 5: Render synthetic samples as SFT records (K, only if Q1 = yes)
+### Task 5: Render synthetic samples as SFT records (P)
 
 **Files:**
 - Modify: `src/lifemate/sft/records.py`, `notebooks/molab_train.py`
@@ -277,10 +288,10 @@ Behaviour:
 
 ---
 
-### Task 6: Synthetic run and `sft-v4` (K, only if Q1 = yes)
+### Task 6: Synthetic run and `sft-v4` (P)
 
 - [ ] **Step 1: Pilot:** `python -m lifemate.sft.synth pilot --name synth-pilot --subset pool --limit 20 --scenarios 3` (add `--no-train-text` if Q2 = no). Expected: a report with accept rate; aim for ≥ 50% of scenarios accepted.
-- [ ] **Step 2: Read all accepted pilot scenarios by hand** (K, 15 minutes) with this checklist: the request sounds spoken and Vietnamese; the calls are what you would expect; asks are asked for a real reason; empty requests really have no app; argument style matches train (names, quantities, ISO times). If more than 3 of 20 fail the checklist, change the system prompt and repeat Step 1. Do not go to Step 3 until it passes.
+- [ ] **Step 2: Read all accepted pilot scenarios by hand** (P, 15 minutes; K reads them too if time allows) with this checklist: the request sounds spoken and Vietnamese; the calls are what you would expect; asks are asked for a real reason; empty requests really have no app; argument style matches train (names, quantities, ISO times). If more than 3 of 20 fail the checklist, change the system prompt and repeat Step 1. Do not go to Step 3 until it passes.
 - [ ] **Step 3: Bulk:** `submit --name synth-v1 --subset pool --scenarios 3` (≈ 2,800 scenarios), then `collect` once the batch has ended. Cost cap: check `usage` on the pilot's responses, multiply by 948/20, halve for the batch discount; stop and ask the team if the estimate is over the budget agreed in Q1.
 - [ ] **Step 4:** Upload `train_records/synth/synth-v1.jsonl` to the team's private HF dataset under `synth/` (`huggingface_hub.upload_file`, repo type dataset). Never commit it.
 - [ ] **Step 5: Train `sft-v4`:** the best recipe so far (Task 2 result) plus the synthetic file, pool records, eval dev. Merge, add the preset.
@@ -337,7 +348,7 @@ Decide the ask rule from data before touching the agent. The simulator replays t
 
 ---
 
-### Task 9: Docker package (P)
+### Task 9: Docker package (K)
 
 **Files:**
 - Create: `Dockerfile`, `.dockerignore`, `configs/shipped.json`, `src/lifemate/docker_entry.py`, `scripts/docker_build.sh`
@@ -374,9 +385,9 @@ Image layout:
 
 ---
 
-### Task 10: A30 rehearsal, freeze and hand-off (P)
+### Task 10: A30 rehearsal, freeze and hand-off (K)
 
-- [ ] **Step 1: Fill `configs/shipped.json`** with the values K hands over (Task 1 Step 2, final retrain): the final agent and ASR presets, `check_refs` / guard kwargs if they passed, and both revisions. Rebuild.
+- [ ] **Step 1: Fill `configs/shipped.json`** with the values from the final retrain (Task 1 Step 2) and P's final ASR preset and revision: the final agent and ASR presets, `check_refs` / guard kwargs if they passed, and both revisions. Rebuild.
 - [ ] **Step 2: A30 run** (Q7): on a rented A30 (or the nearest 24 GB Ampere card; write down which), `docker load`, then run the image on public_test with `--gpus all --network none`, **twice**. Expected: `cmp` finds the two files identical; `meta.json` shows max seconds per sample < 25 (5 s of margin under 30). If max ≥ 25: lower `time_budget_s` in the shipped `agent_kw` (it counts from the sample start, ASR included) and re-run; never ship over 25.
 - [ ] **Step 3: Cross-check** the A30 submission against the molab run of the same config: count samples whose `tool_calls` differ. bf16 numerics can differ between GPUs; more than ~2% different samples means something else differs (revision, preset, data). Find out what before freezing.
 - [ ] **Step 4: Freeze (by 14 Nov 23:59):** tag the commit `final-<date>`; write in `RESULTS.md` notes the image tag, sha256, both model revisions, the presets and the A30 timing; add the Docker run command and the training commands (records, synth, train, merge, with seeds) to `README.md`.
