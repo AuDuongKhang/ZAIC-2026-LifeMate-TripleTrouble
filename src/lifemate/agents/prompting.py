@@ -5,6 +5,7 @@ import json
 from typing import Callable
 
 from ..task import Task
+from .dates import date_table
 from .prompts import DEFAULT_PROMPT, PROMPTS
 
 
@@ -32,9 +33,11 @@ def tool_schema(spec: dict) -> dict:
     return {"type": "function", "function": {"name": spec["name"], "description": description, "parameters": clean}}
 
 
-def system_prompt(context: dict, version: str = DEFAULT_PROMPT) -> str:
+def system_prompt(context: dict, version: str = DEFAULT_PROMPT, date_hints: bool = False) -> str:
+    """date_hints appends a weekday table after the Context line (off: the prompt is unchanged)."""
     ctx = {k: context[k] for k in ("current_time", "timezone", "location", "user_profile") if k in context}
-    return f"{PROMPTS[version]}\n\nContext: {json.dumps(ctx, ensure_ascii=False)}"
+    text = f"{PROMPTS[version]}\n\nContext: {json.dumps(ctx, ensure_ascii=False)}"
+    return text + f"\n\n{date_table(context['current_time'])}" if date_hints else text
 
 
 def history_messages(history: list[dict]) -> list[dict]:
@@ -57,7 +60,7 @@ def history_messages(history: list[dict]) -> list[dict]:
 
 
 def build_messages(task: Task, count_tokens: Callable[[list[dict]], int], budget: int,
-                   prompt_version: str = DEFAULT_PROMPT, examples_text: str = "") -> list[dict]:
+                   prompt_version: str = DEFAULT_PROMPT, examples_text: str = "", date_hints: bool = False) -> list[dict]:
     """[system, *history, user request]; drops the oldest history turns (a user turn and the replies after it)
     until the prompt fits the token budget. The system prompt (with examples_text, when given) and the request are
     never dropped."""
@@ -66,7 +69,7 @@ def build_messages(task: Task, count_tokens: Callable[[list[dict]], int], budget
         if msg["role"] == "user" or not turns:
             turns.append([])
         turns[-1].append(msg)
-    system = system_prompt(task.context, prompt_version) + (f"\n\n{examples_text}" if examples_text else "")
+    system = system_prompt(task.context, prompt_version, date_hints) + (f"\n\n{examples_text}" if examples_text else "")
     head, tail = [{"role": "system", "content": system}], [{"role": "user", "content": task.request}]
     while True:
         msgs = head + [m for turn in turns for m in turn] + tail

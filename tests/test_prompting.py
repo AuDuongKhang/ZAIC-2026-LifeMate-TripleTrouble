@@ -32,6 +32,24 @@ def test_system_prompt_has_context_values():
     assert "installed_apps" not in text
 
 
+def test_date_hints_append_the_table():
+    from lifemate.agents.dates import date_table
+    text = system_prompt(CTX, date_hints=True)
+    assert text.startswith(system_prompt(CTX)) and text.endswith("\n\n" + date_table(CTX["current_time"]))
+    assert "2026-11-13 thứ sáu (hôm nay, tuần này)" in text
+    task = Task(id="t", request="bật đèn", history=[], tools=[], context=CTX)
+    msgs = build_messages(task, count_tokens=len, budget=10, examples_text="EXAMPLES", date_hints=True)
+    assert msgs[0]["content"] == text + "\n\nEXAMPLES"  # the table follows Context, before the examples
+
+
+def test_date_hints_off_by_default():
+    assert system_prompt(CTX) == system_prompt(CTX, date_hints=False)
+    assert "Calendar" not in system_prompt(CTX) and "hôm nay" not in system_prompt(CTX)
+    task = Task(id="t", request="bật đèn", history=[], tools=[], context=CTX)
+    assert build_messages(task, count_tokens=len, budget=10) == build_messages(
+        task, count_tokens=len, budget=10, date_hints=False)
+
+
 def test_history_messages_pairs_calls_with_results():
     msgs = history_messages([{"role": "user", "text": "báo thức mai?"},
         {"role": "assistant", "text": "Có 1.", "tool_calls": [{"name": "alarm.list", "arguments": {}}], "tool_results": [{"ok": True}]}])

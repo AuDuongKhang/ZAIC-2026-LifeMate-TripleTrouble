@@ -159,3 +159,10 @@ def test_check_refs_presets():
         "react", {"model": "team/lifemate-sft-v2", "examples": 4, "check_refs": True})
     assert resolve("agent", "sft-final", env) == (
         "react", {"model": "team/lifemate-sft-final", "examples": 4, "check_refs": True})
+
+
+def test_date_hint_presets_are_their_base_plus_the_flag():
+    env = {"HF_MODEL_OWNER": "team"}
+    for base, dates in (("sft-v2-refs", "sft-v2-refs-dates"), ("sft-final", "sft-final-dates")):
+        name, kw = resolve("agent", base, env)
+        assert resolve("agent", dates, env) == (name, {**kw, "date_hints": True})
