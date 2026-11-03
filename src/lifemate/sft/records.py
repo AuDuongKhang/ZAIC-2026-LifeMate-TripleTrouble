@@ -10,7 +10,8 @@ Replays that do not reproduce exactly the gold calls are dropped and counted, ne
 `--text cache:<asr_name>` takes the user turns from an ASR transcript cache (asr_cache/train/<asr_name>.jsonl) instead
 of the gold transcripts; the calls and results stay the gold ones. Repeat --text to write one record per source and
 sample in the same file. `--mask K` adds K function-masked copies (lifemate.sft.mask) after the record of the first
---text source, seeded by --seed and the sample id:
+--text source, seeded by --seed and the sample id; `--perturb` also shuffles and thins their schemas
+(lifemate.sft.perturb):
 
     python -m lifemate.sft.records --name v2-pool --subset pool --text gold --text cache:pho-large-fp16 --mask 1
 """
@@ -31,6 +32,7 @@ from ..evaluate import label_kind
 from ..infer import build_task
 from ..splits import load_splits
 from .mask import mask_record
+from .perturb import perturb_record
 from .replay import replay
 from .tokenize import render
 
@@ -45,6 +47,7 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--text", action="append", default=None,
                     help="gold (default) or cache:<asr_name>; repeat for one record per source")
     ap.add_argument("--mask", type=int, default=0, help="function-masked copies of the first --text source's record")
+    ap.add_argument("--perturb", action="store_true", help="perturb the schemas of masked copies (lifemate.sft.perturb)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--prompt", default=DEFAULT_PROMPT, choices=sorted(PROMPTS))
     ap.add_argument("--examples", type=int, default=4, help="few-shot examples in the system prompt (0 = none)")
@@ -92,6 +95,8 @@ def main(argv: list[str] | None = None) -> Path:
                     kinds[label_kind(sample["label"]["tool_calls"])] += 1
                     for k in range(args.mask):
                         masked = mask_record(rec, random.Random(f"{args.seed}:{sample['id']}:{k}"))
+                        if args.perturb:
+                            masked = perturb_record(masked, random.Random(f"{args.seed}:{sample['id']}:{k}:p"))
                         f.write(json.dumps(masked, ensure_ascii=False) + "\n")
                         written["masked"] += 1
 
