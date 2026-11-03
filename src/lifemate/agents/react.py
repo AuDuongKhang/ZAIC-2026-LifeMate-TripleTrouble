@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Callable
 
@@ -14,7 +15,7 @@ from .base import Agent
 from .fewshot import ExampleBank, render_examples
 from .llm import ChatLLM, HFChatLLM
 from .parsing import BLOCK, parse_tool_calls
-from .prompting import build_messages, tool_schema
+from .prompting import build_messages, system_message, tool_schema
 from .prompts import DEFAULT_PROMPT, FINAL_TEXT, REFUSAL_TEXT
 from .refs import scalar_strings, unseen_refs
 from .refusal import matching_tools
@@ -25,6 +26,7 @@ EMPTY_REPEAT = "Already called and it returned nothing. Change the arguments as 
 REFUSAL_CHECK = ("Check again: the installed tool(s) {names} may handle this request. If one does, call it. If the "
                  "request is out of scope or the user cancelled it, reply in one short sentence without calling any tool.")
 CLOSING = {tuple(fold(FINAL_TEXT)), tuple(fold(REFUSAL_TEXT))}  # closing replies, folded
+INVALID = ("invalid",)  # vote key of a proposal that does not parse
 
 
 def leaked_param(spec: dict | None, arguments: dict) -> str | None:
@@ -34,6 +36,29 @@ def leaked_param(spec: dict | None, arguments: dict) -> str | None:
         if isinstance(value, str) and props.get(name, {}).get("x-match") == "fuzzy" and tuple(fold(value)) in CLOSING:
             return name
     return None
+
+
+def vote_key(call: dict, spec: dict | None) -> tuple:
+    """What a proposal must agree on to count as the same vote: the tool and its arguments, without the free-text
+    (x-match: fuzzy) ones, which are scored by token F1; for an ask, the tool asked about and the missing params."""
+    def dump(value):
+        return json.dumps(value, sort_keys=True, ensure_ascii=False)
+
+    args = call["arguments"]
+    if call["name"] == SYS_TOOL:
+        params = args.get("params")
+        return SYS_TOOL, dump(args.get("tool_name")), dump(sorted(params, key=str) if isinstance(params, list) else params)
+    props = ((spec or {}).get("parameters") or {}).get("properties", {})
+    return call["name"], tuple(sorted((k, dump(v)) for k, v in args.items()
+                                      if (props.get(k) or {}).get("x-match") != "fuzzy"))
+
+
+def output_key(text: str | None, specs: dict[str, dict]) -> tuple:
+    """The vote of one proposal: its calls' vote keys in order; INVALID when a block does not parse (or no text)."""
+    if text is None:
+        return INVALID
+    calls, errors = parse_tool_calls(text)
+    return INVALID if errors else tuple(vote_key(c, specs.get(c["name"])) for c in calls)
 
 
 def is_empty_result(result) -> bool:
@@ -54,7 +79,7 @@ class ReActAgent(Agent):
                  clock: Callable[[], float] = time.perf_counter, revision: str | None = None,
                  date_hints: bool = False, empty_hint: bool = False,
                  refusal_check: bool = False, refusal_min_hits: int = 1,
-                 leak_guard: bool = False):
+                 leak_guard: bool = False, vote_prompts: int = 0, vote_apply: bool = True):
         """time_budget_s counts from task.started_at (sample start, ASR included) when the runner sets it.
         A step only starts with at least min_step_s left, and its generation is capped at the time remaining.
         check_refs holds back calls whose x-ref ids were never seen in a tool result (off by default: with it the
@@ -68,7 +93,14 @@ class ReActAgent(Agent):
         refusal_min_hits word bigrams with the request (agents/refusal.py), ask it once more before accepting the
         refusal. Never used when SFT records are rendered (ReplayLLM has no second answer, so the default is off there).
         leak_guard holds back a call whose fuzzy string parameter is the closing text ("Đã xong." or the refusal), which
-        the model sometimes writes as the message content; the call is rejected like an invalid one, never sent."""
+        the model sometimes writes as the message content; the call is rejected like an invalid one, never sent.
+        vote_prompts=K (0 = off) votes once per sample, at the first step whose output has a write call or an ask:
+        K-1 more proposals for that step come from the same conversation with the system message showing the next
+        examples (variant i: ranks i*k+1 .. i*k+k), and the majority proposal (at least 2 votes, ties to the original)
+        is used instead (vote_apply=False only records the vote). Greedy decoding stays; only the used proposal is
+        sent. The vote is skipped when less than K * min_step_s is left after the original proposal."""
+        if vote_prompts and not examples:
+            raise ValueError("vote_prompts needs examples (the variants differ only in their examples)")
         self.llm = llm if llm is not None else HFChatLLM(model, revision=revision)
         self.max_steps, self.max_invalid, self.clock = max_steps, max_invalid, clock
         self.time_budget_s, self.min_step_s = time_budget_s, min_step_s
@@ -76,6 +108,7 @@ class ReActAgent(Agent):
         self.bank, self.date_hints, self.empty_hint = bank, date_hints, empty_hint
         self.refusal_check, self.refusal_min_hits = refusal_check, refusal_min_hits
         self.leak_guard = leak_guard
+        self.vote_prompts, self.vote_apply = vote_prompts, vote_apply
         if self.bank is None and examples:
             self.bank = ExampleBank.from_data(data_root or default_data_root(), split)
         # Recorded in meta.json, so every RESULTS.md row traces back to its prompt and settings.
@@ -83,7 +116,7 @@ class ReActAgent(Agent):
                      "prompt": prompt_version, "check_refs": check_refs, "max_steps": max_steps, "time_budget_s": time_budget_s,
                      "examples": examples, "bank_size": len(self.bank) if self.bank is not None else 0,
                      "date_hints": date_hints, "empty_hint": empty_hint, "refusal_check": refusal_check, "refusal_min_hits": refusal_min_hits,
-                     "leak_guard": leak_guard}
+                     "leak_guard": leak_guard, "vote_prompts": vote_prompts, "vote_apply": vote_apply}
 
     def run(self, task: Task, env) -> None:
         trace = self.last_trace = {"steps": [], "stop": None}  # None: a step raised
@@ -102,6 +135,9 @@ class ReActAgent(Agent):
         empty: set[str] = set()  # the subset of done whose result was empty (only tracked with empty_hint)
         invalid = 0
         checked = False  # the refusal check runs at most once, and only after the first output
+        voted = not self.vote_prompts  # the prompt vote runs at most once, at the first write or ask
+        if self.vote_prompts:
+            trace["vote"] = None  # stays None when no step was voted on (reads only, or too little time)
         for _ in range(self.max_steps):
             remaining = self.time_budget_s - (self.clock() - start)
             if remaining < self.min_step_s:
@@ -112,6 +148,11 @@ class ReActAgent(Agent):
                 return
             text = self.llm.generate(messages, tools, max_time=remaining)
             calls, errors = parse_tool_calls(text)
+            if not voted and any(c["name"] == SYS_TOOL or (specs.get(c["name"]) or {}).get("kind") == "write"
+                                 for c in calls):
+                voted = True
+                text = self._vote(task, messages, tools, specs, text, start, budget)
+                calls, errors = parse_tool_calls(text)
             rejected: list[str] = []
             trace["steps"].append({"output": text[:2000], "rejected": rejected})
             if not calls and not errors and self.refusal_check and not checked and len(trace["steps"]) == 1:
@@ -174,3 +215,25 @@ class ReActAgent(Agent):
                 trace["stop"] = "invalid"
                 return
         trace["stop"] = "max_steps"
+
+    def _vote(self, task: Task, messages: list[dict], tools: list[dict], specs: dict[str, dict], text: str,
+              start: float, budget: int) -> str:
+        """The output to use for this step: the majority of vote_prompts proposals (text is proposal 0), or text."""
+        if self.time_budget_s - (self.clock() - start) < self.vote_prompts * self.min_step_s:
+            return text
+        apps = set(task.context["installed_apps"])
+        texts: list[str | None] = [text]
+        for i in range(1, self.vote_prompts):
+            picked = self.bank.select(task.request, apps, self.examples, exclude_id=task.id, offset=i * self.examples)
+            variant = [system_message(task.context, self.prompt_version, render_examples(picked), self.date_hints), *messages[1:]]
+            fits = self.llm.count_tokens(variant, tools) <= budget  # a variant that does not fit gets no vote
+            texts.append(self.llm.generate(variant, tools, max_time=self.time_budget_s - (self.clock() - start))
+                         if fits else None)
+        keys = [output_key(t, specs) for t in texts]
+        counts = Counter(k for k in keys if k != INVALID)  # an invalid proposal never wins
+        best = max(counts.values(), default=0)
+        top = [k for k, n in counts.items() if n == best]
+        winner = keys.index(top[0]) if best >= 2 and len(top) == 1 else 0  # the lowest index with the winning key
+        self.last_trace["vote"] = {"step": len(self.last_trace["steps"]), "winner": winner, "applied": self.vote_apply,
+                                   "keys": [json.dumps(k, ensure_ascii=False) for k in keys]}
+        return texts[winner] if self.vote_apply else text
