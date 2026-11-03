@@ -34,6 +34,15 @@ def test_select_ranks_the_most_similar_request_first(train_samples):
     assert top["audio_text"] == s["audio_text"]
 
 
+def test_select_offset_returns_the_next_examples(train_samples):
+    bank = ExampleBank(train_samples, pool_ids={s["id"] for s in train_samples})
+    s = train_samples[0]
+    args = (s["audio_text"], set(s["context"]["installed_apps"]))
+    top4 = bank.select(*args, k=4, exclude_id=s["id"])
+    assert len(top4) == 4 and bank.select(*args, k=2, exclude_id=s["id"], offset=2) == top4[2:4]
+    assert bank.select(*args, k=2, exclude_id=s["id"], offset=0) == top4[:2]
+
+
 def test_render_examples_shows_calls_and_truncated_results():
     ex = [{"id": "x", "audio_text": "tắt đèn",
            "label": {"tool_calls": [{"name": "smart_home.light_set", "arguments": {"device_id": "l1", "power": "off"}}],

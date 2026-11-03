@@ -1,6 +1,8 @@
 import dataclasses
 import json
 
+import pytest
+
 from lifemate.agents.react import ReActAgent
 from lifemate.task import Task
 
@@ -205,14 +207,15 @@ def test_invalid_json_is_listed_as_rejected():
 
 class StubBank:
     def __init__(self, text):
-        self.text, self.asked = text, []
+        self.text, self.asked, self.offsets = text, [], []
 
     def __len__(self):
         return 1
 
-    def select(self, request, installed_apps, k, exclude_id):
+    def select(self, request, installed_apps, k, exclude_id, offset=0):
         self.asked.append((request, installed_apps, k, exclude_id))
-        return [{"id": "e", "audio_text": self.text, "label": {"tool_calls": [], "tool_results": []}}]
+        self.offsets.append(offset)
+        return [{"id": "e", "audio_text": f"{self.text} @{offset}", "label": {"tool_calls": [], "tool_results": []}}]
 
 
 def test_examples_are_added_to_the_system_message():
@@ -427,3 +430,139 @@ def test_leak_guard_off_by_default():
     agent.run(SMS_TASK, env)
     assert env.called == [("sms.send", {"content": "Đã xong."})] and agent.info["leak_guard"] is False
     assert ReActAgent(llm=FakeLLM([]), leak_guard=True).info["leak_guard"] is True
+
+
+DELETE_SPEC = {"name": "alarm.delete", "kind": "write", "description": "Xoá báo thức",
+               "parameters": {"type": "object", "properties": {"alarm_id": {"type": "string"}}}}
+LIST_SPEC = {"name": "alarm.list", "kind": "read", "description": "Liệt kê báo thức",
+             "parameters": {"type": "object", "properties": {}}}
+NOTE_SPEC = {"name": "notes.create", "kind": "write", "description": "Tạo ghi chú",
+             "parameters": {"type": "object", "properties": {"folder_id": {"type": "string"},
+                                                             "title": {"type": "string", "x-match": "fuzzy"}}}}
+VOTE_TASK = dataclasses.replace(TASK, tools=[DELETE_SPEC, LIST_SPEC, NOTE_SPEC],
+                                context={**TASK.context, "installed_apps": {"alarm": {}, "notes": {}}})
+ASK_DELETE = {"tool_name": "alarm.delete", "params": ["alarm_id"]}
+
+
+def DEL(alarm_id):
+    return CALL("alarm.delete", {"alarm_id": alarm_id})
+
+
+def vote_run(outputs, task=VOTE_TASK, **kw):
+    llm, env, bank = FakeLLM(outputs), FakeEnv(), StubBank("EX")
+    agent = ReActAgent(llm=llm, examples=2, bank=bank, **{"vote_prompts": 3, **kw})
+    agent.run(task, env)
+    return agent, llm, env, bank
+
+
+def test_vote_majority_replaces_the_pick():
+    agent, llm, env, bank = vote_run([DEL("a1"), DEL("a2"), DEL("a2"), "Xong."])
+    assert env.called[-1] == ("alarm.delete", {"alarm_id": "a2"}) and len(env.called) == 1
+    vote = agent.last_trace["vote"]
+    assert vote["winner"] == 1 and vote["applied"] is True and vote["step"] == 0 and len(vote["keys"]) == 3
+    assert vote["keys"][1] == vote["keys"][2] != vote["keys"][0]
+    # the variants see the same conversation; only the system message (the examples) changes
+    assert bank.offsets == [0, 2, 4]
+    assert llm.seen[1][1:] == llm.seen[0][1:] and "EX @2" in llm.seen[1][0]["content"]
+    assert "EX @4" in llm.seen[2][0]["content"] and "EX @0" in llm.seen[0][0]["content"]
+    assert agent.last_trace["steps"][0]["output"] == DEL("a2")
+    assert llm.seen[3][-2]["tool_calls"][0]["function"]["arguments"] == {"alarm_id": "a2"}
+    assert llm.seen[3][0] == llm.seen[0][0]  # later steps keep the original prompt
+
+
+def test_vote_variants_keep_the_date_table():
+    agent, llm, env, _ = vote_run([DEL("a1"), DEL("a1"), DEL("a1"), "Xong."], date_hints=True)
+    assert all("Calendar (weeks start on Monday)" in llm.seen[i][0]["content"] for i in range(3))
+
+
+def test_vote_tie_keeps_the_first_prompt():
+    agent, llm, env, _ = vote_run([DEL("a1"), DEL("a2"), DEL("a3"), "Xong."])
+    assert env.called == [("alarm.delete", {"alarm_id": "a1"})] and agent.last_trace["vote"]["winner"] == 0
+
+
+def test_vote_ignores_free_text_differences():
+    from lifemate.agents.react import vote_key
+
+    outputs = [CALL("notes.create", {"folder_id": "f1", "title": t}) for t in ("Mua sữa", "mua sua", "Mua sữa tươi")]
+    agent, llm, env, _ = vote_run(outputs + ["Xong."])
+    assert env.called == [("notes.create", {"folder_id": "f1", "title": "Mua sữa"})]
+    vote = agent.last_trace["vote"]
+    assert len(set(vote["keys"])) == 1 and vote["winner"] == 0
+    assert vote_key({"name": "notes.create", "arguments": {"title": "a", "folder_id": "f1"}}, NOTE_SPEC) == \
+        vote_key({"name": "notes.create", "arguments": {"folder_id": "f1", "title": "b"}}, NOTE_SPEC)
+    ask = {"name": "sys.ask_missing_info", "arguments": {"tool_name": "sms.send", "params": ["b", "a"]}}
+    assert vote_key(ask, None) == vote_key({**ask, "arguments": {"tool_name": "sms.send", "params": ["a", "b"]}}, None)
+
+
+def test_ask_and_act_are_different_keys():
+    ask = CALL("sys.ask_missing_info", ASK_DELETE)
+    agent, llm, env, _ = vote_run([DEL("a1"), ask, ask])
+    assert env.called == [("sys.ask_missing_info", ASK_DELETE)] and agent.last_trace["stop"] == "asked"
+    assert agent.last_trace["vote"]["winner"] == 1
+
+
+def test_reads_are_not_voted():
+    agent, llm, env, _ = vote_run([CALL("alarm.list", {}), "Xong."])
+    assert len(llm.seen) == 2 and env.called == [("alarm.list", {})] and agent.last_trace["vote"] is None
+
+
+def test_vote_runs_once_per_sample():
+    agent, llm, env, _ = vote_run([DEL("a1"), DEL("a1"), DEL("a1"), DEL("a2"), "Xong."])
+    assert len(llm.seen) == 3 + 1 + 1  # K proposals for the first write, one for the second, then the closing text
+    assert env.called == [("alarm.delete", {"alarm_id": "a1"}), ("alarm.delete", {"alarm_id": "a2"})]
+    assert agent.last_trace["vote"]["step"] == 0
+
+
+def test_vote_record_only_sends_the_original():
+    agent, llm, env, _ = vote_run([DEL("a1"), DEL("a2"), DEL("a2"), "Xong."], vote_apply=False)
+    assert env.called == [("alarm.delete", {"alarm_id": "a1"})]
+    assert agent.last_trace["vote"]["winner"] == 1 and agent.last_trace["vote"]["applied"] is False
+    assert agent.last_trace["steps"][0]["output"] == DEL("a1")
+
+
+def test_invalid_proposals_never_win():
+    agent, llm, env, _ = vote_run([DEL("a1"), "<tool_call>{bad</tool_call>", "<tool_call>{bad</tool_call>", "Xong."])
+    assert env.called == [("alarm.delete", {"alarm_id": "a1"})] and agent.last_trace["vote"]["winner"] == 0
+    assert agent.last_trace["vote"]["keys"][1] == '["invalid"]'
+
+
+def test_vote_skipped_when_time_is_short():
+    # 8 s left after the first proposal: enough for a step (min_step_s=3), not for 3 proposals (9 s)
+    agent, llm, env, _ = vote_run([DEL("a1"), "Xong."], task=dataclasses.replace(VOTE_TASK, started_at=0.0),
+                                  time_budget_s=20, min_step_s=3, clock=lambda: 12.0)
+    assert env.called == [("alarm.delete", {"alarm_id": "a1"})] and len(llm.seen) == 2
+    assert agent.last_trace["vote"] is None
+
+
+def test_vote_off_by_default():
+    runs = []
+    for kw in ({}, {"vote_prompts": 0, "vote_apply": False}):
+        llm, env, bank = FakeLLM([DEL("a1"), DEL("a2"), DEL("a2"), "Xong."]), FakeEnv(), StubBank("EX")
+        agent = ReActAgent(llm=llm, examples=2, bank=bank, **kw)
+        agent.run(VOTE_TASK, env)
+        runs.append((json.dumps(agent.last_trace), json.dumps(llm.seen), env.called, bank.offsets))
+    assert runs[0] == runs[1] and runs[0][3] == [0]
+    trace, _, called, _ = runs[0]
+    assert "vote" not in json.loads(trace) and called[0] == ("alarm.delete", {"alarm_id": "a1"})
+    agent = ReActAgent(llm=FakeLLM([]))
+    assert agent.info["vote_prompts"] == 0 and agent.info["vote_apply"] is True
+
+
+def test_plain_answer_majority_does_not_win():
+    agent, llm, env, _ = vote_run([DEL("a1"), "Không làm được.", "Không làm được.", "Xong."])
+    assert env.called == [("alarm.delete", {"alarm_id": "a1"})] and agent.last_trace["steps"][0]["output"] == DEL("a1")
+    vote = agent.last_trace["vote"]
+    assert vote["winner"] == 0 and vote["keys"][1] == vote["keys"][2] == "[]"
+
+
+def test_read_only_majority_does_not_win():
+    read = CALL("alarm.list", {})
+    agent, llm, env, _ = vote_run([DEL("a1"), read, read, "Xong."])
+    assert env.called == [("alarm.delete", {"alarm_id": "a1"})] and len(llm.seen) == 4
+    vote = agent.last_trace["vote"]
+    assert vote["winner"] == 0 and vote["step"] == 0 and vote["keys"][1] == vote["keys"][2] != vote["keys"][0]
+
+
+def test_vote_needs_examples():
+    with pytest.raises(ValueError, match="vote_prompts"):
+        ReActAgent(llm=FakeLLM([]), vote_prompts=3)

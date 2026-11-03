@@ -40,6 +40,11 @@ def system_prompt(context: dict, version: str = DEFAULT_PROMPT, date_hints: bool
     return text + f"\n\n{date_table(context['current_time'])}" if date_hints else text
 
 
+def system_message(context: dict, version: str = DEFAULT_PROMPT, examples_text: str = "", date_hints: bool = False) -> dict:
+    content = system_prompt(context, version, date_hints) + (f"\n\n{examples_text}" if examples_text else "")
+    return {"role": "system", "content": content}
+
+
 def history_messages(history: list[dict]) -> list[dict]:
     msgs = []
     for turn in history:
@@ -69,8 +74,8 @@ def build_messages(task: Task, count_tokens: Callable[[list[dict]], int], budget
         if msg["role"] == "user" or not turns:
             turns.append([])
         turns[-1].append(msg)
-    system = system_prompt(task.context, prompt_version, date_hints) + (f"\n\n{examples_text}" if examples_text else "")
-    head, tail = [{"role": "system", "content": system}], [{"role": "user", "content": task.request}]
+    head = [system_message(task.context, prompt_version, examples_text, date_hints)]
+    tail = [{"role": "user", "content": task.request}]
     while True:
         msgs = head + [m for turn in turns for m in turn] + tail
         if not turns or count_tokens(msgs) <= budget:
