@@ -54,6 +54,7 @@ All repo files (code, comments, docs, notebook UI, commits) are in English; Viet
 
 ## Rules that constrain the code
 
+- **No paid or external services, no LLM APIs.** Nothing in the repo, the dev tools or the data pipeline may call a paid service or an external model API (no Claude/OpenAI teacher, no paid GPU rental, no paid data). Free tiers and local open models only. Plans in `docs/superpowers/plans/` that mention a Claude teacher (synthetic data, Task 4/6) or a rented A30 are superseded by this rule.
 - Never read `<split>_environment/` (including `state.json`) from solution code. App data goes only through `ToolEnv`, **exactly one per sample**, created by the runner. Agents get that env and must not create another.
 - **Every `env.call` is logged and scored.** Schema-rejected calls count as unmatched (they lower precision) and do not change state. `env.validate()` is free and not logged, so check arguments with it first. Non-schema problems (unknown ID, empty search) are not errors: they return `{"ok": true, "done": false, ...}` or an empty list.
 - Score per sample: 0 if the state hash differs, otherwise F1 over calls. Free-text keys (`utils.FREE_TEXT_KEYS`, `x-match: fuzzy` params) are dropped from the hash and scored by token-F1 > 0.6. Strings in the hash are lowercased. Gold `[]` (out of scope) scores only with an empty submission.

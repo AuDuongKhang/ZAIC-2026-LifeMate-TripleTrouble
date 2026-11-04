@@ -42,7 +42,9 @@ def _(mo):
        properties and drops optional ones the record never uses. *ASR-noisy copy* adds a copy whose user turns
        come from an ASR cache; clips missing from this session's cache are transcribed first (about 15 minutes for the
        pool) with the model given, which must **not** be fine-tuned on the pool clips (keep the off-the-shelf
-       `vinai/PhoWhisper-large`). The log and plots below refresh every minute. Checkpoints go to
+       `vinai/PhoWhisper-large`). *Synthetic samples* names a file in the HF data repo (for example
+       `synth/synth-v1.jsonl`, written by `lifemate.sft.synth`); it is rendered with the train records only (pool
+       environments, or all for `all`). The log and plots below refresh every minute. Checkpoints go to
        `<model repo>/checkpoints/<run>/last` every 30 minutes and at the end.
     5. **Stop** saves a checkpoint at the next optimizer step, then exits. In a new session (or after Stop) tick
        *resume* and press **Start training** again with the same run name, records and extra args; training continues
@@ -166,6 +168,8 @@ def _(mo):
     perturb = mo.ui.checkbox(value=False, label="perturb masked schemas (--perturb)")
     asr_cache = mo.ui.text(value="", label="ASR-noisy copy from cache (empty = none)", placeholder="pho-large-fp16")
     asr_model = mo.ui.text(value="vinai/PhoWhisper-large", label="ASR model that writes that cache")
+    synth = mo.ui.text(value="", label="synthetic samples (file in the HF data repo, empty = none)",
+                       placeholder="synth/synth-v1.jsonl", full_width=True)
     resume = mo.ui.checkbox(value=False, label="resume from the last checkpoint")
     max_steps = mo.ui.number(start=0, stop=100000, value=0, label="--max-steps (0 = full run)")
     extra = mo.ui.text(value="", label="extra train args (e.g. --epochs 1)", full_width=True)
@@ -173,8 +177,8 @@ def _(mo):
     stop = mo.ui.run_button(label="Stop")
     mo.vstack([mo.hstack([run_name, records, eval_records], justify="start"),
                mo.hstack([examples, masked, perturb, max_steps, resume], justify="start"),
-               mo.hstack([asr_cache, asr_model], justify="start"), extra, mo.hstack([start, stop], justify="start")])
-    return (asr_cache, asr_model, eval_records, examples, extra, masked, max_steps, perturb, records, resume, run_name,
+               mo.hstack([asr_cache, asr_model], justify="start"), synth, extra, mo.hstack([start, stop], justify="start")])
+    return (asr_cache, asr_model, eval_records, examples, extra, masked, max_steps, perturb, records, resume, run_name, synth,
             start, stop)
 
 
@@ -197,8 +201,9 @@ def _(commit, data_root, hf_write, model_repo, os, repo_dir, work):
 
 
 @app.cell
-def _(asr_cache, asr_model, data_root, eval_records, examples, extra, hf_write, masked, max_steps, mo, perturb, procs,
-      records, repo_dir, repo_name, resume, run_dir, run_name, shlex, start, step_env, stop, subprocess, sys):
+def _(Path, asr_cache, asr_model, data_root, eval_records, examples, extra, hf_repo, hf_token, hf_write, masked, max_steps, mo,
+      perturb, procs, records, repo_dir, repo_name, resume, run_dir, run_name, shlex, start, step_env, stop, subprocess,
+      synth, sys, work):
     if stop.value and procs.get("train") and procs["train"].poll() is None:
         (run_dir(run_name.value) / "STOP").write_text("", encoding="utf-8")  # saves at the next step, then exits
     mo.stop(not start.value, mo.md("_Press **Start training**._"))
@@ -215,14 +220,24 @@ def _(asr_cache, asr_model, data_root, eval_records, examples, extra, hf_write, 
 
     _mask, _asr = int(masked.value), asr_cache.value.strip()
     _perturb = bool(_mask and perturb.value)  # only masked copies are perturbed
+    _synth = synth.value.strip()
+    _synth_file = None
+    if _synth:  # verified synthetic samples (lifemate.sft.synth) live in the private HF data repo, never in git
+        from huggingface_hub import hf_hub_download
+
+        _synth_file = hf_hub_download(repo_id=hf_repo.value.strip(), repo_type="dataset", filename=_synth,
+                                      token=hf_token.value or None, local_dir=work / "synth")
 
     def _name(subset, train=False):
         extras = ((f"-m{_mask}" if train and _mask else "") + ("-p" if train and _perturb else "")
-                  + (f"-asr-{_asr}" if train and _asr else ""))
+                  + (f"-asr-{_asr}" if train and _asr else "")
+                  + (f"-{Path(_synth).stem}" if train and _synth else ""))
         return f"gold-{subset}{extras}" + ("" if int(examples.value) == 4 else f"-k{int(examples.value)}")
 
     _k = ["--examples", str(int(examples.value)), "--tokenizer", "none"]
     _train_k = (["--mask", str(_mask)] if _mask else []) + (["--perturb"] if _perturb else [])
+    if _synth_file:
+        _train_k += ["--extra-samples", _synth_file]
     if _asr:  # resumable: only clips missing from this session's cache are transcribed
         _run([sys.executable, "-m", "lifemate.transcribe", "--split", "train", "--asr", "whisper", "--asr-kw",
               f"model={asr_model.value.strip()}", "--name", _asr, *(["--subset", "pool"] if records.value == "pool" else [])])
