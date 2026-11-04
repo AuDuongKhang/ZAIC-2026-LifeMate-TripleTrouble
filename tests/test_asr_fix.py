@@ -2,7 +2,7 @@
 import io
 import json
 
-from lifemate.asr_fix import build_messages, clean_answer, fix_samples, report
+from lifemate.asr_fix import build_messages, clean_answer, fix_samples, refilter, report, small_edit
 
 SAMPLE = {"id": "s1", "audio": "a/s1.wav", "audio_text": "GOLD đặt báo thức", "label": {"tool_calls": []},
           "context": {"installed_apps": {"alarm": {}, "zzz": {}}, "user_profile": {"name": "Bác Tư"}},
@@ -58,3 +58,25 @@ def test_report_counts_better_and_worse():
     text = report("t", samples, rows, {"dev": {"s1", "s2"}})
     assert "| dev | 2 | 0.1667 | 0.2500 | 1 | 1 | 0 |" in text
     assert "`s1`" in text.split("## Improved")[1] and "`s2`" in text.split("## Improved")[0]
+
+
+def test_small_edit_keeps_sound_alike_swaps_only():
+    assert small_edit("Đóng giùm em tiền đền tháng chín nha", "Đóng giùm em tiền điện tháng chín nha")
+    assert small_edit("đúng vụ nước vào phòng mấy chỗ thì gọi", "đúng vụ nước vào phòng máy chủ thì gọi")
+    assert small_edit("sẽ phản bội chị ấy", "sẽ phản hồi chị ấy")
+    assert not small_edit("Vậy bật cái đèn đó lên", "Vậy bật cái đèn trần lên")  # not similar
+    assert not small_edit("Làm thủ tục chuyến mai luôn", "Làm thủ tục chuyến bay luôn")  # not similar
+    assert not small_edit("bằng ví nhé", "bằng Ví điện tử nhé")  # adds words
+    assert not small_edit("giờ dùng số không chín không", "giờ dùng số 909")  # touches digits
+    assert not small_edit("lúc sáu giờ", "lúc sáu giờ")  # nothing changed
+    assert not small_edit("một hai ba bốn năm", "một hai ba bốn bảy")  # a number word
+
+
+def test_refilter_undoes_large_changes_and_keeps_the_rest():
+    rows = {"a": {"text": "tiền điện", "original": "tiền đền", "outcome": "changed"},
+            "b": {"text": "khác hẳn luôn nha", "original": "bật cái đèn", "outcome": "changed"},
+            "c": {"text": "lịch sử", "original": "lịch sử", "outcome": "history"}}
+    out = refilter(rows)
+    assert out["a"]["text"] == "tiền điện" and out["a"]["outcome"] == "changed"
+    assert out["b"]["text"] == "bật cái đèn" and out["b"]["outcome"] == "undone"
+    assert out["c"]["text"] == "lịch sử"

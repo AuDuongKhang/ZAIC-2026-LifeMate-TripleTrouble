@@ -9,16 +9,22 @@ when it is empty, holds markup or several lines, or differs from the transcript 
 word). The LLM must be the one the system ships, since a second model would break the 5B limit. On train it also writes
 <name>.fix.md: final-request WER before and after by subset, with the clips that improved and got worse. Tune on dev only.
 Finished clips are skipped, so an interrupted run resumes. Greedy decoding, so a rerun gives the same text.
+
+`--refilter` needs no model: it reads a finished fix cache as --source and keeps a change only if it swaps at most two
+words for similar-sounding ones (see `small_edit`), with the same word count and no number touched.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import time
 from pathlib import Path
 
+from .agents.ask_guard import fold
 from .asr.cached import cache_path, read_cache, sample_clips
-from .asr.wer import wer
+from .asr.wer import _edit_distance, normalize, wer
+from .asr_errors import NUMBER_WORDS
 from .data import default_data_root, load_samples
 from .splits import SUBSETS, load_splits
 from .transcribe import percentile
@@ -74,6 +80,36 @@ def clean_answer(transcript: str, answer: str, max_change: float) -> tuple[str, 
     if wer(transcript, text) > max_change:
         return transcript, "dropped: too different"
     return (transcript, "same") if text == transcript else (text, "changed")
+
+
+def small_edit(original: str, text: str, max_words: int = 2) -> bool:
+    """True when `text` swaps 1 to max_words words of `original` for similar-sounding ones: same word count, same digits,
+    no number word changed, and each pair within half a word of letter edits once diacritics are folded."""
+    if re.findall(r"\d", original) != re.findall(r"\d", text):
+        return False
+    before, after = normalize(original), normalize(text)
+    if len(before) != len(after):
+        return False
+    pairs = [(a, b) for a, b in zip(before, after) if a != b]
+    if not 1 <= len(pairs) <= max_words:
+        return False
+    for a, b in pairs:
+        if a in NUMBER_WORDS or b in NUMBER_WORDS:
+            return False
+        x, y = "".join(fold(a)), "".join(fold(b))
+        if _edit_distance(x, y) > max(len(x), len(y)) / 2:
+            return False
+    return True
+
+
+def refilter(rows: dict[str, dict]) -> dict[str, dict]:
+    """Fix-cache lines with every change that is not a `small_edit` undone."""
+    out = {}
+    for clip, row in rows.items():
+        if row.get("outcome") == "changed" and not small_edit(row["original"], row["text"]):
+            row = {**row, "text": row["original"], "outcome": "undone"}
+        out[clip] = row
+    return out
 
 
 def fix_samples(samples: list[dict], rows: dict[str, dict], done: dict[str, dict], llm, app_names: dict[str, str],
@@ -153,6 +189,7 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--limit", type=int, default=None, help="first N samples only")
     ap.add_argument("--max-change", type=float, default=0.3, help="drop answers with more word edits per word than this")
     ap.add_argument("--max-new-tokens", type=int, default=128)
+    ap.add_argument("--refilter", action="store_true", help="no model: apply `small_edit` to the fix cache in --source")
     ap.add_argument("--data-root", type=Path, default=default_data_root())
     args = ap.parse_args(argv)
 
@@ -171,6 +208,15 @@ def main(argv: list[str] | None = None) -> Path:
         app_names = {a["id"]: a["name_vi"] for a in json.load(f)["apps"]}
 
     out = cache_path(args.split, args.name)
+    if args.refilter:
+        result = refilter(rows)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in result.values()), encoding="utf-8")
+        if args.split == "train":
+            text = report(args.name, samples, result, {g: set(splits[g]) for g in ("dev", "holdout", "pool")})
+            out.with_suffix(".fix.md").write_text(text, encoding="utf-8")
+            print(text, flush=True)
+        return out
     done = read_cache(out)
     todo = [s for s in samples if any(c not in done for c in sample_clips(s))]
     print(f"{args.name}: {len(todo)} samples to fix ({len(samples) - len(todo)} already done)", flush=True)
