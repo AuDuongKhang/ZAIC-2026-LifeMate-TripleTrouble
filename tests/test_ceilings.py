@@ -49,6 +49,31 @@ def test_buckets_are_the_planned_set():
         "all_args+reads", "all_args+reads+ask", "everything"}
 
 
+def test_each_bucket_fixes_what_its_name_says():
+    every_type = {"free", "id", "date", "num", "string", "enum_bool"}
+    assert BUCKETS == {
+        "free_text": {"arg_types": {"free"}},
+        "id": {"arg_types": {"id"}},
+        "date": {"arg_types": {"date"}},
+        "num": {"arg_types": {"num"}},
+        "string": {"arg_types": {"string"}},
+        "enum_bool": {"arg_types": {"enum_bool"}},
+        "all_args": {"arg_types": every_type},
+        "reads": {"reads": "all"},
+        "reads_drop_extra": {"reads": "drop_extra"},
+        "reads_add_missing": {"reads": "add_missing"},
+        "reads_fix_args": {"reads": "fix_args"},
+        "ask_act": {"ask": "all"},
+        "ask_gold_asks": {"ask": "gold_asks"},
+        "ask_agent_asks": {"ask": "agent_asks"},
+        "write_set": {"write_set": True},
+        "out_of_scope": {"out_of_scope": True},
+        "all_args+reads": {"arg_types": every_type, "reads": "all"},
+        "all_args+reads+ask": {"arg_types": every_type, "reads": "all", "ask": "all"},
+        "everything": {"arg_types": every_type, "reads": "all", "ask": "all", "write_set": True, "out_of_scope": True},
+    }
+
+
 def _catalog():
     return {
         "a.get": {"name": "a.get", "kind": "read", "parameters": {"properties": {"q": {"type": "string"}}}},
@@ -74,6 +99,13 @@ def test_arg_types_fix_only_the_named_type():
     pred = [_call("a.set", note="sai", id="i2", day="2026-11-15", n=2)]
     assert _fix(gold, pred, arg_types={"date"}) == [_call("a.set", note="sai", id="i2", day="2026-11-14", n=2)]
     assert _fix(gold, pred, arg_types={"free"}) == [_call("a.set", note="đúng", id="i2", day="2026-11-15", n=2)]
+
+
+def test_arg_types_take_the_type_from_the_gold_value():
+    """A model that writes "thứ ba" where gold has an ISO date made a date error, not a string error."""
+    gold, pred = [_call("a.set", day="2026-11-14")], [_call("a.set", day="thứ ba")]
+    assert _fix(gold, pred, arg_types={"date"}) == gold
+    assert _fix(gold, pred, arg_types={"string"}) is None
 
 
 def test_arg_types_add_a_missing_argument_and_drop_an_extra_one():
@@ -241,3 +273,15 @@ def test_cli_refuses_a_run_that_is_not_on_train(tmp_path):
     (tmp_path / "meta.json").write_text(json.dumps({"split": "public_test"}), encoding="utf-8")
     with pytest.raises(SystemExit, match="train"):
         main([str(tmp_path)])
+
+
+def test_cli_refuses_a_run_without_meta(tmp_path):
+    with pytest.raises(SystemExit, match="meta.json"):
+        main([str(tmp_path)])
+
+
+def test_cli_refuses_an_unscored_run_before_writing_anything(tmp_path):
+    (tmp_path / "meta.json").write_text(json.dumps({"split": "train"}), encoding="utf-8")
+    with pytest.raises(SystemExit, match="lifemate.evaluate"):
+        main([str(tmp_path)])
+    assert not (tmp_path / "ceilings").exists()

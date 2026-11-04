@@ -163,9 +163,13 @@ def main(argv: list[str] | None = None) -> dict[str, dict]:
     ap.add_argument("run", type=Path, help="scored train run folder (trace.jsonl, submission.jsonl, per_sample.jsonl)")
     ap.add_argument("--data-root", type=Path, default=default_data_root())
     args = ap.parse_args(argv)
+    if not (args.run / "meta.json").exists():
+        raise SystemExit(f"{args.run}: no meta.json, so this is not a finished run")
     meta = json.loads((args.run / "meta.json").read_text(encoding="utf-8"))
     if meta.get("split") != "train":
         raise SystemExit(f"{args.run}: split is {meta.get('split')!r}, ceilings need train labels")
+    if not (args.run / "per_sample.jsonl").exists():
+        raise SystemExit(f"{args.run}: not scored yet; run `python -m lifemate.evaluate {args.run}` first")
     samples = {s["id"]: s for s in load_samples(args.data_root, "train")}
     results, rows = {}, []
     for bucket, kw in BUCKETS.items():
