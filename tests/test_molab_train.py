@@ -1,6 +1,8 @@
 """Runs the training notebook's cells with fakes for the UI and subprocess, so the commands they build are checked
 without marimo or a GPU."""
 import ast
+import shlex
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -37,8 +39,8 @@ def _commands(tmp_path, hints):
         "hf_repo": _value("r"), "hf_token": _value(""), "hf_write": _value(""), "masked": _value(2), "max_steps": _value(0),
         "mo": MagicMock(), "perturb": _value(True), "procs": {}, "records": _value("pool"), "repo_dir": tmp_path,
         "repo_name": lambda: "", "resume": _value(False), "run_dir": lambda name: tmp_path / "ckpt" / name,
-        "run_name": _value("sft-v3d"), "shlex": __import__("shlex"), "start": _value(True), "step_env": dict,
-        "stop": _value(False), "subprocess": subprocess, "synth": _value(""), "sys": __import__("sys"), "work": tmp_path,
+        "run_name": _value("sft-v3d"), "shlex": shlex, "start": _value(True), "step_env": dict,
+        "stop": _value(False), "subprocess": subprocess, "synth": _value(""), "sys": sys, "work": tmp_path,
     }
     fn(**{p: fakes[p] for p in params})
     return [c.args[0] for c in subprocess.run.call_args_list], subprocess.Popen.call_args.args[0]
@@ -69,7 +71,7 @@ def test_merge_suggests_a_preset_that_serves_as_it_was_trained(tmp_path, hints, 
     subprocess.run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
     fakes = {"date_hints": _value(hints), "examples": _value(4), "merge": _value(True), "mo": mo, "procs": {},
              "repo_dir": tmp_path, "repo_name": lambda: "o/lifemate-sft-v3d", "run_dir": lambda name: tmp_path / name,
-             "run_name": _value("sft-v3d"), "step_env": dict, "subprocess": subprocess, "sys": __import__("sys"),
+             "run_name": _value("sft-v3d"), "step_env": dict, "subprocess": subprocess, "sys": sys,
              "work": tmp_path}
     fn(**{p: fakes[p] for p in params})
     assert ('"date_hints": true' in mo.md.call_args.args[0]) is expected
