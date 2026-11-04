@@ -80,3 +80,53 @@ def test_load_run_refuses_asr_runs_unless_allowed(tmp_path):
 def test_load_run_refuses_splits_without_labels(tmp_path):
     with pytest.raises(SystemExit, match="only works on train"):
         load_run(_run(tmp_path, split="public_test"), SAMPLES, allow_asr=False)
+
+
+CATALOG = {
+    "news.search": {"kind": "read", "parameters": {"properties": {"query": {}}}},
+    "news.headlines": {"kind": "read", "parameters": {"properties": {"topic": {}}}},
+    "notes.create": {"kind": "write", "parameters": {"properties": {"title": {"x-match": "fuzzy"}, "content": {"x-match": "fuzzy"}}}},
+    "contacts.search": {"kind": "read", "parameters": {"properties": {"query": {}}}},
+    "phone.call": {"kind": "write", "parameters": {"properties": {"contact_id": {}}}},
+}
+
+
+def _issues(gold, pred):
+    from lifemate.data import fuzzy_params
+    from lifemate.loss_report import state_right_issues
+    return state_right_issues(gold, pred, CATALOG, fuzzy_params(CATALOG))
+
+
+def test_issue_for_a_read_query_that_is_not_identical():
+    assert _issues([CALL("news.search", query="xăng")], [CALL("news.search", query="giá xăng")]) == ["read args: value"]
+
+
+def test_issue_for_the_wrong_read_tool_of_the_same_app():
+    assert _issues([CALL("news.search", query="khoa học")], [CALL("news.headlines", topic="tech")]) == ["other read tool, same app"]
+
+
+def test_issue_for_free_text_names_its_shape():
+    gold = CALL("notes.create", title="Tin cần đọc", content="Vườn rau dùng tưới nhỏ giọt")
+    long = CALL("notes.create", title="Tin cần đọc", content="Vườn rau dùng tưới nhỏ giọt, tiết kiệm nước gần một nửa so với tưới tràn trên toàn bộ khu vườn")
+    other = CALL("notes.create", title="Tin cần đọc", content="Bài báo nói chuyện khác hẳn luôn")
+    assert _issues([gold], [long]) == ["free text: longer than gold"]
+    assert _issues([gold], [other]) == ["free text: other words"]
+
+
+def test_issues_for_missing_and_extra_calls_keep_their_kind():
+    assert _issues([ASK], []) == ["missing ask"]
+    assert _issues([], [CALL("contacts.search", query="Lan")]) == ["extra read"]
+    assert _issues([CALL("contacts.search", query="Lan")], []) == ["missing read"]
+
+
+def test_exact_matches_leave_no_issue_and_are_not_paired_with_others():
+    a, b = CALL("contacts.search", query="Lan"), CALL("contacts.search", query="Minh")
+    assert _issues([a, b], [b, a]) == []
+    assert _issues([a], [b, a]) == ["extra read"]
+
+
+def test_issue_table_splits_a_sample_equally_and_adds_up():
+    from lifemate.loss_report import issue_table
+    rows = [{"id": "a", "loss": 100.0, "issues": ["extra read", "missing read"]}, {"id": "b", "loss": 0.0, "issues": []}]
+    text = "\n".join(issue_table(rows))
+    assert "| extra read | 1 | 25.00 |" in text and "| missing read | 1 | 25.00 |" in text
