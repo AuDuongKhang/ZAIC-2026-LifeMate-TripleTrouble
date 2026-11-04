@@ -173,6 +173,12 @@ def test_date_hint_presets_are_their_base_plus_the_flag():
         assert resolve("agent", dates, env) == (name, {**kw, "date_hints": True})
 
 
+def test_sft_v3d_preset_serves_with_date_hints():
+    """Trained with the weekday table, so it must be served with it."""
+    assert resolve("agent", "sft-v3d-refs", {"HF_MODEL_OWNER": "team"}) == (
+        "react", {"model": "team/lifemate-sft-v3d", "examples": 4, "check_refs": True, "date_hints": True})
+
+
 def test_beam_search_asr_preset_keeps_the_same_model():
     """beam 5: WER 0.0962 -> 0.0911 on the 2108 eval clips, p95 0.66 -> 0.95 s per clip (molab)."""
     env = {"HF_MODEL_OWNER": "team"}
