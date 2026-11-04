@@ -166,3 +166,9 @@ def test_date_hint_presets_are_their_base_plus_the_flag():
     for base, dates in (("sft-v2-refs", "sft-v2-refs-dates"), ("sft-final", "sft-final-dates")):
         name, kw = resolve("agent", base, env)
         assert resolve("agent", dates, env) == (name, {**kw, "date_hints": True})
+
+
+def test_beam_search_asr_preset_keeps_the_same_model():
+    """beam 5: WER 0.0962 -> 0.0911 on the 2108 eval clips, p95 0.66 -> 0.95 s per clip (molab)."""
+    env = {"HF_MODEL_OWNER": "team"}
+    assert resolve("asr", "pho-large-ft-b-beam5", env) == ("whisper", {"model": "team/pho-large-ft-b", "num_beams": 5})
