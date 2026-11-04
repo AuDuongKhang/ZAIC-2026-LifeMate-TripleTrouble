@@ -37,3 +37,19 @@ def test_whisper_passes_the_revision(monkeypatch):
     monkeypatch.setitem(sys.modules, "transformers", types.SimpleNamespace(pipeline=fake_pipeline))
     WhisperASR(model="team/pho-large-ft-b", revision="abc123")
     assert seen["model"] == "team/pho-large-ft-b" and seen["revision"] == "abc123"
+
+
+def test_whisper_beam_search_is_opt_in(monkeypatch):
+    import types
+
+    from lifemate.asr.whisper import WhisperASR
+
+    def fake_pipeline(task, **kw):
+        return types.SimpleNamespace(model=types.SimpleNamespace(generation_config=types.SimpleNamespace()))
+
+    monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(float16="fp16", float32="fp32"))
+    monkeypatch.setitem(sys.modules, "transformers", types.SimpleNamespace(pipeline=fake_pipeline))
+    assert WhisperASR(model="m").generate_kwargs == {"num_beams": 1, "do_sample": False}
+    assert WhisperASR(model="m", num_beams=5).generate_kwargs == {"num_beams": 5, "do_sample": False}
+    with pytest.raises(ValueError, match="num_beams"):
+        WhisperASR(model="m", num_beams=0)
