@@ -172,3 +172,10 @@ def test_beam_search_asr_preset_keeps_the_same_model():
     """beam 5: WER 0.0962 -> 0.0911 on the 2108 eval clips, p95 0.66 -> 0.95 s per clip (molab)."""
     env = {"HF_MODEL_OWNER": "team"}
     assert resolve("asr", "pho-large-ft-b-beam5", env) == ("whisper", {"model": "team/pho-large-ft-b", "num_beams": 5})
+
+
+def test_context_prompt_asr_presets_only_add_the_flag():
+    env = {"HF_MODEL_OWNER": "team"}
+    for base, context in (("pho-large-ft-b", "pho-large-ft-b-context"), ("pho-large-ft-b-beam5", "pho-large-ft-b-beam5-context")):
+        name, kw = resolve("asr", base, env)
+        assert resolve("asr", context, env) == (name, {**kw, "context_prompt": True})

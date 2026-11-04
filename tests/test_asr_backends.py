@@ -53,3 +53,53 @@ def test_whisper_beam_search_is_opt_in(monkeypatch):
     assert WhisperASR(model="m", num_beams=5).generate_kwargs == {"num_beams": 5, "do_sample": False}
     with pytest.raises(ValueError, match="num_beams"):
         WhisperASR(model="m", num_beams=0)
+
+
+def _whisper(monkeypatch, tokenizer, **kw):
+    import types
+
+    from lifemate.asr.whisper import WhisperASR
+
+    def fake_pipeline(task, **_):
+        return types.SimpleNamespace(tokenizer=tokenizer, device="cuda:0",
+                                     model=types.SimpleNamespace(generation_config=types.SimpleNamespace()))
+
+    monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(float16="fp16", float32="fp32"))
+    monkeypatch.setitem(sys.modules, "transformers", types.SimpleNamespace(pipeline=fake_pipeline))
+    return WhisperASR(model="m", **kw)
+
+
+class _Ids(list):
+    def to(self, device):
+        self.device = device
+        return self
+
+
+class _Tokenizer:
+    def __init__(self):
+        self.prompts = []
+
+    def get_prompt_ids(self, text, return_tensors=None):
+        self.prompts.append(text)
+        return _Ids([0, 1, 2])
+
+
+SAMPLE = {"context": {"user_profile": {"name": "Anh Khoa"}}, "history": []}
+
+
+def test_whisper_context_prompt_is_opt_in(monkeypatch):
+    tok = _Tokenizer()
+    asr = _whisper(monkeypatch, tok)
+    assert asr._generate_kwargs(SAMPLE) == {"num_beams": 1, "do_sample": False} and tok.prompts == []
+
+
+def test_whisper_context_prompt_goes_to_generate_on_the_model_device(monkeypatch):
+    tok = _Tokenizer()
+    kw = _whisper(monkeypatch, tok, context_prompt=True)._generate_kwargs(SAMPLE)
+    assert tok.prompts == ["Anh Khoa"] and kw["prompt_ids"] == [0, 1, 2] and kw["prompt_ids"].device == "cuda:0"
+
+
+def test_whisper_without_context_sends_no_prompt(monkeypatch):
+    tok = _Tokenizer()
+    kw = _whisper(monkeypatch, tok, context_prompt=True)._generate_kwargs({"context": {}, "history": []})
+    assert "prompt_ids" not in kw and tok.prompts == []
