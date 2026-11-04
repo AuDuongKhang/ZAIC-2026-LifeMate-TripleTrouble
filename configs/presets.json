@@ -37,6 +37,9 @@
     "pho-large-fp32": {"asr": "whisper", "asr_kw": {"model": "vinai/PhoWhisper-large", "dtype": "float32"}},
     "phoasr-small-ft-a": {"asr": "whisper", "asr_kw": {"model": "${HF_MODEL_OWNER}/phoasr-small-ft-a"}},
     "pho-large-ft-a": {"asr": "whisper", "asr_kw": {"model": "${HF_MODEL_OWNER}/pho-large-ft-a"}},
-    "pho-large-ft-b": {"asr": "whisper", "asr_kw": {"model": "${HF_MODEL_OWNER}/pho-large-ft-b"}}
+    "pho-large-ft-b": {"asr": "whisper", "asr_kw": {"model": "${HF_MODEL_OWNER}/pho-large-ft-b"}},
+    "pho-large-ft-b-beam5": {"asr": "whisper", "asr_kw": {"model": "${HF_MODEL_OWNER}/pho-large-ft-b", "num_beams": 5}},
+    "pho-large-ft-all": {"asr": "whisper", "asr_kw": {"model": "${HF_MODEL_OWNER}/pho-large-ft-all"}},
+    "pho-large-ft-all-beam5": {"asr": "whisper", "asr_kw": {"model": "${HF_MODEL_OWNER}/pho-large-ft-all", "num_beams": 5}}
   }
 }
