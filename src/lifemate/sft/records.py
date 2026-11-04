@@ -14,10 +14,16 @@ sample in the same file. `--mask K` adds K function-masked copies (lifemate.sft.
 (lifemate.sft.perturb):
 
     python -m lifemate.sft.records --name v2-pool --subset pool --text gold --text cache:pho-large-fp16 --mask 1
+
+`--extra-samples FILE` (repeatable) adds synthetic samples (lifemate.sft.synth) after the subset's own: rendered
+like real ones, with the same --mask/--perturb copies, but only with gold text (they have no audio, so `cache:`
+sources skip them). Each runs in the train environment named by its `env_id`, which must belong to the pool unless
+--subset is `all`; they are never few-shot examples.
 """
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import random
 from collections import Counter
@@ -34,6 +40,7 @@ from ..splits import load_splits
 from .mask import mask_record
 from .perturb import perturb_record
 from .replay import replay
+from .synth import env_id
 from .tokenize import render
 
 RECORDS_DIR = REPO_ROOT / "train_records"
@@ -48,6 +55,8 @@ def main(argv: list[str] | None = None) -> Path:
                     help="gold (default) or cache:<asr_name>; repeat for one record per source")
     ap.add_argument("--mask", type=int, default=0, help="function-masked copies of the first --text source's record")
     ap.add_argument("--perturb", action="store_true", help="perturb the schemas of masked copies (lifemate.sft.perturb)")
+    ap.add_argument("--extra-samples", action="append", type=Path, default=[], metavar="FILE",
+                    help="synthetic samples (jsonl) rendered after the subset; repeatable")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--prompt", default=DEFAULT_PROMPT, choices=sorted(PROMPTS))
     ap.add_argument("--examples", type=int, default=4, help="few-shot examples in the system prompt (0 = none)")
@@ -72,6 +81,15 @@ def main(argv: list[str] | None = None) -> Path:
     splits = load_splits()
     wanted = {s["id"] for s in samples} if args.subset == "all" else set(splits[args.subset])
     chosen = [s for s in samples if s["id"] in wanted][: args.limit]
+    extras = []
+    for path in args.extra_samples:
+        with open(path, encoding="utf-8") as f:
+            extras += [json.loads(line) for line in f if line.strip()]
+    allowed = {s["id"] for s in samples} if args.subset == "all" else set(splits["pool"])
+    for extra in extras:
+        if env_id(extra) not in allowed:
+            ap.error(f"extra sample {extra['id']} uses a non-pool environment {env_id(extra)} (only --subset all "
+                     "may use every train environment)")
     bank = None
     if args.examples:
         bank_ids = {s["id"] for s in samples} if args.subset == "all" else set(splits["pool"])
@@ -80,11 +98,16 @@ def main(argv: list[str] | None = None) -> Path:
     args.out_dir.mkdir(parents=True, exist_ok=True)
     out = args.out_dir / f"{args.name}.jsonl"
     kinds, written, dropped = Counter(), Counter(), []
+    gold_only = [(GoldTranscriptASR(), "gold")]
+    work = [(s, sources) for s in chosen] + [(s, gold_only) for s in extras]
+    asr_skipped = len(extras) * sum(1 for _, source in sources if source != "gold")
     with open(out, "w", encoding="utf-8") as f:
-        for sample in chosen:
-            for i, (asr, source) in enumerate(sources):
+        for sample, sample_sources in work:
+            for i, (asr, source) in enumerate(sample_sources):
                 task = build_task(sample, asr, catalog, args.data_root, "train")  # CachedASR: KeyError on a missing clip
-                env = zaic_tools.ToolEnv("train", sample["id"], root=args.data_root)  # fresh env per record
+                if "env_id" in sample:  # the base sample must not come back as its own few-shot example
+                    task = dataclasses.replace(task, id=env_id(sample))
+                env = zaic_tools.ToolEnv("train", env_id(sample), root=args.data_root)  # fresh env per record
                 rec = replay(sample, task, env, args.prompt, args.examples, bank, args.date_hints)
                 if rec is None:
                     dropped.append(f"{sample['id']}:{source}")
@@ -102,7 +125,8 @@ def main(argv: list[str] | None = None) -> Path:
                         written["masked"] += 1
 
     print(f"-> {out}: {sum(written.values())} records {dict(written)}, first source by kind {dict(kinds)}, "
-          f"{len(dropped)} replays dropped" + (f" {dropped[:20]}" if dropped else ""), flush=True)
+          f"{len(dropped)} replays dropped" + (f" {dropped[:20]}" if dropped else "")
+          + (f", {len(extras)} extra samples ({asr_skipped} asr skipped)" if extras else ""), flush=True)
     if args.tokenizer != "none":
         from transformers import AutoTokenizer
 
