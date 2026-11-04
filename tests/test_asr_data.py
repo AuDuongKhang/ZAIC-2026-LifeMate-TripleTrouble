@@ -32,3 +32,15 @@ def test_eval_manifest_is_disjoint_from_train_and_deterministic(train_samples):
     assert full and not train & {r["audio"] for r in full}
     a, b = build_eval_manifest(train_samples, limit=50), build_eval_manifest(train_samples, limit=50)
     assert a == b and len(a) == 50
+
+
+def test_final_retrain_uses_every_clip_and_selects_nothing(train_samples):
+    from lifemate.train_asr import selection_args, training_ids
+
+    assert training_ids("all", train_samples) == {x["id"] for x in train_samples}
+    assert training_ids("pool", train_samples) == set(load_splits()["pool"])
+    assert len(build_train_manifest(train_samples, training_ids("all", train_samples))) == 5036
+    final = selection_args("all", 100)
+    assert final["eval_strategy"] == "no" and final["load_best_model_at_end"] is False and "metric_for_best_model" not in final
+    pool = selection_args("pool", 100)
+    assert pool["eval_steps"] == 100 and pool["load_best_model_at_end"] is True and pool["metric_for_best_model"] == "wer"

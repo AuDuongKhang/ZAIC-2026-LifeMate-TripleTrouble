@@ -148,7 +148,7 @@ def test_sft_presets_name_their_merged_model_and_four_examples(name):
 
 
 def test_fine_tuned_asr_presets_name_their_hub_model():
-    for name in ("pho-large-ft-a", "pho-large-ft-b"):
+    for name in ("pho-large-ft-a", "pho-large-ft-b", "pho-large-ft-all"):
         assert resolve("asr", name, {"HF_MODEL_OWNER": "team"}) == ("whisper", {"model": f"team/{name}"})
 
 

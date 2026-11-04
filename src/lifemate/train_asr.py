@@ -12,6 +12,9 @@ backend loads directly:
     python -m lifemate.transcribe --split train --asr whisper --asr-kw model=asr_runs/phoasr-small-ft-a/final \
         --name phoasr-small-ft-a --subset eval
 
+`--subset all` is the final retrain: every train clip, no eval and no checkpoint selection, so <out>/final is the model
+after the last step. Keep the recipe of the pool run, whose eval clips are now training data. Nothing local can score it.
+
 Plots of train loss, learning rate and eval WER/CER go to <out>/training.png, the raw log to <out>/log_history.json.
 Needs accelerate, installed by hand with --no-deps (it depends on torch, so it stays out of requirements.txt).
 """
@@ -29,6 +32,18 @@ from .asr_data import build_eval_manifest, build_train_manifest
 from .data import audio_path, default_data_root, load_samples
 from .splits import load_splits
 from .utils import seed_everything
+
+
+def training_ids(subset: str, samples: list[dict]) -> set[str]:
+    return {s["id"] for s in samples} if subset == "all" else set(load_splits()["pool"])
+
+
+def selection_args(subset: str, eval_steps: int) -> dict:
+    """Seq2SeqTrainingArguments for eval and best-checkpoint selection; `all` has no clip left to score, so no selection."""
+    if subset == "all":
+        return {"eval_strategy": "no", "save_strategy": "steps", "save_steps": eval_steps, "load_best_model_at_end": False}
+    return {"eval_strategy": "steps", "eval_steps": eval_steps, "save_strategy": "steps", "save_steps": eval_steps,
+            "load_best_model_at_end": True, "metric_for_best_model": "wer", "greater_is_better": False}
 
 
 class ClipDataset:
@@ -98,6 +113,7 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--eval-steps", type=int, default=200, help="evaluate + checkpoint every N optimizer steps")
     ap.add_argument("--eval-clips", type=int, default=400, help="fixed random subset of dev + holdout clips")
     ap.add_argument("--mask-time-prob", type=float, default=0.05, help="SpecAugment; 0 turns it off")
+    ap.add_argument("--subset", choices=("pool", "all"), default="pool", help="all = final retrain, no eval")
     ap.add_argument("--freeze-encoder", action="store_true")
     ap.add_argument("--grad-checkpointing", action="store_true", help="for large models on small GPUs")
     ap.add_argument("--limit", type=int, default=None, help="first N train clips only (smoke test)")
@@ -135,8 +151,8 @@ def main(argv: list[str] | None = None) -> Path:
         model.config.use_cache = False
 
     samples = load_samples(args.data_root, "train")
-    train_rows = build_train_manifest(samples, set(load_splits()["pool"]))[: args.limit]
-    eval_rows = build_eval_manifest(samples, limit=args.eval_clips, seed=args.seed)
+    train_rows = build_train_manifest(samples, training_ids(args.subset, samples))[: args.limit]
+    eval_rows = [] if args.subset == "all" else build_eval_manifest(samples, limit=args.eval_clips, seed=args.seed)
     print(f"train clips {len(train_rows)}, eval clips {len(eval_rows)}", flush=True)
     (args.out / "manifest_train.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in train_rows),
                                                    encoding="utf-8")
@@ -159,8 +175,7 @@ def main(argv: list[str] | None = None) -> Path:
         gradient_accumulation_steps=args.grad_accum, learning_rate=args.lr, warmup_steps=args.warmup_steps,
         num_train_epochs=args.epochs, bf16=bf16, fp16=torch.cuda.is_available() and not bf16,
         gradient_checkpointing=args.grad_checkpointing,
-        eval_strategy="steps", eval_steps=args.eval_steps, save_strategy="steps", save_steps=args.eval_steps,
-        save_total_limit=2, load_best_model_at_end=True, metric_for_best_model="wer", greater_is_better=False,
+        save_total_limit=2, **selection_args(args.subset, args.eval_steps),
         predict_with_generate=True, generation_max_length=225, generation_num_beams=1,
         logging_steps=25, dataloader_num_workers=2, remove_unused_columns=False, label_names=["labels"],
         push_to_hub=bool(args.hub_repo and args.hub_checkpoints), hub_model_id=args.hub_repo, hub_private_repo=True,
@@ -168,9 +183,9 @@ def main(argv: list[str] | None = None) -> Path:
     )
     trainer = Seq2SeqTrainer(
         model=model, args=targs, train_dataset=ClipDataset(train_rows, args.data_root, processor),
-        eval_dataset=ClipDataset(eval_rows, args.data_root, processor),
+        eval_dataset=ClipDataset(eval_rows, args.data_root, processor) if eval_rows else None,
         data_collator=Collator(processor, model.config.decoder_start_token_id),
-        compute_metrics=compute_metrics, processing_class=processor.feature_extractor,
+        compute_metrics=compute_metrics if eval_rows else None, processing_class=processor.feature_extractor,
     )
 
     resume = None
@@ -187,18 +202,18 @@ def main(argv: list[str] | None = None) -> Path:
     trainer.train(resume_from_checkpoint=resume)
 
     final = args.out / "final"
-    trainer.save_model(str(final))  # the best checkpoint by eval WER (load_best_model_at_end)
+    trainer.save_model(str(final))  # the best checkpoint by eval WER (load_best_model_at_end); `all`: the last step
     processor.save_pretrained(str(final))
     history = trainer.state.log_history
     (args.out / "log_history.json").write_text(json.dumps(history, indent=1), encoding="utf-8")
     plot_history(history, args.out)
     best = trainer.state.best_metric
     print(f"-> {final}  best eval WER {best:.4f} on {len(eval_rows)} clips" if best is not None else f"-> {final}")
-    if args.hub_repo:  # the best model + processor only: no optimizer state
+    if args.hub_repo:  # the final model + processor only: no optimizer state
         from huggingface_hub import HfApi
         api = HfApi(token=os.environ.get("HF_TOKEN"))
         api.create_repo(args.hub_repo, private=True, exist_ok=True)
-        api.upload_folder(folder_path=str(final), repo_id=args.hub_repo, commit_message="final (best eval WER)")
+        api.upload_folder(folder_path=str(final), repo_id=args.hub_repo, commit_message=f"final ({args.subset} clips)")
         print(f"-> https://huggingface.co/{args.hub_repo}")
     return final
 
