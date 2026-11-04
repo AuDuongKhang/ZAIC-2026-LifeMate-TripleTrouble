@@ -1,6 +1,8 @@
 """Runs the training notebook's cells with fakes for the UI and subprocess, so the commands they build are checked
 without marimo or a GPU."""
 import ast
+import json
+import re
 import shlex
 import sys
 from pathlib import Path
@@ -64,14 +66,36 @@ def test_without_date_hints_the_commands_stay_as_they_were(tmp_path):
     assert _after(train, "--records") == "gold-pool-m2-p" and _after(train, "--eval-records") == "gold-dev"
 
 
-@pytest.mark.parametrize("hints, expected", [(True, True), (False, False)])
-def test_merge_suggests_a_preset_that_serves_as_it_was_trained(tmp_path, hints, expected):
+def _merge_suggestion(tmp_path, ticked, saved_records=None):
+    """Press Merge; returns the markdown with the suggested preset. saved_records: the run_config.json the run left."""
     fn, params = _cell("merge", "date_hints")
     mo, subprocess = MagicMock(), MagicMock()
     subprocess.run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
-    fakes = {"date_hints": _value(hints), "examples": _value(4), "merge": _value(True), "mo": mo, "procs": {},
-             "repo_dir": tmp_path, "repo_name": lambda: "o/lifemate-sft-v3d", "run_dir": lambda name: tmp_path / name,
-             "run_name": _value("sft-v3d"), "step_env": dict, "subprocess": subprocess, "sys": sys,
-             "work": tmp_path}
+    if saved_records:
+        (tmp_path / "sft-v3d" / "last").mkdir(parents=True)
+        (tmp_path / "sft-v3d" / "last" / "run_config.json").write_text(json.dumps({"records": saved_records}), encoding="utf-8")
+    fakes = {"date_hints": _value(ticked), "examples": _value(4), "json": json, "merge": _value(True), "mo": mo,
+             "procs": {}, "re": re, "repo_dir": tmp_path, "repo_name": lambda: "o/lifemate-sft-v3d",
+             "run_dir": lambda name: tmp_path / name, "run_name": _value("sft-v3d"), "step_env": dict,
+             "subprocess": subprocess, "sys": sys, "work": tmp_path}
     fn(**{p: fakes[p] for p in params})
-    assert ('"date_hints": true' in mo.md.call_args.args[0]) is expected
+    return mo.md.call_args.args[0]
+
+
+@pytest.mark.parametrize("ticked, saved, expected", [
+    (True, None, True),  # no run_config.json: only the checkbox is known
+    (False, None, False),
+    (False, "gold-pool-m2-p-d", True),  # a new session: the box is unticked, but the run trained with hints
+    (False, "gold-pool-m2-p-d-k2", True),
+    (True, "gold-pool-m2-p", False),  # the run trained without hints, whatever the box says now
+    (False, "gold-pool-synth-d-m2-p", False),
+])
+def test_merge_suggests_a_preset_that_serves_as_it_was_trained(tmp_path, ticked, saved, expected):
+    assert ('"date_hints": true' in _merge_suggestion(tmp_path, ticked, saved)) is expected
+
+
+def test_the_checkbox_is_off_by_default():
+    tree = ast.parse(NOTEBOOK.read_text(encoding="utf-8"))
+    calls = [n.value for n in ast.walk(tree) if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "date_hints"]
+    assert len(calls) == 1
+    assert {k.arg: k.value.value for k in calls[0].keywords if k.arg == "value"} == {"value": False}

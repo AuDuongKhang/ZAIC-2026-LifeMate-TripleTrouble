@@ -16,6 +16,7 @@ app = marimo.App(width="medium")
 def _():
     import json
     import os
+    import re
     import shlex
     import shutil
     import subprocess
@@ -23,7 +24,7 @@ def _():
     from pathlib import Path
 
     import marimo as mo
-    return Path, json, mo, os, shlex, shutil, subprocess, sys
+    return Path, json, mo, os, re, shlex, shutil, subprocess, sys
 
 
 @app.cell
@@ -308,7 +309,8 @@ def _(mo):
 
 
 @app.cell
-def _(date_hints, examples, merge, mo, procs, repo_dir, repo_name, run_dir, run_name, step_env, subprocess, sys, work):
+def _(date_hints, examples, json, merge, mo, procs, re, repo_dir, repo_name, run_dir, run_name, step_env, subprocess, sys,
+      work):
     mo.stop(not merge.value, mo.md("_**Merge** once training has finished._"))
     if procs.get("train") and procs["train"].poll() is None:
         raise RuntimeError("training is still running")
@@ -320,7 +322,11 @@ def _(date_hints, examples, merge, mo, procs, repo_dir, repo_name, run_dir, run_
     if _r.returncode:
         raise RuntimeError(f"merge failed:\n{_r.stderr[-3000:]}")
     _name = repo_name().split("/")[-1] if repo_name() else "<repo name>"
-    _hints = ', "date_hints": true' if date_hints.value else ""  # served the way it was trained
+    # Serve it the way it was trained: the run's records name decides, since a new session starts with the box unticked
+    _saved = run_dir(run_name.value) / "last" / "run_config.json"
+    _trained_with_hints = (bool(re.search(r"-d(-k\d+)?$", json.loads(_saved.read_text(encoding="utf-8"))["records"]))
+                           if _saved.exists() else date_hints.value)
+    _hints = ', "date_hints": true' if _trained_with_hints else ""
     mo.md(f"```\n{_r.stdout[-2000:]}\n```\nPreset for `configs/presets.json`: "
           f'`"{run_name.value}": {{"agent": "react", "agent_kw": {{"model": "${{HF_MODEL_OWNER}}/{_name}", "examples": {int(examples.value)}{_hints}}}}}`')
     return
