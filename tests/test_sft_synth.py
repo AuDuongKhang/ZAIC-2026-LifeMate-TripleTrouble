@@ -7,7 +7,7 @@ import pytest
 from lifemate.data import default_data_root, import_zaic_tools, load_catalog
 from lifemate.evaluate import label_kind
 from lifemate.sft import records
-from lifemate.sft.synth import env_id, focus_bases, main, probe, synthetic_sample, uses_app, verify
+from lifemate.sft.synth import env_id, focus_bases, main, probe, shape, synthetic_sample, uses_app, verify
 from lifemate.splits import load_splits
 
 
@@ -222,6 +222,7 @@ def test_pack_with_apps_targets_pool_samples_with_that_app_and_ingest_rejects_ot
     assert all(app in by_id[i]["context"]["installed_apps"] for i, app in focus.items())
     text = (run / "prompts" / "prompt_00.txt").read_text(encoding="utf-8")
     assert "contrast pairs" in text and "Read calls pass only the arguments the user stated" in text
+    assert "An ask normally comes after reads" in text and "usually called with {}" in text
     assert all(f'"focus_app": "{app}"' in text for app in held)
     assert all(by_id[i]["audio_text"] not in text for i in focus)  # the base's own request stays out
 
@@ -239,3 +240,15 @@ def test_pack_without_apps_keeps_the_general_prompt(train_samples, tmp_path):
     main(["pack", "--name", "g", "--limit", "1", "--out-dir", str(tmp_path)])
     text = (tmp_path / "g" / "prompts" / "prompt_00.txt").read_text(encoding="utf-8")
     assert "contrast pairs" not in text and "focus_app" not in text and not (tmp_path / "g" / "focus.json").exists()
+
+
+def test_shape_separates_direct_asks_from_asks_after_reads():
+    catalog = {"a.list": {"kind": "read"}, "a.do": {"kind": "write"}}
+    def sample(text, *calls):
+        return {"audio_text": text, "label": {"tool_calls": [{"name": n, "arguments": args} for n, args in calls]}}
+    ask = ("sys.ask_missing_info", {"tool_name": "a.do", "params": ["x"]})
+    got = shape([sample("hai từ", ask), sample("một hai ba bốn", ("a.list", {}), ask),
+                 sample("một", ("a.list", {"q": "y"}), ("a.do", {})), sample("một", ("a.list", {}))], catalog)
+    assert got["asks_after_a_read"] == 0.5 and got["acts_with_a_write"] == 0.5 and got["calls_per_act"] == 1.5
+    assert got["words_per_ask"] == 3.0 and got["words_per_act"] == 1.0 and got["reads_without_args"] == 0.67
+    assert shape([], catalog)["asks_after_a_read"] == 0.0

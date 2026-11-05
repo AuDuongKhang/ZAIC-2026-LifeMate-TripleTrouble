@@ -131,6 +131,27 @@ def uses_app(calls: list[dict], app: str) -> bool:
     return any(str(name).split(".", 1)[0] == app for name in names)
 
 
+def shape(samples: list[dict], catalog: dict) -> dict:
+    """Numbers to hold against the same report on real samples: `verify` proves that calls run, not that they look real."""
+    def share(flags: list[bool]) -> float:
+        return round(sum(flags) / len(flags), 2) if flags else 0.0
+
+    def mean(values: list[int]) -> float:
+        return round(sum(values) / len(values), 1) if values else 0.0
+
+    calls = [s["label"]["tool_calls"] for s in samples]
+    asks = [s for s, c in zip(samples, calls) if c and c[-1]["name"] == SYS_TOOL]
+    acts = [s for s, c in zip(samples, calls) if c and c[-1]["name"] != SYS_TOOL]
+    reads = [c for call in calls for c in call if (catalog.get(c["name"]) or {}).get("kind") == "read"]
+    return {"asks_after_a_read": share([len(s["label"]["tool_calls"]) > 1 for s in asks]),
+            "acts_with_a_write": share([any((catalog.get(c["name"]) or {}).get("kind") == "write"
+                                            for c in s["label"]["tool_calls"]) for s in acts]),
+            "calls_per_act": mean([len(s["label"]["tool_calls"]) for s in acts]),
+            "words_per_ask": mean([len(s["audio_text"].split()) for s in asks]),
+            "words_per_act": mean([len(s["audio_text"].split()) for s in acts]),
+            "reads_without_args": share([not c["arguments"] for c in reads])}
+
+
 def _brief(base: dict, catalog: dict, zaic_tools, data_root: Path) -> dict:
     """Everything a scenario writer needs, compact: profile, history, what the apps hold, tool signatures."""
     tools = {}
@@ -187,7 +208,15 @@ These replace the mix above, for this batch:
   other apps only when the request also needs them. Do not write kind "empty".
 - Write contrast pairs with the same intent: one kind "act" where a detail in the request picks exactly one record, then
   one kind "ask" where several records fit or a required value is missing.
-- Read calls pass only the arguments the user stated.
+- An ask normally comes after reads. The user names something specific, the assistant first calls the read tool that
+  would find it, the results leave several candidates or lack a value, and only then comes sys.ask_missing_info. Ask with
+  no read at most once per brief. Never write a vague request such as "Hủy dịch vụ giúp tôi".
+- An act normally ends with a write call. When the focus app has no write tool or the request only needs its read, have
+  the user do something with the answer through another installed app, for example save the result in a note or send it
+  to a contact, and copy the values word for word from the read result.
+- Most acts take 2-4 calls. Read calls pass only the arguments the user stated: a list tool is usually called with {}.
+- Requests are 15-30 words, as people really talk: a reason or some background, then the wish, sometimes a condition
+  ("nếu ... thì ...") that the assistant must check in a read result.
 - Vary the tools of the focus app between pairs, and do not reuse the same record in every pair.
 """
 
@@ -280,7 +309,8 @@ def main(argv: list[str] | None = None) -> None:
     (args.out_dir / f"{args.name}.jsonl").write_text(
         "".join(json.dumps(s, ensure_ascii=False) + "\n" for s in accepted), encoding="utf-8")
     report = {"scenarios": total, "accepted": len(accepted), "rejected_by_reason": dict(reasons),
-              "accepted_by_kind": dict(kinds), **({"accepted_by_focus_app": dict(per_app)} if focus else {})}
+              "accepted_by_kind": dict(kinds), **({"accepted_by_focus_app": dict(per_app)} if focus else {}),
+              "shape": shape(accepted, catalog), "shape_of_real_samples": shape(bases, catalog)}
     (args.out_dir / f"{args.name}.report.json").write_text(json.dumps(report, ensure_ascii=False, indent=1),
                                                            encoding="utf-8")
     print(f"-> {args.out_dir / (args.name + '.jsonl')}: {report}", flush=True)
