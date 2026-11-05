@@ -209,6 +209,15 @@ def clean_completion(text: str, stop_strings: set[str]) -> str:
     return text.split("</think>")[-1].strip()
 
 
+def teacher_loader(architectures: list[str] | None) -> str:
+    """The transformers auto class that loads a checkpoint with its own parameter names. A multimodal checkpoint
+    (`...ForConditionalGeneration`, like Qwen3.5) keeps its text weights under `model.language_model.*`; the causal-LM
+    auto class would build a text-only model with other names rather than raise, so use the class it was saved from."""
+    if any(a.endswith("ForConditionalGeneration") for a in architectures or []):
+        return "AutoModelForImageTextToText"
+    return "AutoModelForCausalLM"
+
+
 class Teacher:
     """The local teacher: an HF chat model with thinking off, greedy decoding. Heavy imports stay inside __init__ so
     the module (and its tests) load without torch."""
@@ -220,10 +229,13 @@ class Teacher:
         self.torch, self.max_new_tokens = torch, max_new_tokens
         self.tokenizer = transformers.AutoTokenizer.from_pretrained(model, revision=revision)
         kwargs = {"dtype": getattr(torch, dtype), "revision": revision}
+        config = transformers.AutoConfig.from_pretrained(model, revision=revision)
+        loader = teacher_loader(config.architectures)
         try:
-            self.model = transformers.AutoModelForCausalLM.from_pretrained(model, **kwargs)
-        except ValueError:  # a multimodal checkpoint that the causal-LM auto class does not know
-            self.model = transformers.AutoModelForImageTextToText.from_pretrained(model, **kwargs)
+            self.model = getattr(transformers, loader).from_pretrained(model, **kwargs)
+        except ValueError:  # the auto class does not know this checkpoint: try the other one
+            other = "AutoModelForCausalLM" if loader == "AutoModelForImageTextToText" else "AutoModelForImageTextToText"
+            self.model = getattr(transformers, other).from_pretrained(model, **kwargs)
         self.model = self.model.to("cuda").eval()
         self.stop_strings = {t for t in (self.tokenizer.eos_token, self.tokenizer.pad_token, "<|im_end|>", "<|endoftext|>") if t}
         seed_everything(0)

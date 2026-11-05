@@ -230,3 +230,11 @@ def test_prints_the_pilot_numbers(train_samples, tmp_path, capsys):
     _run(tmp_path, FixedLLM())
     out = capsys.readouterr().out
     assert "pass rate" in out and "hours for 3652 steps" in out and "kinds" in out
+
+
+def test_a_multimodal_checkpoint_is_loaded_with_the_class_it_was_saved_from():
+    # Qwen3.5-27B ships as Qwen3_5ForConditionalGeneration (weights under model.language_model.*): the causal-LM auto
+    # class would build a model with different parameter names instead of raising ValueError
+    assert thoughts.teacher_loader(["Qwen3_5ForConditionalGeneration"]) == "AutoModelForImageTextToText"
+    assert thoughts.teacher_loader(["Qwen3ForCausalLM"]) == "AutoModelForCausalLM"
+    assert thoughts.teacher_loader(None) == "AutoModelForCausalLM"
