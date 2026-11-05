@@ -19,6 +19,12 @@ sample in the same file. `--mask K` adds K function-masked copies (lifemate.sft.
 like real ones, with the same --mask/--perturb copies, but only with gold text (they have no audio, so `cache:`
 sources skip them). Each runs in the train environment named by its `env_id`, which must belong to the pool unless
 --subset is `all`; they are never few-shot examples.
+
+`--thoughts FILE` (lifemate.sft.thoughts) renders one reasoning sentence before each tool call, and before the refusal
+of an out-of-scope sample, in every copy of a sample (gold, masked and ASR). It needs `--prompt v3` and cannot be
+combined with `--extra-samples`. A sample with no row in FILE is dropped with all its copies and counted; more than
+MAX_MISSING of the chosen samples without a row stops the run before anything is written. Rows for samples outside
+the chosen subset are ignored, and a row whose call names differ from the gold calls raises ValueError.
 """
 from __future__ import annotations
 
@@ -41,10 +47,12 @@ from .mask import mask_record
 from .perturb import perturb_record
 from .replay import replay
 from .synth import env_id
+from .thoughts import load_thoughts
 from .tokenize import render
 
 RECORDS_DIR = REPO_ROOT / "train_records"
 SUBSETS = ("pool", "dev", "holdout", "all")
+MAX_MISSING = 0.05  # --thoughts: share of chosen samples that may lack a row before the run stops
 
 
 def main(argv: list[str] | None = None) -> Path:
@@ -57,6 +65,8 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--perturb", action="store_true", help="perturb the schemas of masked copies (lifemate.sft.perturb)")
     ap.add_argument("--extra-samples", action="append", type=Path, default=[], metavar="FILE",
                     help="synthetic samples (jsonl) rendered after the subset; repeatable")
+    ap.add_argument("--thoughts", type=Path, default=None, metavar="FILE",
+                    help="reasoning sentences (lifemate.sft.thoughts); needs --prompt v3")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--prompt", default=DEFAULT_PROMPT, choices=sorted(PROMPTS))
     ap.add_argument("--examples", type=int, default=4, help="few-shot examples in the system prompt (0 = none)")
@@ -75,12 +85,25 @@ def main(argv: list[str] | None = None) -> Path:
         else:
             ap.error(f"--text {text!r}: use gold or cache:<asr_name>")
 
+    if args.thoughts and args.prompt != "v3":
+        ap.error("--thoughts needs --prompt v3 (the rule that asks for a sentence before each call)")
+    if args.thoughts and args.extra_samples:
+        ap.error("--thoughts cannot be combined with --extra-samples (synthetic samples have no sentences)")
+
     zaic_tools = import_zaic_tools(args.data_root, "train")
     samples = load_samples(args.data_root, "train")
     catalog = load_catalog(args.data_root, "train")
     splits = load_splits()
     wanted = {s["id"] for s in samples} if args.subset == "all" else set(splits[args.subset])
     chosen = [s for s in samples if s["id"] in wanted][: args.limit]
+    thoughts, missing = {}, []
+    if args.thoughts:
+        thoughts = load_thoughts(args.thoughts)
+        missing = [s["id"] for s in chosen if s["id"] not in thoughts]
+        if len(missing) > MAX_MISSING * len(chosen):
+            ap.error(f"{len(missing)} of {len(chosen)} samples have no sentences in {args.thoughts} "
+                     f"(limit {MAX_MISSING:.0%}): {missing[:10]}")
+        chosen = [s for s in chosen if s["id"] in thoughts]
     extras = []
     for path in args.extra_samples:
         with open(path, encoding="utf-8") as f:
@@ -108,7 +131,8 @@ def main(argv: list[str] | None = None) -> Path:
                 if "env_id" in sample:  # the base sample must not come back as its own few-shot example
                     task = dataclasses.replace(task, id=env_id(sample))
                 env = zaic_tools.ToolEnv("train", env_id(sample), root=args.data_root)  # fresh env per record
-                rec = replay(sample, task, env, args.prompt, args.examples, bank, args.date_hints)
+                rec = replay(sample, task, env, args.prompt, args.examples, bank, args.date_hints,
+                             thoughts[sample["id"]]["steps"] if args.thoughts else None)
                 if rec is None:
                     dropped.append(f"{sample['id']}:{source}")
                     continue
@@ -126,7 +150,9 @@ def main(argv: list[str] | None = None) -> Path:
 
     print(f"-> {out}: {sum(written.values())} records {dict(written)}, first source by kind {dict(kinds)}, "
           f"{len(dropped)} replays dropped" + (f" {dropped[:20]}" if dropped else "")
-          + (f", {len(extras)} extra samples ({asr_skipped} asr skipped)" if extras else ""), flush=True)
+          + (f", {len(extras)} extra samples ({asr_skipped} asr skipped)" if extras else "")
+          + (f", {len(missing)} samples without sentences" + (f" {missing[:20]}" if missing else "")
+             if args.thoughts else ""), flush=True)
     if args.tokenizer != "none":
         from transformers import AutoTokenizer
 
