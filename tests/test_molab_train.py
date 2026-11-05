@@ -29,7 +29,7 @@ def _value(value):
     return SimpleNamespace(value=value)
 
 
-def _commands(tmp_path, hints):
+def _commands(tmp_path, hints, thoughts="", synth=""):
     """Press Start training; returns (records commands, train command)."""
     fn, params = _cell("start", "date_hints")
     (tmp_path / "data" / "train").mkdir(parents=True)
@@ -42,7 +42,8 @@ def _commands(tmp_path, hints):
         "mo": MagicMock(), "perturb": _value(True), "procs": {}, "records": _value("pool"), "repo_dir": tmp_path,
         "repo_name": lambda: "", "resume": _value(False), "run_dir": lambda name: tmp_path / "ckpt" / name,
         "run_name": _value("sft-v3d"), "shlex": shlex, "start": _value(True), "step_env": dict,
-        "stop": _value(False), "subprocess": subprocess, "synth": _value(""), "sys": sys, "work": tmp_path,
+        "stop": _value(False), "subprocess": subprocess, "synth": _value(synth), "sys": sys, "thoughts": _value(thoughts),
+        "work": tmp_path,
     }
     fn(**{p: fakes[p] for p in params})
     return [c.args[0] for c in subprocess.run.call_args_list], subprocess.Popen.call_args.args[0]
@@ -66,7 +67,7 @@ def test_without_date_hints_the_commands_stay_as_they_were(tmp_path):
     assert _after(train, "--records") == "gold-pool-m2-p" and _after(train, "--eval-records") == "gold-dev"
 
 
-def _merge_suggestion(tmp_path, ticked, saved_records=None):
+def _merge_suggestion(tmp_path, ticked, saved_records=None, thoughts=""):
     """Press Merge; returns the markdown with the suggested preset. saved_records: the run_config.json the run left."""
     fn, params = _cell("merge", "date_hints")
     mo, subprocess = MagicMock(), MagicMock()
@@ -77,7 +78,7 @@ def _merge_suggestion(tmp_path, ticked, saved_records=None):
     fakes = {"date_hints": _value(ticked), "examples": _value(4), "json": json, "merge": _value(True), "mo": mo,
              "procs": {}, "re": re, "repo_dir": tmp_path, "repo_name": lambda: "o/lifemate-sft-v3d",
              "run_dir": lambda name: tmp_path / name, "run_name": _value("sft-v3d"), "step_env": dict,
-             "subprocess": subprocess, "sys": sys, "work": tmp_path}
+             "subprocess": subprocess, "sys": sys, "thoughts": _value(thoughts), "work": tmp_path}
     fn(**{p: fakes[p] for p in params})
     return mo.md.call_args.args[0]
 
@@ -99,3 +100,51 @@ def test_the_checkbox_is_off_by_default():
     calls = [n.value for n in ast.walk(tree) if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "date_hints"]
     assert len(calls) == 1
     assert {k.arg: k.value.value for k in calls[0].keywords if k.arg == "value"} == {"value": False}
+
+
+@pytest.fixture
+def fake_thoughts_download(tmp_path, monkeypatch):
+    import huggingface_hub
+
+    asked = []
+
+    def fake(**kw):
+        asked.append(kw)
+        return str(tmp_path / "th.jsonl")
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake)
+    return asked
+
+
+def test_thoughts_render_both_record_files_with_the_flags(tmp_path, fake_thoughts_download):
+    records, train = _commands(tmp_path, False, thoughts="thoughts/r1.jsonl")
+    assert all(_after(c, "--prompt") == "v3" and _after(c, "--thoughts") == str(tmp_path / "th.jsonl") for c in records)
+    assert [_after(c, "--name") for c in records] == ["gold-pool-m2-p-thoughts-r1", "gold-dev-thoughts-r1"]
+    assert _after(train, "--records") == "gold-pool-m2-p-thoughts-r1"
+    assert _after(train, "--eval-records") == "gold-dev-thoughts-r1"
+    assert [(k["repo_id"], k["repo_type"], k["filename"]) for k in fake_thoughts_download] == [("r", "dataset", "thoughts/r1.jsonl")]
+
+
+def test_thoughts_keep_the_date_hints_suffix_last(tmp_path, fake_thoughts_download):
+    records, _ = _commands(tmp_path, True, thoughts="thoughts/r1.jsonl")
+    assert _after(records[0], "--name") == "gold-pool-m2-p-thoughts-r1-d"
+
+
+def test_without_thoughts_the_records_use_no_prompt_flag(tmp_path):
+    records, _ = _commands(tmp_path, False)
+    assert not any("--prompt" in c or "--thoughts" in c for c in records)
+
+
+def test_thoughts_and_synthetic_samples_cannot_be_combined(tmp_path, fake_thoughts_download):
+    with pytest.raises(RuntimeError, match="synthetic"):
+        _commands(tmp_path, False, thoughts="thoughts/r1.jsonl", synth="synth/s.jsonl")
+
+
+@pytest.mark.parametrize("field, saved, expected", [
+    ("thoughts/r1.jsonl", None, True),
+    ("", None, False),
+    ("", "gold-pool-m1-thoughts-r1", True),
+    ("thoughts/r1.jsonl", "gold-pool-m1", False),
+])
+def test_merge_suggests_prompt_v3_for_a_run_trained_with_sentences(tmp_path, field, saved, expected):
+    assert ('"prompt_version": "v3"' in _merge_suggestion(tmp_path, False, saved, thoughts=field)) is expected
