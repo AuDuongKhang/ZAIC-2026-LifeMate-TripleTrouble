@@ -11,6 +11,11 @@ Command line, no network:
     # paste each prompt into a free chat model, save its whole answer as p1/scenarios/prompt_00.json (fences are fine)
     python -m lifemate.sft.synth ingest --name p1                          # p1/scenarios/* -> p1.jsonl + report
 
+`--apps a,b` (or `--apps holdout`, the held-out apps of configs/splits.json) packs up to --limit pool samples per app that
+have it installed, and asks for scenarios that use it, in act/ask contrast pairs. Pool environments hold data of apps
+installed but never called there, so a model can train on an app without any holdout request. Ingest rejects scenarios
+that miss the brief's app.
+
 An answer maps a base sample id to [{"request", "kind": act|ask|empty, "calls": [{"name", "arguments"}]}]. The prompts
 hold train data (history, app contents) but not the base sample's own request or gold calls.
 """
@@ -107,6 +112,25 @@ def accept(base: dict, scenarios: list[dict], catalog: dict, zaic_tools, data_ro
 SYNTH_DIR = REPO_ROOT / "train_records" / "synth"
 
 
+def focus_bases(bases: list[dict], apps: list[str], limit: int) -> dict[str, str]:
+    """{base id: app}: up to limit bases per app that have it installed, each base used for one app, scarcest app first
+    so that it keeps its bases."""
+    def holders(app):
+        return [b["id"] for b in bases if app in b["context"]["installed_apps"]]
+
+    focus: dict[str, str] = {}
+    for app in sorted(apps, key=lambda a: (len(holders(a)), a)):
+        for base_id in [i for i in holders(app) if i not in focus][:limit]:
+            focus[base_id] = app
+    return focus
+
+
+def uses_app(calls: list[dict], app: str) -> bool:
+    """A call goes to the app, or an ask is about one of its tools."""
+    names = [c["arguments"].get("tool_name", "") if c["name"] == SYS_TOOL else c["name"] for c in calls]
+    return any(str(name).split(".", 1)[0] == app for name in names)
+
+
 def _brief(base: dict, catalog: dict, zaic_tools, data_root: Path) -> dict:
     """Everything a scenario writer needs, compact: profile, history, what the apps hold, tool signatures."""
     tools = {}
@@ -157,6 +181,16 @@ Answer with ONLY one JSON object, no commentary, mapping each brief "id" to its 
 BRIEFS:
 """
 
+FOCUS_RULES = """
+These replace the mix above, for this batch:
+- Each brief names a "focus_app". Every scenario must use a tool of that app (an ask must be about one of its tools). Use
+  other apps only when the request also needs them. Do not write kind "empty".
+- Write contrast pairs with the same intent: one kind "act" where a detail in the request picks exactly one record, then
+  one kind "ask" where several records fit or a required value is missing.
+- Read calls pass only the arguments the user stated.
+- Vary the tools of the focus app between pairs, and do not reuse the same record in every pair.
+"""
+
 
 def parse_answer(text: str) -> dict[str, list[dict]]:
     """The first JSON object in a chat answer (markdown fences and commentary around it are ignored); {} if none."""
@@ -191,6 +225,7 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--limit", type=int, default=40)
     ap.add_argument("--per-prompt", type=int, default=4, help="briefs per prompt file")
     ap.add_argument("--scenarios", type=int, default=3, help="scenarios asked per brief")
+    ap.add_argument("--apps", default="", help="pack: app1,app2 or holdout; --limit then counts per app")
     ap.add_argument("--data-root", type=Path, default=default_data_root())
     ap.add_argument("--out-dir", type=Path, default=SYNTH_DIR)
     args = ap.parse_args(argv)
@@ -206,28 +241,46 @@ def main(argv: list[str] | None = None) -> None:
         (run / "prompts").mkdir(parents=True, exist_ok=True)
         (run / "scenarios").mkdir(exist_ok=True)
         chosen = bases[args.offset: args.offset + args.limit]
+        focus: dict[str, str] = {}
+        if args.apps:
+            apps = load_splits()["holdout_apps"] if args.apps == "holdout" else args.apps.split(",")
+            focus = focus_bases(bases, apps, args.limit)
+            chosen = [b for b in bases if b["id"] in focus]
+            (run / "focus.json").write_text(json.dumps(focus, indent=1), encoding="utf-8")
+        head = INSTRUCTIONS.format(n=args.scenarios)
+        if focus:
+            head = head.replace("\nBRIEFS:\n", FOCUS_RULES + "\nBRIEFS:\n")
         for i in range(0, len(chosen), args.per_prompt):
-            briefs = [_brief(b, catalog, zaic_tools, args.data_root) for b in chosen[i: i + args.per_prompt]]
-            text = INSTRUCTIONS.format(n=args.scenarios) + "\n".join(json.dumps(b, ensure_ascii=False) for b in briefs)
+            briefs = [{**_brief(b, catalog, zaic_tools, args.data_root), **({"focus_app": focus[b["id"]]} if focus else {})}
+                      for b in chosen[i: i + args.per_prompt]]
+            text = head + "\n".join(json.dumps(b, ensure_ascii=False) for b in briefs)
             (run / "prompts" / f"prompt_{i // args.per_prompt:02d}.txt").write_text(text, encoding="utf-8")
         print(f"-> {run / 'prompts'}: {-(-len(chosen) // args.per_prompt)} prompts for {len(chosen)} samples", flush=True)
         return
     by_id = {b["id"]: b for b in bases}
-    accepted, reasons, kinds, total = [], Counter(), Counter(), 0
+    focus_file = run / "focus.json"
+    focus = json.loads(focus_file.read_text(encoding="utf-8")) if focus_file.exists() else {}
+    accepted, reasons, kinds, per_app, total = [], Counter(), Counter(), Counter(), 0
     for path in sorted(p for p in (run / "scenarios").iterdir() if p.is_file()):
         for base_id, scenarios in parse_answer(path.read_text(encoding="utf-8")).items():
             if base_id not in by_id:
                 reasons["unknown base"] += 1
                 continue
             total += len(scenarios)
+            if focus:
+                on_app = [s for s in scenarios if base_id in focus and uses_app(s["calls"], focus[base_id])]
+                reasons["off focus"] += len(scenarios) - len(on_app)
+                scenarios = on_app
             got, why, kind = accept(by_id[base_id], scenarios, catalog, zaic_tools, args.data_root)
             accepted += [{**s, "id": f"{s['id']}_{path.stem}"} for s in got]
             reasons.update(why)
             kinds.update(kind)
+            if focus and base_id in focus:
+                per_app[focus[base_id]] += len(got)
     (args.out_dir / f"{args.name}.jsonl").write_text(
         "".join(json.dumps(s, ensure_ascii=False) + "\n" for s in accepted), encoding="utf-8")
     report = {"scenarios": total, "accepted": len(accepted), "rejected_by_reason": dict(reasons),
-              "accepted_by_kind": dict(kinds)}
+              "accepted_by_kind": dict(kinds), **({"accepted_by_focus_app": dict(per_app)} if focus else {})}
     (args.out_dir / f"{args.name}.report.json").write_text(json.dumps(report, ensure_ascii=False, indent=1),
                                                            encoding="utf-8")
     print(f"-> {args.out_dir / (args.name + '.jsonl')}: {report}", flush=True)

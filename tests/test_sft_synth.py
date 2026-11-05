@@ -7,7 +7,7 @@ import pytest
 from lifemate.data import default_data_root, import_zaic_tools, load_catalog
 from lifemate.evaluate import label_kind
 from lifemate.sft import records
-from lifemate.sft.synth import env_id, probe, synthetic_sample, verify
+from lifemate.sft.synth import env_id, focus_bases, main, probe, synthetic_sample, uses_app, verify
 from lifemate.splits import load_splits
 
 
@@ -195,3 +195,47 @@ def test_pack_and_ingest_roundtrip(train_samples, tmp_path):
     synth.main(["ingest", *argv])
     rows = [json.loads(line) for line in (tmp_path / "t.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [r["env_id"] for r in rows] == [base["id"]] and rows[0]["source"] == "synth"
+
+
+def test_focus_bases_caps_per_app_and_uses_a_base_once():
+    def base(i, *apps):
+        return {"id": i, "context": {"installed_apps": list(apps)}}
+    bases = [base("a", "news", "loyalty"), base("b", "news"), base("c", "news", "loyalty"), base("d", "other")]
+    assert focus_bases(bases, ["news", "loyalty"], 1) == {"a": "loyalty", "b": "news"}
+    assert focus_bases(bases, ["news", "loyalty"], 9) == {"a": "loyalty", "c": "loyalty", "b": "news"}
+
+
+def test_uses_app_counts_the_app_an_ask_is_about():
+    ask = {"name": "sys.ask_missing_info", "arguments": {"tool_name": "news.search", "params": ["query"]}}
+    assert uses_app([ask], "news") and not uses_app([ask], "loyalty")
+    assert uses_app([{"name": "x.y", "arguments": {}}, {"name": "news.list", "arguments": {}}], "news")
+    assert not uses_app([], "news")
+
+
+def test_pack_with_apps_targets_pool_samples_with_that_app_and_ingest_rejects_others(train_samples, tmp_path):
+    main(["pack", "--name", "f", "--apps", "holdout", "--limit", "2", "--per-prompt", "50", "--out-dir", str(tmp_path)])
+    run = tmp_path / "f"
+    focus = json.loads((run / "focus.json").read_text(encoding="utf-8"))
+    held, pool = load_splits()["holdout_apps"], set(load_splits()["pool"])
+    assert Counter(focus.values()) == {app: 2 for app in held} and set(focus) <= pool
+    by_id = {s["id"]: s for s in train_samples}
+    assert all(app in by_id[i]["context"]["installed_apps"] for i, app in focus.items())
+    text = (run / "prompts" / "prompt_00.txt").read_text(encoding="utf-8")
+    assert "contrast pairs" in text and "Read calls pass only the arguments the user stated" in text
+    assert all(f'"focus_app": "{app}"' in text for app in held)
+    assert all(by_id[i]["audio_text"] not in text for i in focus)  # the base's own request stays out
+
+    base_id, app = next(iter(focus.items()))
+    answer = {base_id: [{"request": "việc khác", "kind": "empty", "calls": []},
+                        {"request": "hỏi", "kind": "ask", "calls": [
+                            {"name": "sys.ask_missing_info", "arguments": {"tool_name": f"{app}.x", "params": ["y"]}}]}]}
+    (run / "scenarios" / "a.json").write_text(json.dumps(answer), encoding="utf-8")
+    main(["ingest", "--name", "f", "--out-dir", str(tmp_path)])
+    report = json.loads((tmp_path / "f.report.json").read_text(encoding="utf-8"))
+    assert report["rejected_by_reason"]["off focus"] == 1 and report["scenarios"] == 2
+
+
+def test_pack_without_apps_keeps_the_general_prompt(train_samples, tmp_path):
+    main(["pack", "--name", "g", "--limit", "1", "--out-dir", str(tmp_path)])
+    text = (tmp_path / "g" / "prompts" / "prompt_00.txt").read_text(encoding="utf-8")
+    assert "contrast pairs" not in text and "focus_app" not in text and not (tmp_path / "g" / "focus.json").exists()
