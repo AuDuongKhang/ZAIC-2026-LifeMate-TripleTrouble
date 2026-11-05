@@ -22,6 +22,8 @@
     "sft-v2-refs-refuse2": {"agent": "react", "agent_kw": {"model": "${HF_MODEL_OWNER}/lifemate-sft-v2", "examples": 4, "check_refs": true, "refusal_check": true, "refusal_min_hits": 2}},
     "sft-v2-refs-vote3-dry": {"agent": "react", "agent_kw": {"model": "${HF_MODEL_OWNER}/lifemate-sft-v2", "examples": 4, "check_refs": true, "vote_prompts": 3, "vote_apply": false}},
     "sft-v2-refs-vote3": {"agent": "react", "agent_kw": {"model": "${HF_MODEL_OWNER}/lifemate-sft-v2", "examples": 4, "check_refs": true, "vote_prompts": 3}},
+    "sft-v2-refs-askex": {"agent": "react", "agent_kw": {"model": "${HF_MODEL_OWNER}/lifemate-sft-v2", "examples": 4, "check_refs": true, "ask_example": true}},
+    "sft-v3h-refs": {"agent": "react", "agent_kw": {"model": "${HF_MODEL_OWNER}/lifemate-sft-v3h", "examples": 4, "check_refs": true}},
     "sft-v3d-refs": {"agent": "react", "agent_kw": {"model": "${HF_MODEL_OWNER}/lifemate-sft-v3d", "examples": 4, "check_refs": true, "date_hints": true}},
     "sft-final": {"agent": "react", "agent_kw": {"model": "${HF_MODEL_OWNER}/lifemate-sft-final", "examples": 4, "check_refs": true}},
     "sft-final-leak": {"agent": "react", "agent_kw": {"model": "${HF_MODEL_OWNER}/lifemate-sft-final", "examples": 4, "check_refs": true, "leak_guard": true}},

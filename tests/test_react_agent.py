@@ -212,7 +212,7 @@ class StubBank:
     def __len__(self):
         return 1
 
-    def select(self, request, installed_apps, k, exclude_id, offset=0):
+    def select(self, request, installed_apps, k, exclude_id, offset=0, ask_slot=False):
         self.asked.append((request, installed_apps, k, exclude_id))
         self.offsets.append(offset)
         return [{"id": "e", "audio_text": f"{self.text} @{offset}", "label": {"tool_calls": [], "tool_results": []}}]
@@ -566,3 +566,29 @@ def test_read_only_majority_does_not_win():
 def test_vote_needs_examples():
     with pytest.raises(ValueError, match="vote_prompts"):
         ReActAgent(llm=FakeLLM([]), vote_prompts=3)
+
+
+class SlotBank:
+    def __init__(self):
+        self.kwargs = []
+
+    def __len__(self):
+        return 1
+
+    def select(self, request, apps, k, **kwargs):
+        self.kwargs.append(kwargs)
+        return []
+
+
+@pytest.mark.parametrize("on", [False, True])
+def test_ask_example_reaches_the_bank_and_meta(on):
+    bank = SlotBank()
+    agent = ReActAgent(llm=FakeLLM(["Xong."]), examples=2, bank=bank, ask_example=on)
+    agent.run(dataclasses.replace(TASK, context={**TASK.context, "installed_apps": []}), FakeEnv())
+    assert bank.kwargs == [{"exclude_id": "t", "ask_slot": on}] and agent.info["ask_example"] is on
+
+
+@pytest.mark.parametrize("kw", [{"examples": 0}, {"examples": 2, "vote_prompts": 3}])
+def test_ask_example_needs_examples_and_no_vote(kw):
+    with pytest.raises(ValueError, match="ask_example"):
+        ReActAgent(llm=FakeLLM([]), bank=SlotBank(), ask_example=True, **kw)

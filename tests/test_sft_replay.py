@@ -132,3 +132,27 @@ def test_records_cli_rejects_unknown_text_sources(train_samples, tmp_path, text)
     with pytest.raises(SystemExit):
         records.main(["--name", "t", "--subset", "pool", "--tokenizer", "none", "--out-dir", str(tmp_path),
                       "--text", text])
+
+
+def test_records_cli_hide_gold_apps_hides_only_for_the_chosen_share(train_samples, tmp_path, monkeypatch):
+    def run(name, *extra):
+        seen = []
+        real = records.ExampleBank.hiding_apps_of
+        monkeypatch.setattr(records.ExampleBank, "hiding_apps_of",
+                            lambda self, sample: seen.append(sample["id"]) or real(self, sample))
+        out = records.main(["--name", name, "--subset", "pool", "--limit", "12", "--tokenizer", "none",
+                            "--out-dir", str(tmp_path), *extra])
+        monkeypatch.setattr(records.ExampleBank, "hiding_apps_of", real)
+        return seen, out.read_text(encoding="utf-8")
+
+    assert run("none")[0] == []
+    all_ids, all_rows = run("all", "--hide-gold-apps", "1")
+    assert len(all_ids) == 12
+    part_ids, _ = run("part", "--hide-gold-apps", "0.5")
+    assert part_ids == run("again", "--hide-gold-apps", "0.5")[0] and 0 < len(part_ids) < 12  # same seed, same samples
+    assert all_rows != run("none2")[1]
+
+
+def test_records_cli_rejects_a_share_outside_0_1(train_samples, tmp_path):
+    with pytest.raises(SystemExit):
+        records.main(["--name", "t", "--subset", "pool", "--hide-gold-apps", "50", "--out-dir", str(tmp_path)])

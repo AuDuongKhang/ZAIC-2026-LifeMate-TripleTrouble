@@ -19,6 +19,10 @@ sample in the same file. `--mask K` adds K function-masked copies (lifemate.sft.
 like real ones, with the same --mask/--perturb copies, but only with gold text (they have no audio, so `cache:`
 sources skip them). Each runs in the train environment named by its `env_id`, which must belong to the pool unless
 --subset is `all`; they are never few-shot examples.
+
+`--hide-gold-apps P` renders about P of the samples, with all their copies, with few-shot examples that do not use
+their gold apps, as on an app the bank has never seen (without it, 92-96% of pool samples see an example of a gold tool;
+on holdout, 51%). Picked per sample from --seed. Use it for train records only, so the eval loss stays comparable.
 """
 from __future__ import annotations
 
@@ -57,6 +61,8 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--perturb", action="store_true", help="perturb the schemas of masked copies (lifemate.sft.perturb)")
     ap.add_argument("--extra-samples", action="append", type=Path, default=[], metavar="FILE",
                     help="synthetic samples (jsonl) rendered after the subset; repeatable")
+    ap.add_argument("--hide-gold-apps", type=float, default=0.0, metavar="P",
+                    help="share of samples whose few-shot examples avoid their gold apps (0-1)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--prompt", default=DEFAULT_PROMPT, choices=sorted(PROMPTS))
     ap.add_argument("--examples", type=int, default=4, help="few-shot examples in the system prompt (0 = none)")
@@ -66,6 +72,8 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--data-root", type=Path, default=default_data_root())
     ap.add_argument("--out-dir", type=Path, default=RECORDS_DIR)
     args = ap.parse_args(argv)
+    if not 0 <= args.hide_gold_apps <= 1:
+        ap.error("--hide-gold-apps must be between 0 and 1")
     sources: list[tuple[ASR, str]] = []
     for text in args.text or ["gold"]:
         if text == "gold":
@@ -97,18 +105,21 @@ def main(argv: list[str] | None = None) -> Path:
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     out = args.out_dir / f"{args.name}.jsonl"
-    kinds, written, dropped = Counter(), Counter(), []
+    kinds, written, dropped, hidden = Counter(), Counter(), [], 0
     gold_only = [(GoldTranscriptASR(), "gold")]
     work = [(s, sources) for s in chosen] + [(s, gold_only) for s in extras]
     asr_skipped = len(extras) * sum(1 for _, source in sources if source != "gold")
     with open(out, "w", encoding="utf-8") as f:
         for sample, sample_sources in work:
+            hide = bank is not None and random.Random(f"{args.seed}:{sample['id']}:hide").random() < args.hide_gold_apps
+            sample_bank = bank.hiding_apps_of(sample) if hide else bank
+            hidden += hide
             for i, (asr, source) in enumerate(sample_sources):
                 task = build_task(sample, asr, catalog, args.data_root, "train")  # CachedASR: KeyError on a missing clip
                 if "env_id" in sample:  # the base sample must not come back as its own few-shot example
                     task = dataclasses.replace(task, id=env_id(sample))
                 env = zaic_tools.ToolEnv("train", env_id(sample), root=args.data_root)  # fresh env per record
-                rec = replay(sample, task, env, args.prompt, args.examples, bank, args.date_hints)
+                rec = replay(sample, task, env, args.prompt, args.examples, sample_bank, args.date_hints)
                 if rec is None:
                     dropped.append(f"{sample['id']}:{source}")
                     continue
@@ -126,7 +137,8 @@ def main(argv: list[str] | None = None) -> Path:
 
     print(f"-> {out}: {sum(written.values())} records {dict(written)}, first source by kind {dict(kinds)}, "
           f"{len(dropped)} replays dropped" + (f" {dropped[:20]}" if dropped else "")
-          + (f", {len(extras)} extra samples ({asr_skipped} asr skipped)" if extras else ""), flush=True)
+          + (f", {len(extras)} extra samples ({asr_skipped} asr skipped)" if extras else "")
+          + (f", gold apps hidden for {hidden} samples" if hidden else ""), flush=True)
     if args.tokenizer != "none":
         from transformers import AutoTokenizer
 

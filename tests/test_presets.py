@@ -179,6 +179,17 @@ def test_sft_v3d_preset_serves_with_date_hints():
         "react", {"model": "team/lifemate-sft-v3d", "examples": 4, "check_refs": True, "date_hints": True})
 
 
+def test_ask_example_preset_is_its_base_plus_the_flag():
+    env = {"HF_MODEL_OWNER": "team"}
+    assert resolve("agent", "sft-v2-refs-askex", env)[1] == {**resolve("agent", "sft-v2-refs", env)[1], "ask_example": True}
+
+
+def test_sft_v3h_preset_serves_like_any_model():
+    """Hiding gold apps only changes the training records, so serving needs no flag."""
+    assert resolve("agent", "sft-v3h-refs", {"HF_MODEL_OWNER": "team"}) == (
+        "react", {"model": "team/lifemate-sft-v3h", "examples": 4, "check_refs": True})
+
+
 def test_beam_search_asr_preset_keeps_the_same_model():
     """beam 5: WER 0.0962 -> 0.0911 on the 2108 eval clips, p95 0.66 -> 0.95 s per clip (molab)."""
     env = {"HF_MODEL_OWNER": "team"}

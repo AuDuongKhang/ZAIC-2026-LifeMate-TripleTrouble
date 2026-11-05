@@ -48,6 +48,8 @@ def _(mo):
        environments, or all for `all`). The log and plots below refresh every minute. Checkpoints go to
        `<model repo>/checkpoints/<run>/last` every 30 minutes and at the end. *Weekday table* adds the date hints to the
        prompt of the train and eval records (record names end in `-d`); serve that model with `"date_hints": true`.
+       *Hide gold apps* renders that share of the train records with few-shot examples that avoid their gold apps, as on
+       an unseen app (record names gain `-h<percent>`); nothing changes when serving.
     5. **Stop** saves a checkpoint at the next optimizer step, then exits. In a new session (or after Stop) tick
        *resume* and press **Start training** again with the same run name, records and extra args; training continues
        from the checkpoint in the HF model repo (the session's own copy only when it is newer, e.g. a failed upload). Do not press **Pull repo** or edit the fields above it while training runs.
@@ -169,6 +171,7 @@ def _(mo):
     masked = mo.ui.number(start=0, stop=4, value=0, label="function-masked copies per record (--mask)")
     perturb = mo.ui.checkbox(value=False, label="perturb masked schemas (--perturb)")
     date_hints = mo.ui.checkbox(value=False, label="weekday table in the prompt (--date-hints)")
+    hide_gold = mo.ui.number(start=0, stop=100, step=10, value=0, label="hide gold apps from examples, % (--hide-gold-apps)")
     asr_cache = mo.ui.text(value="", label="ASR-noisy copy from cache (empty = none)", placeholder="pho-large-fp16")
     asr_model = mo.ui.text(value="vinai/PhoWhisper-large", label="ASR model that writes that cache")
     synth = mo.ui.text(value="", label="synthetic samples (file in the HF data repo, empty = none)",
@@ -179,9 +182,9 @@ def _(mo):
     start = mo.ui.run_button(label="Start training")
     stop = mo.ui.run_button(label="Stop")
     mo.vstack([mo.hstack([run_name, records, eval_records], justify="start"),
-               mo.hstack([examples, masked, perturb, date_hints, max_steps, resume], justify="start"),
+               mo.hstack([examples, masked, perturb, date_hints, hide_gold, max_steps, resume], justify="start"),
                mo.hstack([asr_cache, asr_model], justify="start"), synth, extra, mo.hstack([start, stop], justify="start")])
-    return (asr_cache, asr_model, date_hints, eval_records, examples, extra, masked, max_steps, perturb, records, resume,
+    return (asr_cache, asr_model, date_hints, eval_records, examples, extra, hide_gold, masked, max_steps, perturb, records, resume,
             run_name, synth, start, stop)
 
 
@@ -204,7 +207,7 @@ def _(commit, data_root, hf_write, model_repo, os, repo_dir, work):
 
 
 @app.cell
-def _(Path, asr_cache, asr_model, data_root, date_hints, eval_records, examples, extra, hf_repo, hf_token, hf_write, masked,
+def _(Path, asr_cache, asr_model, data_root, date_hints, eval_records, examples, extra, hf_repo, hf_token, hf_write, hide_gold, masked,
       max_steps, mo, perturb, procs, records, repo_dir, repo_name, resume, run_dir, run_name, shlex, start, step_env, stop,
       subprocess, synth, sys, work):
     if stop.value and procs.get("train") and procs["train"].poll() is None:
@@ -223,6 +226,7 @@ def _(Path, asr_cache, asr_model, data_root, date_hints, eval_records, examples,
 
     _mask, _asr = int(masked.value), asr_cache.value.strip()
     _perturb = bool(_mask and perturb.value)  # only masked copies are perturbed
+    _hide = int(hide_gold.value)
     _synth = synth.value.strip()
     _synth_file = None
     if _synth:  # verified synthetic samples (lifemate.sft.synth) live in the private HF data repo, never in git
@@ -233,6 +237,7 @@ def _(Path, asr_cache, asr_model, data_root, date_hints, eval_records, examples,
 
     def _name(subset, train=False):
         extras = ((f"-m{_mask}" if train and _mask else "") + ("-p" if train and _perturb else "")
+                  + (f"-h{_hide}" if train and _hide else "")
                   + (f"-asr-{_asr}" if train and _asr else "")
                   + (f"-{Path(_synth).stem}" if train and _synth else ""))
         return (f"gold-{subset}{extras}" + ("-d" if date_hints.value else "")  # never reuse records without the hints
@@ -240,6 +245,8 @@ def _(Path, asr_cache, asr_model, data_root, date_hints, eval_records, examples,
 
     _k = ["--examples", str(int(examples.value)), "--tokenizer", "none", *(["--date-hints"] if date_hints.value else [])]
     _train_k = (["--mask", str(_mask)] if _mask else []) + (["--perturb"] if _perturb else [])
+    if _hide:
+        _train_k += ["--hide-gold-apps", str(_hide / 100)]
     if _synth_file:
         _train_k += ["--extra-samples", _synth_file]
     if _asr:  # resumable: only clips missing from this session's cache are transcribed

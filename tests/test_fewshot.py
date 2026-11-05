@@ -99,3 +99,41 @@ def test_examples_with_ids_that_never_appear_in_their_own_results_are_skipped():
 def test_from_data_drops_only_blind_examples(train_samples):
     bank = ExampleBank.from_data(default_data_root(), "train")
     assert 0 < len(bank) < len(load_splits()["pool"])
+
+
+ASK = {"name": "sys.ask_missing_info", "arguments": {"tool_name": "phone.call", "params": ["contact_id"]}}
+
+
+def _ask_bank():
+    samples = [_sample("near1", "gọi cho Minh", [{"name": "phone.call", "arguments": {}}]),
+               _sample("near2", "gọi cho Minh nhé", [{"name": "phone.call", "arguments": {}}]),
+               _sample("far", "gọi đi", [ASK])]
+    return ExampleBank(samples, {s["id"] for s in samples})
+
+
+def test_ask_slot_is_off_by_default_and_replaces_the_last_example():
+    bank = _ask_bank()
+    assert [e["id"] for e in bank.select("gọi cho Minh", {"phone"}, k=2)] == ["near1", "near2"]
+    assert [e["id"] for e in bank.select("gọi cho Minh", {"phone"}, k=2, ask_slot=True)] == ["near1", "far"]
+
+
+def test_ask_slot_changes_nothing_when_an_ask_is_already_shown():
+    assert [e["id"] for e in _ask_bank().select("gọi đi", {"phone"}, k=2, ask_slot=True)] == \
+        [e["id"] for e in _ask_bank().select("gọi đi", {"phone"}, k=2)]
+
+
+def test_ask_slot_without_a_fitting_ask_keeps_the_examples():
+    calls = [{"name": "phone.call", "arguments": {}}]
+    bank = ExampleBank([_sample("a", "gọi", calls), _sample("b", "gọi Minh", calls)], {"a", "b"})
+    assert len(bank.select("gọi", {"phone"}, k=2, ask_slot=True)) == 2
+
+
+def test_hiding_apps_of_drops_examples_of_the_gold_apps_and_leaves_the_bank_alone():
+    other = _sample("other", "gọi taxi", [{"name": "taxi.book", "arguments": {}}])
+    out_of_scope = _sample("oos", "gọi vui", [])
+    phone = _sample("phone", "gọi Minh", [{"name": "phone.call", "arguments": {}}])
+    bank = ExampleBank([other, out_of_scope, phone], {"other", "oos", "phone"})
+    query = _sample("q", "gọi Lan", [ASK])  # an ask hides the app it asks about
+    hiding = bank.hiding_apps_of(query)
+    assert {e["id"] for e in hiding.select("gọi", {"phone", "taxi"}, k=3)} == {"other", "oos"}
+    assert {e["id"] for e in bank.select("gọi", {"phone", "taxi"}, k=3)} == {"other", "oos", "phone"}

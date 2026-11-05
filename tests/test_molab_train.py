@@ -29,7 +29,7 @@ def _value(value):
     return SimpleNamespace(value=value)
 
 
-def _commands(tmp_path, hints):
+def _commands(tmp_path, hints, hide=0):
     """Press Start training; returns (records commands, train command)."""
     fn, params = _cell("start", "date_hints")
     (tmp_path / "data" / "train").mkdir(parents=True)
@@ -38,7 +38,7 @@ def _commands(tmp_path, hints):
     fakes = {
         "Path": Path, "asr_cache": _value(""), "asr_model": _value("m"), "data_root": tmp_path / "data",
         "date_hints": _value(hints), "eval_records": _value("dev"), "examples": _value(4), "extra": _value(""),
-        "hf_repo": _value("r"), "hf_token": _value(""), "hf_write": _value(""), "masked": _value(2), "max_steps": _value(0),
+        "hf_repo": _value("r"), "hf_token": _value(""), "hf_write": _value(""), "hide_gold": _value(hide), "masked": _value(2), "max_steps": _value(0),
         "mo": MagicMock(), "perturb": _value(True), "procs": {}, "records": _value("pool"), "repo_dir": tmp_path,
         "repo_name": lambda: "", "resume": _value(False), "run_dir": lambda name: tmp_path / "ckpt" / name,
         "run_name": _value("sft-v3d"), "shlex": shlex, "start": _value(True), "step_env": dict,
@@ -50,6 +50,13 @@ def _commands(tmp_path, hints):
 
 def _after(cmd, flag):
     return cmd[cmd.index(flag) + 1]
+
+
+def test_hide_gold_apps_reaches_the_train_records_only(tmp_path):
+    records, train = _commands(tmp_path, False, hide=50)
+    assert _after(records[0], "--hide-gold-apps") == "0.5" and "--hide-gold-apps" not in records[1]
+    assert [_after(c, "--name") for c in records] == ["gold-pool-m2-p-h50", "gold-dev"]
+    assert _after(train, "--records") == "gold-pool-m2-p-h50"
 
 
 def test_ticking_date_hints_renders_both_record_files_with_the_flag(tmp_path):

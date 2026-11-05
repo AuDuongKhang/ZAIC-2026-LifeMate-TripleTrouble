@@ -3,6 +3,7 @@ apps are all installed, shown as worked tool calls in the system prompt. The poo
 experiments, so dev and holdout stay unseen; public_test and the private test use every train sample."""
 from __future__ import annotations
 
+import copy
 import json
 import math
 from collections import Counter
@@ -43,6 +44,9 @@ class ExampleBank:
                            key=lambda s: s["id"])
         self.tokens = [Counter(normalize(s["audio_text"])) for s in self.docs]
         self.apps = [_gold_apps(s) for s in self.docs]
+        self.asks = [bool(s["label"]["tool_calls"]) and s["label"]["tool_calls"][-1]["name"] == "sys.ask_missing_info"
+                     for s in self.docs]
+        self.hidden: set[str] = set()  # examples using these apps are never selected (see hiding_apps_of)
         self.lengths = [sum(t.values()) for t in self.tokens]
         self.avg_len = sum(self.lengths) / max(len(self.lengths), 1)
         df = Counter(w for t in self.tokens for w in t)
@@ -63,15 +67,26 @@ class ExampleBank:
         tf, norm = self.tokens[i], 1 - B + B * self.lengths[i] / max(self.avg_len, 1e-9)
         return sum(self.idf[w] * tf[w] * (K1 + 1) / (tf[w] + K1 * norm) for w in query if w in tf)
 
+    def hiding_apps_of(self, sample: dict) -> "ExampleBank":
+        """This bank without examples that use the sample's gold apps, for SFT records that train like an unseen app.
+        Uses the label, so never at inference. Shares everything else with this bank."""
+        bank = copy.copy(self)
+        bank.hidden = _gold_apps(sample)
+        return bank
+
     def select(self, request: str, installed_apps: set[str], k: int, exclude_id: str | None = None,
-               offset: int = 0) -> list[dict]:
+               offset: int = 0, ask_slot: bool = False) -> list[dict]:
         """Up to k pool samples whose gold-call apps are all installed (out-of-scope ones always qualify), best
         BM25 match to the request first, ties by id. exclude_id is never returned. offset skips that many of the
-        best matches (the prompt vote shows each variant the next k)."""
+        best matches (the prompt vote shows each variant the next k). ask_slot: when none of them ends on an ask, the
+        best-matching ask takes the last place."""
         query = set(normalize(request))
         ranked = sorted((-self._bm25(i, query), doc["id"], i) for i, doc in enumerate(self.docs)
-                        if doc["id"] != exclude_id and self.apps[i] <= installed_apps)
-        return [self.docs[i] for _, _, i in ranked[offset:offset + k]]
+                        if doc["id"] != exclude_id and self.apps[i] <= installed_apps and not self.apps[i] & self.hidden)
+        window = [i for _, _, i in ranked[offset:offset + k]]
+        if ask_slot and window and not any(self.asks[i] for i in window):
+            window[-1] = next((i for _, _, i in ranked[offset + k:] if self.asks[i]), window[-1])
+        return [self.docs[i] for i in window]
 
 
 def render_examples(examples: list[dict], max_result_chars: int = 300) -> str:
