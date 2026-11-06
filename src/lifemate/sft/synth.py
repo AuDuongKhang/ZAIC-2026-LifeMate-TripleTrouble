@@ -151,6 +151,8 @@ def shape(samples: list[dict], catalog: dict) -> dict:
             "words_per_ask": mean([len(s["audio_text"].split()) for s in asks]),
             "words_per_act": mean([len(s["audio_text"].split()) for s in acts]),
             "reads_without_args": share([not c["arguments"] for c in reads]),
+            "short_queries": share([len(str(c["arguments"].get("query", "")).split()) <= 2
+                                    for c in reads if "query" in c["arguments"]]),
             "asks_saying_ask": share([bool(re.search(r"\bhỏi\b", s["audio_text"].lower())) for s in asks]),
             "requests_naming_a_step": share([bool(STEP.search(s["audio_text"].lower())) for s in asks + acts])}
 
@@ -188,6 +190,11 @@ Rules for the calls:
 - An id (contact_id, event_id, ...) must come from "apps_hold", from the history's tool results, or from a result of a
   read call earlier in the same scenario (then use a plausible read call first and assume it returns what "apps_hold"
   shows). Never invent one.
+- Once a tool result gives a record an id, pass that id in every argument that refers to the record, even when the
+  parameter is a plain string that would also accept its name (a program, a merchant, a station). Names go only into
+  search queries.
+- A search query is the shortest phrase the user said that identifies what to find, copied from the request: usually
+  one or two words, a name or a topic. No paraphrase, no extra words.
 - Use only values the tool's params allow (type, enum, minimum, maximum, format). Times are ISO 8601 with the timezone of
   "now". Work out relative dates ("mai", "thứ sáu tuần sau") from "now".
 - kind "ask": a required value is missing, or a read would return several candidates that fit. The last call is
@@ -197,7 +204,8 @@ Rules for the calls:
   "calls" is [].
 - kind "act": everything needed is known; the calls carry out the request.
 - Never put a placeholder such as "Đã xong" in an argument. Free-text arguments (title, content, name) are short phrases
-  copying names and numbers word for word from the request or from tool results.
+  copying names and numbers word for word from the request or from tool results; a title or value taken from a result
+  is copied whole, not summarised.
 - Use only tools listed in that brief's "tools".
 
 Rules for the request: what a person says aloud; numbers and e-mail addresses as speech, regional words, fillers,
@@ -224,6 +232,8 @@ These replace the mix above, for this batch:
 - An act normally ends with a write call. When the focus app has no write tool or the request only needs its read, have
   the user do something with the answer through another installed app, for example save the result in a note or send it
   to a contact, and copy the values word for word from the read result.
+- When the request makes an action depend on a condition, read what decides it. If the condition does not hold, the
+  scenario ends after the reads, with no write.
 - Most acts take 2-4 calls. Read calls pass only the arguments the user stated: a list tool is usually called with {}.
 - Requests are 15-30 words, as people really talk: a reason or some background, then the wish, sometimes a condition
   ("nếu ... thì ...") that the assistant must check in a read result.

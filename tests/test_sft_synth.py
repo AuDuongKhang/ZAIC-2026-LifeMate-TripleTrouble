@@ -224,6 +224,7 @@ def test_pack_with_apps_targets_pool_samples_with_that_app_and_ingest_rejects_ot
     assert "contrast pairs" in text and "Read calls pass only the arguments the user stated" in text
     assert "An ask normally comes after reads" in text and "usually called with {}" in text
     assert "never tells the assistant to ask back" in text
+    assert "pass that id in every argument that refers to the record" in text and "shortest phrase" in text
     assert all(f'"focus_app": "{app}"' in text for app in held)
     assert all(by_id[i]["audio_text"] not in text for i in focus)  # the base's own request stays out
 
@@ -249,9 +250,9 @@ def test_shape_separates_direct_asks_from_asks_after_reads():
         return {"audio_text": text, "label": {"tool_calls": [{"name": n, "arguments": args} for n, args in calls]}}
     ask = ("sys.ask_missing_info", {"tool_name": "a.do", "params": ["x"]})
     got = shape([sample("hai từ", ask), sample("một hai ba bốn", ("a.list", {}), ask),
-                 sample("một", ("a.list", {"q": "y"}), ("a.do", {})), sample("một", ("a.list", {}))], catalog)
+                 sample("một", ("a.list", {"query": "y"}), ("a.do", {})), sample("một", ("a.list", {}))], catalog)
     assert got["asks_after_a_read"] == 0.5 and got["acts_with_a_write"] == 0.5 and got["calls_per_act"] == 1.5
-    assert got["words_per_ask"] == 3.0 and got["words_per_act"] == 1.0 and got["reads_without_args"] == 0.67
+    assert got["short_queries"] == 1.0 and got["words_per_ask"] == 3.0 and got["words_per_act"] == 1.0 and got["reads_without_args"] == 0.67
     assert shape([], catalog)["asks_after_a_read"] == 0.0
     dictated = shape([sample("em kiểm tra danh sách rồi hỏi lại anh nhé", ("a.list", {}), ask),
                       sample("hủy gói gym của anh", ("a.list", {}), ask)], catalog)
