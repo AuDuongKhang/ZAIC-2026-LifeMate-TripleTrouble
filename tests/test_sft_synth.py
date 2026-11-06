@@ -223,6 +223,7 @@ def test_pack_with_apps_targets_pool_samples_with_that_app_and_ingest_rejects_ot
     text = (run / "prompts" / "prompt_00.txt").read_text(encoding="utf-8")
     assert "contrast pairs" in text and "Read calls pass only the arguments the user stated" in text
     assert "An ask normally comes after reads" in text and "usually called with {}" in text
+    assert "never tells the assistant to ask back" in text
     assert all(f'"focus_app": "{app}"' in text for app in held)
     assert all(by_id[i]["audio_text"] not in text for i in focus)  # the base's own request stays out
 
@@ -252,3 +253,6 @@ def test_shape_separates_direct_asks_from_asks_after_reads():
     assert got["asks_after_a_read"] == 0.5 and got["acts_with_a_write"] == 0.5 and got["calls_per_act"] == 1.5
     assert got["words_per_ask"] == 3.0 and got["words_per_act"] == 1.0 and got["reads_without_args"] == 0.67
     assert shape([], catalog)["asks_after_a_read"] == 0.0
+    dictated = shape([sample("em kiểm tra danh sách rồi hỏi lại anh nhé", ("a.list", {}), ask),
+                      sample("hủy gói gym của anh", ("a.list", {}), ask)], catalog)
+    assert dictated["asks_saying_ask"] == 0.5 and dictated["requests_naming_a_step"] == 0.5

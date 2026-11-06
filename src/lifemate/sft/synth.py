@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from collections import Counter
 from pathlib import Path
 
@@ -149,7 +150,13 @@ def shape(samples: list[dict], catalog: dict) -> dict:
             "calls_per_act": mean([len(s["label"]["tool_calls"]) for s in acts]),
             "words_per_ask": mean([len(s["audio_text"].split()) for s in asks]),
             "words_per_act": mean([len(s["audio_text"].split()) for s in acts]),
-            "reads_without_args": share([not c["arguments"] for c in reads])}
+            "reads_without_args": share([not c["arguments"] for c in reads]),
+            "asks_saying_ask": share([bool(re.search(r"\bhỏi\b", s["audio_text"].lower())) for s in asks]),
+            "requests_naming_a_step": share([bool(STEP.search(s["audio_text"].lower())) for s in asks + acts])}
+
+
+# "kiểm tra danh sách rồi ...": the user dictating the assistant's read, which real requests almost never do
+STEP = re.compile(r"(kiểm tra|xem|mở|tìm|tra)[^.,]{0,40} rồi ")
 
 
 def _brief(base: dict, catalog: dict, zaic_tools, data_root: Path) -> dict:
@@ -211,6 +218,9 @@ These replace the mix above, for this batch:
 - An ask normally comes after reads. The user names something specific, the assistant first calls the read tool that
   would find it, the results leave several candidates or lack a value, and only then comes sys.ask_missing_info. Ask with
   no read at most once per brief. Never write a vague request such as "Hủy dịch vụ giúp tôi".
+- The user only says what they want, as if they did not know that the assistant will look anything up or need to ask.
+  The request never tells the assistant to ask back ("hỏi lại", "hỏi anh xem") and never lists its steps ("kiểm tra danh
+  sách rồi hủy"). In an ask, the request should sound complete to the user; the reads are what reveal the gap.
 - An act normally ends with a write call. When the focus app has no write tool or the request only needs its read, have
   the user do something with the answer through another installed app, for example save the result in a note or send it
   to a contact, and copy the values word for word from the read result.
