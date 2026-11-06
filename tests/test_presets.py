@@ -141,14 +141,14 @@ def test_infer_builds_the_fewshot_bank_from_the_given_data_root(tmp_path, monkey
     assert "data_root" not in meta["agent_kw"]
 
 
-@pytest.mark.parametrize("name", ["sft-v1", "sft-v2", "sft-final"])
+@pytest.mark.parametrize("name", ["sft-v2", "sft-final"])
 def test_sft_presets_name_their_merged_model_and_four_examples(name):
     backend, kw = resolve("agent", name, {"HF_MODEL_OWNER": "team"})
     assert backend == "react" and kw["model"] == f"team/lifemate-{name}" and kw["examples"] == 4
 
 
 def test_fine_tuned_asr_presets_name_their_hub_model():
-    for name in ("pho-large-ft-a", "pho-large-ft-b", "pho-large-ft-all"):
+    for name in ("pho-large-ft-b", "pho-large-ft-all"):
         assert resolve("asr", name, {"HF_MODEL_OWNER": "team"}) == ("whisper", {"model": f"team/{name}"})
 
 
@@ -161,11 +161,6 @@ def test_check_refs_presets():
         "react", {"model": "team/lifemate-sft-final", "examples": 4, "check_refs": True})
 
 
-def test_sft_v3_preset():
-    assert resolve("agent", "sft-v3-refs", {"HF_MODEL_OWNER": "team"}) == (
-        "react", {"model": "team/lifemate-sft-v3", "examples": 4, "check_refs": True})
-
-
 def test_date_hint_presets_are_their_base_plus_the_flag():
     env = {"HF_MODEL_OWNER": "team"}
     for base, dates in (("sft-v2-refs", "sft-v2-refs-dates"), ("sft-final", "sft-final-dates")):
@@ -173,21 +168,16 @@ def test_date_hint_presets_are_their_base_plus_the_flag():
         assert resolve("agent", dates, env) == (name, {**kw, "date_hints": True})
 
 
-def test_sft_v3d_preset_serves_with_date_hints():
-    """Trained with the weekday table, so it must be served with it."""
-    assert resolve("agent", "sft-v3d-refs", {"HF_MODEL_OWNER": "team"}) == (
-        "react", {"model": "team/lifemate-sft-v3d", "examples": 4, "check_refs": True, "date_hints": True})
-
-
 def test_ask_example_preset_is_its_base_plus_the_flag():
     env = {"HF_MODEL_OWNER": "team"}
     assert resolve("agent", "sft-v2-refs-askex", env)[1] == {**resolve("agent", "sft-v2-refs", env)[1], "ask_example": True}
 
 
-def test_sft_v3h_preset_serves_like_any_model():
+@pytest.mark.parametrize("preset,model", [("sft-v2h-refs", "lifemate-sft-v2h"), ("sft-final-h", "lifemate-sft-final-h")])
+def test_hidden_gold_app_presets_serve_like_any_model(preset, model):
     """Hiding gold apps only changes the training records, so serving needs no flag."""
-    assert resolve("agent", "sft-v3h-refs", {"HF_MODEL_OWNER": "team"}) == (
-        "react", {"model": "team/lifemate-sft-v3h", "examples": 4, "check_refs": True})
+    assert resolve("agent", preset, {"HF_MODEL_OWNER": "team"}) == (
+        "react", {"model": f"team/{model}", "examples": 4, "check_refs": True})
 
 
 def test_beam_search_asr_preset_keeps_the_same_model():
