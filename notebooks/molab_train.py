@@ -51,6 +51,9 @@ def _(mo):
        `"prompt_version": "v3"`. It cannot be combined with synthetic samples. The log and plots below refresh every minute. Checkpoints go to
        `<model repo>/checkpoints/<run>/last` every 30 minutes and at the end. *Weekday table* adds the date hints to the
        prompt of the train and eval records (record names end in `-d`); serve that model with `"date_hints": true`.
+       *Leave-app-out* renders that share of the train records (name suffix `-lao<N>`) with the apps of their own gold
+       calls left out of the few-shot examples, so the model also trains on prompts where no example shows its app.
+       Training only: serve the model as usual.
     5. **Stop** saves a checkpoint at the next optimizer step, then exits. In a new session (or after Stop) tick
        *resume* and press **Start training** again with the same run name, records and extra args; training continues
        from the checkpoint in the HF model repo (the session's own copy only when it is newer, e.g. a failed upload). Do not press **Pull repo** or edit the fields above it while training runs.
@@ -172,6 +175,8 @@ def _(mo):
     masked = mo.ui.number(start=0, stop=4, value=0, label="function-masked copies per record (--mask)")
     perturb = mo.ui.checkbox(value=False, label="perturb masked schemas (--perturb)")
     date_hints = mo.ui.checkbox(value=False, label="weekday table in the prompt (--date-hints)")
+    leave_out = mo.ui.number(start=0, stop=100, value=0,
+                             label="records with the gold apps left out of the examples, % (--leave-app-out)")
     asr_cache = mo.ui.text(value="", label="ASR-noisy copy from cache (empty = none)", placeholder="pho-large-fp16")
     asr_model = mo.ui.text(value="vinai/PhoWhisper-large", label="ASR model that writes that cache")
     synth = mo.ui.text(value="", label="synthetic samples (file in the HF data repo, empty = none)",
@@ -184,11 +189,11 @@ def _(mo):
     start = mo.ui.run_button(label="Start training")
     stop = mo.ui.run_button(label="Stop")
     mo.vstack([mo.hstack([run_name, records, eval_records], justify="start"),
-               mo.hstack([examples, masked, perturb, date_hints, max_steps, resume], justify="start"),
+               mo.hstack([examples, masked, perturb, date_hints, max_steps, resume], justify="start"), leave_out,
                mo.hstack([asr_cache, asr_model], justify="start"), synth, thoughts, extra,
                mo.hstack([start, stop], justify="start")])
-    return (asr_cache, asr_model, date_hints, eval_records, examples, extra, masked, max_steps, perturb, records, resume,
-            run_name, synth, thoughts, start, stop)
+    return (asr_cache, asr_model, date_hints, eval_records, examples, extra, leave_out, masked, max_steps, perturb, records,
+            resume, run_name, synth, thoughts, start, stop)
 
 
 @app.cell
@@ -210,9 +215,9 @@ def _(commit, data_root, hf_write, model_repo, os, repo_dir, work):
 
 
 @app.cell
-def _(Path, asr_cache, asr_model, data_root, date_hints, eval_records, examples, extra, hf_repo, hf_token, hf_write, masked,
-      max_steps, mo, perturb, procs, records, repo_dir, repo_name, resume, run_dir, run_name, shlex, start, step_env, stop,
-      subprocess, synth, sys, thoughts, work):
+def _(Path, asr_cache, asr_model, data_root, date_hints, eval_records, examples, extra, hf_repo, hf_token, hf_write,
+      leave_out, masked, max_steps, mo, perturb, procs, records, repo_dir, repo_name, resume, run_dir, run_name, shlex, start,
+      step_env, stop, subprocess, synth, sys, thoughts, work):
     if stop.value and procs.get("train") and procs["train"].poll() is None:
         (run_dir(run_name.value) / "STOP").write_text("", encoding="utf-8")  # saves at the next step, then exits
     mo.stop(not start.value, mo.md("_Press **Start training**._"))
@@ -249,6 +254,7 @@ def _(Path, asr_cache, asr_model, data_root, date_hints, eval_records, examples,
         extras = ((f"-m{_mask}" if train and _mask else "") + ("-p" if train and _perturb else "")
                   + (f"-asr-{_asr}" if train and _asr else "")
                   + (f"-{Path(_synth).stem}" if train and _synth else "")
+                  + (f"-lao{int(leave_out.value)}" if train and leave_out.value else "")
                   + (f"-thoughts-{Path(_thoughts).stem}" if _thoughts else ""))  # eval records carry the sentences too
         return (f"gold-{subset}{extras}" + ("-d" if date_hints.value else "")  # never reuse records without the hints
                 + ("" if int(examples.value) == 4 else f"-k{int(examples.value)}"))
@@ -256,6 +262,8 @@ def _(Path, asr_cache, asr_model, data_root, date_hints, eval_records, examples,
     _k = ["--examples", str(int(examples.value)), "--tokenizer", "none", *(["--date-hints"] if date_hints.value else []),
           *(["--prompt", "v3", "--thoughts", str(_thoughts_file)] if _thoughts else [])]
     _train_k = (["--mask", str(_mask)] if _mask else []) + (["--perturb"] if _perturb else [])
+    if leave_out.value:  # train records only: the eval loss stays on prompts as they are served
+        _train_k += ["--leave-app-out", str(int(leave_out.value) / 100)]
     if _synth_file:
         _train_k += ["--extra-samples", _synth_file]
     if _asr:  # resumable: only clips missing from this session's cache are transcribed

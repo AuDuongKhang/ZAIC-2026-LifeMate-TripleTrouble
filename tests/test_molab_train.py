@@ -29,7 +29,7 @@ def _value(value):
     return SimpleNamespace(value=value)
 
 
-def _commands(tmp_path, hints, thoughts="", synth=""):
+def _commands(tmp_path, hints, thoughts="", synth="", leave_out=0):
     """Press Start training; returns (records commands, train command)."""
     fn, params = _cell("start", "date_hints")
     (tmp_path / "data" / "train").mkdir(parents=True)
@@ -38,7 +38,8 @@ def _commands(tmp_path, hints, thoughts="", synth=""):
     fakes = {
         "Path": Path, "asr_cache": _value(""), "asr_model": _value("m"), "data_root": tmp_path / "data",
         "date_hints": _value(hints), "eval_records": _value("dev"), "examples": _value(4), "extra": _value(""),
-        "hf_repo": _value("r"), "hf_token": _value(""), "hf_write": _value(""), "masked": _value(2), "max_steps": _value(0),
+        "hf_repo": _value("r"), "hf_token": _value(""), "hf_write": _value(""), "leave_out": _value(leave_out),
+        "masked": _value(2), "max_steps": _value(0),
         "mo": MagicMock(), "perturb": _value(True), "procs": {}, "records": _value("pool"), "repo_dir": tmp_path,
         "repo_name": lambda: "", "resume": _value(False), "run_dir": lambda name: tmp_path / "ckpt" / name,
         "run_name": _value("sft-v3d"), "shlex": shlex, "start": _value(True), "step_env": dict,
@@ -67,6 +68,32 @@ def test_without_date_hints_the_commands_stay_as_they_were(tmp_path):
     assert _after(train, "--records") == "gold-pool-m2-p" and _after(train, "--eval-records") == "gold-dev"
 
 
+def test_leave_app_out_names_and_flags_the_train_records_only(tmp_path):
+    records, train = _commands(tmp_path, False, leave_out=50)
+    assert [_after(c, "--name") for c in records] == ["gold-pool-m2-p-lao50", "gold-dev"]
+    assert _after(records[0], "--leave-app-out") == "0.5" and "--leave-app-out" not in records[1]
+    assert _after(train, "--records") == "gold-pool-m2-p-lao50" and _after(train, "--eval-records") == "gold-dev"
+
+
+def test_leave_app_out_goes_before_the_date_hint_suffix(tmp_path):
+    records, train = _commands(tmp_path, True, leave_out=25)
+    assert [_after(c, "--name") for c in records] == ["gold-pool-m2-p-lao25-d", "gold-dev-d"]
+    assert _after(records[0], "--leave-app-out") == "0.25"
+
+
+def test_leave_app_out_off_keeps_the_commands(tmp_path):
+    records, _ = _commands(tmp_path, False)
+    assert [_after(c, "--name") for c in records] == ["gold-pool-m2-p", "gold-dev"]
+    assert not any("--leave-app-out" in c for c in records)
+
+
+def test_leave_app_out_is_off_by_default():
+    tree = ast.parse(NOTEBOOK.read_text(encoding="utf-8"))
+    calls = [n.value for n in ast.walk(tree) if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "leave_out"]
+    assert len(calls) == 1
+    assert {k.arg: k.value.value for k in calls[0].keywords if k.arg == "value"} == {"value": 0}
+
+
 def _merge_suggestion(tmp_path, ticked, saved_records=None, thoughts=""):
     """Press Merge; returns the markdown with the suggested preset. saved_records: the run_config.json the run left."""
     fn, params = _cell("merge", "date_hints")
@@ -90,6 +117,8 @@ def _merge_suggestion(tmp_path, ticked, saved_records=None, thoughts=""):
     (False, "gold-pool-m2-p-d-k2", True),
     (True, "gold-pool-m2-p", False),  # the run trained without hints, whatever the box says now
     (False, "gold-pool-synth-d-m2-p", False),
+    (False, "gold-pool-m2-p-lao50-d", True),  # the leave-app-out suffix does not hide the date hints
+    (False, "gold-pool-m2-p-lao50", False),
 ])
 def test_merge_suggests_a_preset_that_serves_as_it_was_trained(tmp_path, ticked, saved, expected):
     assert ('"date_hints": true' in _merge_suggestion(tmp_path, ticked, saved)) is expected
