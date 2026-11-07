@@ -51,7 +51,7 @@ from ..splits import load_splits
 from .mask import mask_record
 from .perturb import perturb_record
 from .replay import replay
-from .synth import env_id
+from .synth import env_id, uses_holdout_app
 from .thoughts import load_thoughts
 from .tokenize import render
 
@@ -118,7 +118,10 @@ def main(argv: list[str] | None = None) -> Path:
         with open(path, encoding="utf-8") as f:
             extras += [json.loads(line) for line in f if line.strip()]
     allowed = {s["id"] for s in samples} if args.subset == "all" else set(splits["pool"])
+    held_out = set(splits["holdout_apps"])
     for extra in extras:
+        if args.subset != "all" and uses_holdout_app(extra["label"]["tool_calls"] + extra.get("prefix_calls", []), held_out):
+            ap.error(f"extra sample {extra['id']} calls a holdout app: holdout apps stay out of experiment training data")
         if env_id(extra) not in allowed:
             ap.error(f"extra sample {extra['id']} uses a non-pool environment {env_id(extra)} (only --subset all "
                      "may use every train environment)")

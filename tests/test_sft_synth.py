@@ -195,3 +195,151 @@ def test_pack_and_ingest_roundtrip(train_samples, tmp_path):
     synth.main(["ingest", *argv])
     rows = [json.loads(line) for line in (tmp_path / "t.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [r["env_id"] for r in rows] == [base["id"]] and rows[0]["source"] == "synth"
+
+
+# --- answer: a local teacher writes the scenarios ---------------------------------------------------------------------
+
+class FakeTeacher:
+    """Stands in for sft.thoughts.Teacher: generate(messages) -> text."""
+
+    def __init__(self):
+        self.messages = []
+
+    def generate(self, messages):
+        self.messages.append(messages)
+        return f"answer {len(self.messages)}"
+
+
+def _packed(tmp_path, prompts=3):
+    from lifemate.sft import synth
+
+    argv = ["--name", "t", "--out-dir", str(tmp_path), "--limit", str(prompts), "--per-prompt", "1"]
+    synth.main(["pack", *argv])
+    return synth, ["--name", "t", "--out-dir", str(tmp_path), "--teacher", "x/y", "--revision", "abc"]
+
+
+def test_answer_writes_one_file_per_prompt(train_samples, tmp_path):
+    synth, argv = _packed(tmp_path)
+    teacher = FakeTeacher()
+    synth.main(["answer", *argv], llm=teacher)
+    files = sorted((tmp_path / "t" / "scenarios").glob("prompt_*.json"))
+    assert [f.name for f in files] == ["prompt_00.json", "prompt_01.json", "prompt_02.json"]
+    assert [f.read_text(encoding="utf-8") for f in files] == ["answer 1", "answer 2", "answer 3"]
+    prompts = sorted((tmp_path / "t" / "prompts").glob("prompt_*.txt"))
+    assert [m[0]["content"] for m in teacher.messages] == [p.read_text(encoding="utf-8") for p in prompts]
+    assert all(m[0]["role"] == "user" and len(m) == 1 for m in teacher.messages)
+
+
+def test_answer_skips_answered_prompts(train_samples, tmp_path):
+    synth, argv = _packed(tmp_path)
+    synth.main(["answer", *argv], llm=FakeTeacher())
+    again = FakeTeacher()
+    synth.main(["answer", *argv], llm=again)
+    assert again.messages == []  # a second run makes no LLM call
+    (tmp_path / "t" / "scenarios" / "prompt_01.json").unlink()
+    third = FakeTeacher()
+    synth.main(["answer", *argv], llm=third)
+    assert len(third.messages) == 1 and (tmp_path / "t" / "scenarios" / "prompt_01.json").exists()
+
+
+def test_answer_needs_a_teacher_and_a_revision(train_samples, tmp_path):
+    synth, _ = _packed(tmp_path, prompts=1)
+    with pytest.raises(SystemExit):
+        synth.main(["answer", "--name", "t", "--out-dir", str(tmp_path)])
+
+
+def test_answer_does_not_import_the_teacher_module_otherwise(train_samples, tmp_path):
+    import sys
+
+    sys.modules.pop("lifemate.sft.thoughts", None)
+    synth, argv = _packed(tmp_path, prompts=1)
+    synth.main(["answer", *argv], llm=FakeTeacher())
+    assert "lifemate.sft.thoughts" not in sys.modules
+
+
+def test_ingest_reads_the_files_answer_wrote(train_samples, tmp_path):
+    synth, argv = _packed(tmp_path, prompts=1)
+    base = _pool_act(train_samples, 1)[0]
+    answer = {base["id"]: [{"request": "thử", "kind": "act", "calls": base["label"]["tool_calls"]}]}
+
+    class Writer(FakeTeacher):
+        def generate(self, messages):
+            return "```json\n" + json.dumps(answer) + "\n```"
+
+    synth.main(["answer", *argv], llm=Writer())
+    synth.main(["ingest", "--name", "t", "--out-dir", str(tmp_path)])
+    rows = [json.loads(line) for line in (tmp_path / "t.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [r["env_id"] for r in rows] == [base["id"]]
+
+
+def test_the_writer_prompt_asks_for_act_ask_pairs_and_stated_arguments_only(train_samples, tmp_path):
+    synth, _ = _packed(tmp_path, prompts=1)
+    text = (tmp_path / "t" / "prompts" / "prompt_00.txt").read_text(encoding="utf-8")
+    assert 'one pair with the same intent' in text
+    assert 'The kind "act" one: a detail in the request picks exactly one record' in text
+    assert 'The kind "ask" one: several records fit or a required value is missing' in text
+    assert "read calls pass only the arguments the user stated" in text.lower()
+
+
+# --- holdout apps never reach generated data --------------------------------------------------------------------------
+
+def _holdout():
+    return set(load_splits()["holdout_apps"])
+
+
+def _pool_sample_showing_a_holdout_app(parts):
+    return next(s for s in parts[3] if set(s["context"]["installed_apps"]) & _holdout())
+
+
+def _holdout_tool(parts, sample, kind=None):
+    catalog = parts[1]
+    return next(n for n in (t for app in sample["context"]["installed_apps"].values() for t in app["tools"])
+                if n.split(".")[0] in _holdout() and (kind is None or catalog[n]["kind"] == kind))
+
+
+def test_the_brief_shows_no_holdout_app(parts):
+    from lifemate.sft.synth import _brief
+
+    zaic_tools, catalog, root, _ = parts
+    sample = _pool_sample_showing_a_holdout_app(parts)
+    brief = _brief(sample, catalog, zaic_tools, root)
+    assert brief["tools"] and not {n.split(".")[0] for n in brief["tools"]} & _holdout()
+    assert not {n.split(".")[0] for n in brief["apps_hold"]} & _holdout()
+
+
+def test_probe_skips_holdout_apps(parts):
+    zaic_tools, catalog, root, _ = parts
+    sample = _pool_sample_showing_a_holdout_app(parts)
+    assert not {c["name"].split(".")[0] for c in probe(sample, catalog, zaic_tools, root)} & _holdout()
+
+
+def test_verify_rejects_a_call_to_a_holdout_app(parts):
+    sample = _pool_sample_showing_a_holdout_app(parts)
+    tool = _holdout_tool(parts, sample)
+    assert "holdout" in _check(parts, sample, [{"name": tool, "arguments": {}}], "act")
+    ask = {"name": "sys.ask_missing_info", "arguments": {"tool_name": tool, "params": ["x"]}}
+    assert "holdout" in _check(parts, sample, [ask], "ask")
+
+
+def test_records_refuse_extra_samples_that_use_a_holdout_app(parts, tmp_path):
+    sample = _pool_sample_showing_a_holdout_app(parts)
+    tool = _holdout_tool(parts, sample)
+    bad = synthetic_sample(sample, "làm đi", [{"name": tool, "arguments": {}}], 0)
+    path = tmp_path / "bad.jsonl"
+    path.write_text(json.dumps(bad, ensure_ascii=False) + "\n", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        _run_records(tmp_path, path)
+
+
+def test_ingest_uploads_the_samples_and_report_with_hf_repo(train_samples, tmp_path, monkeypatch):
+    import huggingface_hub
+
+    uploads = []
+    monkeypatch.setattr(huggingface_hub.HfApi, "upload_file", lambda self, **kw: uploads.append(kw))
+    synth, argv = _packed(tmp_path, prompts=1)
+    synth.main(["answer", *argv], llm=FakeTeacher())
+    synth.main(["ingest", "--name", "t", "--out-dir", str(tmp_path), "--hf-repo", "o/d"])
+    assert [(u["path_in_repo"], u["repo_id"], u["repo_type"]) for u in uploads] == [
+        ("synth/t.jsonl", "o/d", "dataset"), ("synth/t.report.json", "o/d", "dataset")]
+    synth.main(["ingest", "--name", "t", "--out-dir", str(tmp_path)])
+    assert len(uploads) == 2  # no --hf-repo, no upload
