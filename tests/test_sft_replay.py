@@ -3,6 +3,7 @@ import json
 import pytest
 
 from conftest import replay_sample
+from lifemate.agents.fewshot import gold_apps
 from lifemate.agents.prompting import system_prompt
 from lifemate.evaluate import label_kind
 from lifemate.sft import records
@@ -169,3 +170,66 @@ def test_replay_raises_when_the_steps_do_not_name_the_gold_calls(train_samples):
     s = next(x for x in train_samples if label_kind(x["label"]["tool_calls"]) == "act")
     with pytest.raises(ValueError, match=s["id"]):
         replay_sample(s, thoughts=[{"call": "other.tool", "thought": "x"}])
+
+
+# --- leave-app-out records ---------------------------------------------------------------------------------------------
+
+def _example_tools(rec):
+    lines = rec["messages"][0]["content"].splitlines()
+    return [json.loads(l[len("<tool_call>"):-len("</tool_call>")])["name"] for l in lines if l.startswith("<tool_call>")]
+
+
+def _read(path):
+    return [json.loads(l) for l in open(path, encoding="utf-8")]
+
+
+def _lao(tmp_path, p, name="t", limit="40"):
+    return _read(records.main(["--name", name, "--subset", "pool", "--limit", limit, "--tokenizer", "none",
+                               "--out-dir", str(tmp_path), "--leave-app-out", p]))
+
+
+def test_leave_app_out_removes_gold_app_examples(train_samples, tmp_path):
+    by_id = {s["id"]: s for s in train_samples}
+    rows = _lao(tmp_path, "1")
+    assert rows and all(r["leave_app_out"] for r in rows)
+    for r in rows:
+        apps = gold_apps(by_id[r["id"]]["label"])
+        assert not any(t.split(".")[0] in apps for t in _example_tools(r))
+
+
+def test_leave_app_out_zero_keeps_the_same_messages(train_samples, tmp_path):
+    plain = _read(records.main(["--name", "a", "--subset", "pool", "--limit", "10", "--tokenizer", "none",
+                                "--out-dir", str(tmp_path)]))
+    zero = _lao(tmp_path, "0", name="b", limit="10")
+    assert [r["messages"] for r in plain] == [r["messages"] for r in zero]
+    assert not any(r["leave_app_out"] for r in zero)
+
+
+def test_records_without_the_option_have_no_leave_app_out_key(train_samples, tmp_path):
+    plain = _read(records.main(["--name", "a", "--subset", "pool", "--limit", "5", "--tokenizer", "none",
+                                "--out-dir", str(tmp_path)]))
+    assert plain and not any("leave_app_out" in r for r in plain)  # byte-identical to before the option existed
+
+
+def test_leave_app_out_share_is_deterministic(train_samples, tmp_path):
+    first, again = _lao(tmp_path, "0.5", name="a"), _lao(tmp_path, "0.5", name="b")
+    assert first == again and 0 < sum(r["leave_app_out"] for r in first) < len(first)
+
+
+def test_leave_app_out_keeps_a_sample_with_few_other_apps(train_samples):
+    fewest = min((s for s in train_samples if s["label"]["tool_calls"] and s["id"] in set(load_splits()["pool"])),
+                 key=lambda s: len(s["context"]["installed_apps"]))
+    assert replay_sample(fewest, examples=4, leave_gold_apps_out=True) is not None
+
+
+def test_leave_app_out_rejects_a_share_outside_zero_to_one(train_samples, tmp_path):
+    with pytest.raises(SystemExit):
+        _lao(tmp_path, "1.5")
+    with pytest.raises(SystemExit):
+        _lao(tmp_path, "-0.1")
+
+
+def test_masked_copies_inherit_the_flag(train_samples, tmp_path):
+    rows = _read(records.main(["--name", "m", "--subset", "pool", "--limit", "5", "--tokenizer", "none", "--mask", "1",
+                               "--out-dir", str(tmp_path), "--leave-app-out", "1"]))
+    assert any(r["source"] == "masked" for r in rows) and all(r["leave_app_out"] for r in rows)
