@@ -185,3 +185,9 @@ def test_beam_preset_passes_num_beams():
     env = {"HF_MODEL_OWNER": "team"}
     name, kw = resolve("agent", "sft-v2-refs", env)
     assert resolve("agent", "sft-v2-refs-beam3", env) == (name, {**kw, "num_beams": 3})
+
+
+@pytest.mark.parametrize("name", ["kd1", "t1", "kd2"])
+def test_distillation_presets_name_their_merged_model(name):
+    agent, kw = resolve("agent", f"sft-{name}-refs", {"HF_MODEL_OWNER": "team"})
+    assert (agent, kw) == ("react", {"model": f"team/lifemate-sft-{name}", "examples": 4, "check_refs": True})
