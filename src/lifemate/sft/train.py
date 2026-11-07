@@ -15,6 +15,12 @@ with --hf-repo the HF copy is used (a local copy only when it is newer, e.g. aft
 <out>/train_log.jsonl gets one line per optimizer step; loss.png, lr.png and grad_norm.png are redrawn at each save.
 --max-steps only stops early (smoke tests): the LR schedule is always that of the full run.
 
+--kd-teachers A,B adds logit distillation (lifemate.sft.kd). Each teacher runs once over the train records before the
+student is built; the soft targets go to <out>/kd_targets.pt and their summary to <out>/kd_report.json. --kd-report-only
+stops there, which shows whether a teacher says anything beyond the hard labels before a training slot is spent. The
+logged `loss` and `eval_loss` stay plain cross-entropy, so curves compare with runs without distillation; `kd` is the
+extra term.
+
 Needs torch (preinstalled on molab) and requirements-train.txt (peft, accelerate), installed with --no-deps.
 """
 from __future__ import annotations
@@ -33,13 +39,14 @@ from pathlib import Path
 from ..utils import seed_everything
 from .plots import plot_log, read_log
 from .records import RECORDS_DIR
+from .kd import kd_sum, merge_targets, soft_targets, target_report
 from .state import TrainState, batches, total_steps, truncate_log
 from .tokenize import MAX_LEN, encode_record
 
 BASE_MODEL = "Qwen/Qwen3-4B-Instruct-2507"
 # Arguments a resumed run must share with its checkpoint (the rest, such as --max-steps or --hf-repo, may change).
 RUN_KEYS = ("records", "model", "epochs", "lr", "warmup", "micro_bs", "grad_accum", "lora_r", "lora_alpha",
-            "lora_dropout", "max_len", "seed")
+            "lora_dropout", "max_len", "seed", "lora_targets", "kd_teachers", "kd_alpha", "kd_temp", "kd_top_k")
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
 
@@ -63,6 +70,36 @@ def labelled_count(enc: dict) -> int:
     return sum(label != -100 for label in enc["labels"][1:])
 
 
+def teacher_targets(teachers: list[str], train: list[dict], tokenizer, temp: float, top_k: int) -> list[tuple]:
+    """One (ids, probs) per train record, on the CPU: every teacher run once in eval mode, then freed."""
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    vocab = tokenizer.get_vocab()
+    for name in teachers:
+        if AutoTokenizer.from_pretrained(name).get_vocab() != vocab:
+            raise SystemExit(f"teacher {name} has another vocabulary than the student: logits cannot be compared")
+    per_teacher = []
+    for name in teachers:
+        model = AutoModelForCausalLM.from_pretrained(name, dtype=torch.bfloat16).to(device).eval()
+        rows, t0 = [], time.time()
+        with torch.no_grad():  # not inference_mode: its tensors cannot enter the student's backward pass
+            for i, enc in enumerate(train):
+                ids = torch.tensor([enc["input_ids"]], device=device)
+                pos = (torch.tensor(enc["labels"], device=device)[1:] != -100).nonzero(as_tuple=True)[0]
+                with torch.autocast(device, dtype=torch.bfloat16):
+                    logits = model(input_ids=ids, logits_to_keep=pos).logits[0]
+                rows.append(tuple(t.cpu() for t in soft_targets(logits, temp, top_k)))
+                if (i + 1) % 200 == 0:
+                    print(f"teacher {name}: {i + 1}/{len(train)} records, {time.time() - t0:.0f} s", flush=True)
+        per_teacher.append(rows)
+        del model
+        if device == "cuda":
+            torch.cuda.empty_cache()
+    return [merge_targets([rows[i] for rows in per_teacher], top_k) for i in range(len(train))]
+
+
 def main(argv: list[str] | None = None) -> Path:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--records", required=True, help="train_records/<NAME>.jsonl")
@@ -81,11 +118,19 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--lora-r", type=int, default=16)
     ap.add_argument("--lora-alpha", type=int, default=32)
     ap.add_argument("--lora-dropout", type=float, default=0.05)
+    ap.add_argument("--lora-targets", default=",".join(LORA_TARGETS), help="comma-separated module names for LoRA")
     ap.add_argument("--max-len", type=int, default=MAX_LEN)
     ap.add_argument("--eval-every", type=int, default=50, help="optimizer steps between eval losses")
     ap.add_argument("--save-minutes", type=float, default=30)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--kd-teachers", default="", help="comma-separated teacher models with the student's vocabulary")
+    ap.add_argument("--kd-alpha", type=float, default=0.5, help="share of the KL term in the loss")
+    ap.add_argument("--kd-temp", type=float, default=2.0)
+    ap.add_argument("--kd-top-k", type=int, default=20, help="teacher probabilities kept per labelled token")
+    ap.add_argument("--kd-report-only", action="store_true", help="write kd_report.json and stop before training")
     args = ap.parse_args(argv)
+    if args.kd_report_only and not args.kd_teachers:
+        ap.error("--kd-report-only needs --kd-teachers")
 
     import torch
     import torch.nn.functional as F
@@ -127,8 +172,8 @@ def main(argv: list[str] | None = None) -> Path:
             raise SystemExit(f"--resume: train_records/{args.records}.jsonl differs from the one the checkpoint was "
                              f"trained on (sha {records_sha} vs {saved.get('records_sha')}); rebuild it with the same "
                              "code and options")
-        changed = [f"--{k.replace('_', '-')} {saved.get(k)} -> {getattr(args, k)}" for k in RUN_KEYS
-                   if saved.get(k) != getattr(args, k)]
+        changed = [f"--{k.replace('_', '-')} {saved.get(k, ap.get_default(k))} -> {getattr(args, k)}" for k in RUN_KEYS
+                   if saved.get(k, ap.get_default(k)) != getattr(args, k)]
         if changed:  # the schedule, the surviving records or the model would silently change mid-run
             raise SystemExit(f"--resume: training arguments differ from the checkpoint's: {'; '.join(changed)}")
         if (ckpt / "train_log.jsonl").exists() and len(read_log(log_path)) < len(read_log(ckpt / "train_log.jsonl")):
@@ -148,6 +193,24 @@ def main(argv: list[str] | None = None) -> Path:
     tokenizer = AutoTokenizer.from_pretrained(args.model)
     train = load_encoded(args.records, tokenizer, args.max_len, args.records_dir)
     evals = load_encoded(args.eval_records, tokenizer, args.max_len, args.records_dir) if args.eval_records else []
+    targets = None
+    if args.kd_teachers:
+        cache = out / "kd_targets.pt"
+        key = {"records_sha": records_sha, "teachers": args.kd_teachers, "temp": args.kd_temp, "top_k": args.kd_top_k,
+               "max_len": args.max_len}
+        saved_targets = torch.load(cache, weights_only=False) if cache.exists() else None
+        if saved_targets is not None and saved_targets["key"] == key:
+            targets = saved_targets["targets"]
+        else:
+            targets = teacher_targets(args.kd_teachers.split(","), train, tokenizer, args.kd_temp, args.kd_top_k)
+            torch.save({"key": key, "targets": targets}, cache)
+        gold = [torch.tensor(e["labels"][1:])[torch.tensor(e["labels"][1:]) != -100] for e in train]
+        report = dict(target_report(targets, gold), teachers=args.kd_teachers, temp=args.kd_temp, top_k=args.kd_top_k)
+        (out / "kd_report.json").write_text(json.dumps(report, indent=1), encoding="utf-8")
+        print(f"soft targets: {report}", flush=True)
+        if args.kd_report_only:
+            return out / "kd_report.json"
+        seed_everything(args.seed)  # the student starts as it would without teachers
 
     device = "cuda" if torch.cuda.is_available() else "cpu"  # cpu: local smoke tests with a tiny model only
     model = AutoModelForCausalLM.from_pretrained(args.model, dtype=torch.bfloat16).to(device)
@@ -158,7 +221,7 @@ def main(argv: list[str] | None = None) -> Path:
         model = PeftModel.from_pretrained(model, str(ckpt), is_trainable=True)
     else:
         model = get_peft_model(model, LoraConfig(r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout,
-                                                 target_modules=LORA_TARGETS, task_type="CAUSAL_LM"))
+                                                 target_modules=args.lora_targets.split(","), task_type="CAUSAL_LM"))
     model.print_trainable_parameters()
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(params, lr=args.lr, weight_decay=0.0)
@@ -176,14 +239,19 @@ def main(argv: list[str] | None = None) -> Path:
     stop_at = min(total, args.max_steps) if args.max_steps else total
     print(f"{n} train records, {total} optimizer steps in the full run, stopping at step {stop_at}", flush=True)
 
-    def record_loss(enc: dict):
-        """(sum of cross-entropy over the labelled tokens, their count), logits only at those positions."""
+    def record_logits(enc: dict):
+        """(logits, gold ids) at the labelled tokens only."""
         ids = torch.tensor([enc["input_ids"]], device=device)
         labels = torch.tensor(enc["labels"], device=device)
         pos = (labels[1:] != -100).nonzero(as_tuple=True)[0]
         with torch.autocast(device, dtype=torch.bfloat16):
             logits = model(input_ids=ids, logits_to_keep=pos).logits[0]
-        return F.cross_entropy(logits.float(), labels[pos + 1], reduction="sum"), len(pos)
+        return logits.float(), labels[pos + 1]
+
+    def record_loss(enc: dict):
+        """(sum of cross-entropy over the labelled tokens, their count)."""
+        logits, gold_ids = record_logits(enc)
+        return F.cross_entropy(logits, gold_ids, reduction="sum"), len(gold_ids)
 
     def eval_loss() -> float:
         model.eval()
@@ -230,15 +298,22 @@ def main(argv: list[str] | None = None) -> Path:
     offset = prev[-1]["seconds"] if prev else 0.0
     t0 = last_save = step_start = time.time()
     start_step = state.step
-    step_loss, step_count, step_tokens = 0.0, 0, 0
+    step_loss, step_kd, step_count, step_tokens = 0.0, 0.0, 0, 0
     model.train()
     if state.step < stop_at:
         for batch in batches(n, state, args.micro_bs, args.epochs):
             count = sum(labelled_count(train[i]) for i in batch)
             for i in batch:
-                loss, k = record_loss(train[i])
-                (loss / max(count, 1) / args.grad_accum).backward()
-                step_loss, step_count, step_tokens = step_loss + loss.item(), step_count + k, step_tokens + len(train[i]["input_ids"])
+                logits, gold_ids = record_logits(train[i])
+                ce = F.cross_entropy(logits, gold_ids, reduction="sum")
+                total_loss = ce
+                if targets is not None:
+                    top_ids, top_probs = (t.to(device) for t in targets[i])
+                    kd = kd_sum(logits, top_ids, top_probs, args.kd_temp)
+                    total_loss = (1 - args.kd_alpha) * ce + args.kd_alpha * kd
+                    step_kd += kd.item()
+                (total_loss / max(count, 1) / args.grad_accum).backward()
+                step_loss, step_count, step_tokens = step_loss + ce.item(), step_count + len(gold_ids), step_tokens + len(train[i]["input_ids"])
             done = state.epoch * mb_per_epoch + math.ceil(state.pos / args.micro_bs)
             if done % args.grad_accum and done < args.epochs * mb_per_epoch:
                 continue
@@ -252,6 +327,8 @@ def main(argv: list[str] | None = None) -> Path:
             row = {"step": state.step, "epoch": round(done / mb_per_epoch, 4), "loss": round(step_loss / max(step_count, 1), 5),
                    "lr": lr, "grad_norm": round(grad_norm, 5), "tokens": step_tokens,
                    "seconds": round(offset + now - t0, 1)}
+            if targets is not None:
+                row["kd"] = round(step_kd / max(step_count, 1), 5)
             if evals and (state.step % args.eval_every == 0 or state.step == stop_at):
                 row["eval_loss"] = round(eval_loss(), 5)
             with open(log_path, "a", encoding="utf-8") as f:
@@ -260,7 +337,7 @@ def main(argv: list[str] | None = None) -> Path:
             eta = (stop_at - state.step) * (now - t0) / (state.step - start_step)
             print(f"step {state.step}/{stop_at} loss {row['loss']:.4f}" + (f" eval {row['eval_loss']:.4f}" if "eval_loss" in row else "")
                   + f" lr {lr:.2e} gnorm {grad_norm:.3f} {step_tokens / secs:.0f} tok/s, eta {eta / 60:.0f} min", flush=True)
-            step_loss, step_count, step_tokens, step_start = 0.0, 0, 0, time.time()
+            step_loss, step_kd, step_count, step_tokens, step_start = 0.0, 0.0, 0, 0, time.time()
             if state.step >= stop_at:
                 break
             if stop["signal"] or stop_file.exists():
