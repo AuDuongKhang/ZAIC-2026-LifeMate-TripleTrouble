@@ -29,6 +29,23 @@ from ..agents.refs import scalar_strings, unseen_refs
 from ..data import REPO_ROOT, SYS_TOOL, default_data_root, import_zaic_tools, installed_tool_names, load_catalog, load_samples
 
 
+def holdout_apps() -> set[str]:
+    """The apps of the holdout split: the gate would no longer test unseen apps if generated data touched them."""
+    from ..splits import load_splits
+
+    return set(load_splits()["holdout_apps"])
+
+
+def uses_holdout_app(calls: list[dict], holdout: set[str] | None = None) -> bool:
+    """Any call to a tool of a holdout app, or an ask about one."""
+    holdout = holdout_apps() if holdout is None else holdout
+    for call in calls:
+        name = call["arguments"].get("tool_name", "") if call["name"] == SYS_TOOL else call["name"]
+        if name.split(".")[0] in holdout:
+            return True
+    return False
+
+
 def env_id(sample: dict) -> str:
     """The train environment a sample runs in: its own id, or the real sample a synthetic one was built on."""
     return sample.get("env_id", sample["id"])
@@ -42,10 +59,10 @@ def probe(sample: dict, catalog: dict[str, dict], zaic_tools, data_root: Path) -
     """Every installed read tool that needs no argument, called with {} in a fresh env: context for the teacher
     (what the user's apps hold), never part of a synthetic label."""
     env = _new_env(zaic_tools, sample, data_root)
-    out = []
+    out, holdout = [], holdout_apps()
     for name in installed_tool_names(sample):
         spec = catalog.get(name)
-        if spec is None or spec.get("kind") != "read" or spec["parameters"].get("required"):
+        if spec is None or spec.get("kind") != "read" or spec["parameters"].get("required") or name.split(".")[0] in holdout:
             continue
         result = env.call(name, {})
         if result.get("ok"):  # a one-of read that needs an argument is rejected by the schema: not a probe
@@ -60,6 +77,8 @@ def verify(sample: dict, calls: list[dict], kind: str, catalog: dict[str, dict],
         return None if not calls else "calls on empty"
     if not calls:
         return "no calls"
+    if uses_holdout_app(calls):
+        return "holdout app"
     if (kind == "ask" and calls[-1]["name"] != SYS_TOOL) or (kind == "act" and any(c["name"] == SYS_TOOL for c in calls)):
         return "kind mismatch"
     installed = set(installed_tool_names(sample))
@@ -113,10 +132,10 @@ SYNTH_DIR = REPO_ROOT / "train_records" / "synth"
 
 def _brief(base: dict, catalog: dict, zaic_tools, data_root: Path) -> dict:
     """Everything a scenario writer needs, compact: profile, history, what the apps hold, tool signatures."""
-    tools = {}
+    tools, holdout = {}, holdout_apps()
     for name in installed_tool_names(base):
         spec = catalog.get(name)
-        if spec is None:
+        if spec is None or name.split(".")[0] in holdout:  # the writer never sees a holdout app
             continue
         params = spec["parameters"]
         tools[name] = {

@@ -279,3 +279,53 @@ def test_the_writer_prompt_asks_for_act_ask_pairs_and_stated_arguments_only(trai
     assert 'The kind "act" one: a detail in the request picks exactly one record' in text
     assert 'The kind "ask" one: several records fit or a required value is missing' in text
     assert "read calls pass only the arguments the user stated" in text.lower()
+
+
+# --- holdout apps never reach generated data --------------------------------------------------------------------------
+
+def _holdout():
+    return set(load_splits()["holdout_apps"])
+
+
+def _pool_sample_showing_a_holdout_app(parts):
+    return next(s for s in parts[3] if set(s["context"]["installed_apps"]) & _holdout())
+
+
+def _holdout_tool(parts, sample, kind=None):
+    catalog = parts[1]
+    return next(n for n in (t for app in sample["context"]["installed_apps"].values() for t in app["tools"])
+                if n.split(".")[0] in _holdout() and (kind is None or catalog[n]["kind"] == kind))
+
+
+def test_the_brief_shows_no_holdout_app(parts):
+    from lifemate.sft.synth import _brief
+
+    zaic_tools, catalog, root, _ = parts
+    sample = _pool_sample_showing_a_holdout_app(parts)
+    brief = _brief(sample, catalog, zaic_tools, root)
+    assert brief["tools"] and not {n.split(".")[0] for n in brief["tools"]} & _holdout()
+    assert not {n.split(".")[0] for n in brief["apps_hold"]} & _holdout()
+
+
+def test_probe_skips_holdout_apps(parts):
+    zaic_tools, catalog, root, _ = parts
+    sample = _pool_sample_showing_a_holdout_app(parts)
+    assert not {c["name"].split(".")[0] for c in probe(sample, catalog, zaic_tools, root)} & _holdout()
+
+
+def test_verify_rejects_a_call_to_a_holdout_app(parts):
+    sample = _pool_sample_showing_a_holdout_app(parts)
+    tool = _holdout_tool(parts, sample)
+    assert "holdout" in _check(parts, sample, [{"name": tool, "arguments": {}}], "act")
+    ask = {"name": "sys.ask_missing_info", "arguments": {"tool_name": tool, "params": ["x"]}}
+    assert "holdout" in _check(parts, sample, [ask], "ask")
+
+
+def test_records_refuse_extra_samples_that_use_a_holdout_app(parts, tmp_path):
+    sample = _pool_sample_showing_a_holdout_app(parts)
+    tool = _holdout_tool(parts, sample)
+    bad = synthetic_sample(sample, "làm đi", [{"name": tool, "arguments": {}}], 0)
+    path = tmp_path / "bad.jsonl"
+    path.write_text(json.dumps(bad, ensure_ascii=False) + "\n", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        _run_records(tmp_path, path)
