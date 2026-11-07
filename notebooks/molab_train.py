@@ -54,6 +54,9 @@ def _(mo):
        *Leave-app-out* renders that share of the train records (name suffix `-lao<N>`) with the apps of their own gold
        calls left out of the few-shot examples, so the model also trains on prompts where no example shows its app.
        Training only: serve the model as usual.
+       *Schema paraphrase* names a file in the HF data repo (for example `remix/r1.json`, written by
+       `lifemate.sft.remix` on a GPU): every train record gets one more copy, after the masked ones, with other tool
+       names and descriptions (name suffix `-rx`, train records only; serve the model as usual).
     5. **Stop** saves a checkpoint at the next optimizer step, then exits. In a new session (or after Stop) tick
        *resume* and press **Start training** again with the same run name, records and extra args; training continues
        from the checkpoint in the HF model repo (the session's own copy only when it is newer, e.g. a failed upload). Do not press **Pull repo** or edit the fields above it while training runs.
@@ -183,6 +186,8 @@ def _(mo):
                        placeholder="synth/synth-v1.jsonl", full_width=True)
     thoughts = mo.ui.text(value="", label="reasoning sentences (file in the HF data repo, empty = none)",
                           placeholder="thoughts/r1.jsonl", full_width=True)
+    remix = mo.ui.text(value="", label="schema paraphrase table (file in the HF data repo, empty = none)",
+                       placeholder="remix/r1.json", full_width=True)
     resume = mo.ui.checkbox(value=False, label="resume from the last checkpoint")
     max_steps = mo.ui.number(start=0, stop=100000, value=0, label="--max-steps (0 = full run)")
     extra = mo.ui.text(value="", label="extra train args (e.g. --epochs 1)", full_width=True)
@@ -190,9 +195,10 @@ def _(mo):
     stop = mo.ui.run_button(label="Stop")
     mo.vstack([mo.hstack([run_name, records, eval_records], justify="start"),
                mo.hstack([examples, masked, perturb, date_hints, max_steps, resume], justify="start"), leave_out,
-               mo.hstack([asr_cache, asr_model], justify="start"), synth, thoughts, extra,
+               mo.hstack([asr_cache, asr_model], justify="start"), synth, thoughts, remix, extra,
                mo.hstack([start, stop], justify="start")])
     return (asr_cache, asr_model, date_hints, eval_records, examples, extra, leave_out, masked, max_steps, perturb, records,
+            remix,
             resume, run_name, synth, thoughts, start, stop)
 
 
@@ -216,8 +222,8 @@ def _(commit, data_root, hf_write, model_repo, os, repo_dir, work):
 
 @app.cell
 def _(Path, asr_cache, asr_model, data_root, date_hints, eval_records, examples, extra, hf_repo, hf_token, hf_write,
-      leave_out, masked, max_steps, mo, perturb, procs, records, repo_dir, repo_name, resume, run_dir, run_name, shlex, start,
-      step_env, stop, subprocess, synth, sys, thoughts, work):
+      leave_out, masked, max_steps, mo, perturb, procs, records, remix, repo_dir, repo_name, resume, run_dir, run_name, shlex,
+      start, step_env, stop, subprocess, synth, sys, thoughts, work):
     if stop.value and procs.get("train") and procs["train"].poll() is None:
         (run_dir(run_name.value) / "STOP").write_text("", encoding="utf-8")  # saves at the next step, then exits
     mo.stop(not start.value, mo.md("_Press **Start training**._"))
@@ -244,6 +250,12 @@ def _(Path, asr_cache, asr_model, data_root, date_hints, eval_records, examples,
 
         _thoughts_file = hf_hub_download(repo_id=hf_repo.value.strip(), repo_type="dataset", filename=_thoughts,
                                          token=hf_token.value or None, local_dir=work / "thoughts")
+    _remix = remix.value.strip()
+    if _remix:  # written by lifemate.sft.remix on a GPU; lives in the private HF data repo, never in git
+        from huggingface_hub import hf_hub_download
+
+        _remix_file = hf_hub_download(repo_id=hf_repo.value.strip(), repo_type="dataset", filename=_remix,
+                                      token=hf_token.value or None, local_dir=work / "remix")
     if _synth:  # verified synthetic samples (lifemate.sft.synth) live in the private HF data repo, never in git
         from huggingface_hub import hf_hub_download
 
@@ -255,6 +267,7 @@ def _(Path, asr_cache, asr_model, data_root, date_hints, eval_records, examples,
                   + (f"-asr-{_asr}" if train and _asr else "")
                   + (f"-{Path(_synth).stem}" if train and _synth else "")
                   + (f"-lao{int(leave_out.value)}" if train and leave_out.value else "")
+                  + ("-rx" if train and _remix else "")
                   + (f"-thoughts-{Path(_thoughts).stem}" if _thoughts else ""))  # eval records carry the sentences too
         return (f"gold-{subset}{extras}" + ("-d" if date_hints.value else "")  # never reuse records without the hints
                 + ("" if int(examples.value) == 4 else f"-k{int(examples.value)}"))
@@ -264,6 +277,8 @@ def _(Path, asr_cache, asr_model, data_root, date_hints, eval_records, examples,
     _train_k = (["--mask", str(_mask)] if _mask else []) + (["--perturb"] if _perturb else [])
     if leave_out.value:  # train records only: the eval loss stays on prompts as they are served
         _train_k += ["--leave-app-out", str(int(leave_out.value) / 100)]
+    if _remix:  # train records only: a paraphrased copy after the masked ones
+        _train_k += ["--remix", str(_remix_file)]
     if _synth_file:
         _train_k += ["--extra-samples", _synth_file]
     if _asr:  # resumable: only clips missing from this session's cache are transcribed
