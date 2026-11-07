@@ -9,6 +9,7 @@ Returning None leaves the sample unchanged (it keeps its recorded submission lin
 runs/<run>/sim/<name>/ (submission, per_sample, metrics) and prints the compare line against the run itself.
 The simulation assumes the agent would have made the same calls up to the point where the rewrite changes them.
 Named rewrites are factories in REWRITES; --kw key=value (JSON values) are passed to the factory.
+run_vote takes the other runs as --kw others='["runs/a","runs/b"]'.
 """
 from __future__ import annotations
 
@@ -19,6 +20,7 @@ from typing import Callable
 
 from .agents.freetext import freetext_rewrite
 from .agents.minimal_reads import minimal_reads_rewrite
+from .agents.react import decides, vote_key
 from .compare import compare, load_scores, verdict
 from .data import default_data_root, import_zaic_tools, load_catalog
 from .evaluate import evaluate
@@ -26,7 +28,37 @@ from .utils import parse_kw
 
 Rewrite = Callable[[dict, "dict[str, dict]"], "list[dict] | None"]
 
-REWRITES: dict[str, Callable[..., Rewrite]] = {"freetext": freetext_rewrite, "minimal_reads": minimal_reads_rewrite}
+def run_vote(others: list[str]) -> Rewrite:
+    """Majority over the write and ask calls of the run being rewritten and the runs in `others` (folders with a
+    trace.jsonl). Each run's key per sample is the vote keys of its write and ask calls, in order (free text and ids
+    of reads do not count, as in the prompt vote). Only a run that makes at least one write or ask votes, and a run
+    without the sample does not. The key with most votes wins when it has at least 2; ties and no majority keep the
+    first run (the one being rewritten). The winner's whole call list replaces the first run's. Returns None when the
+    first run already is in the majority. This estimates the room for a vote; a real one has to work on proposals before
+    they are sent, because every call on a ToolEnv is scored."""
+    traces = []
+    for folder in others:
+        with open(Path(folder) / "trace.jsonl", encoding="utf-8") as f:
+            traces.append({t["id"]: t for t in map(json.loads, filter(str.strip, f))})
+
+    def rewrite(trace: dict, catalog: dict[str, dict]) -> list[dict] | None:
+        votes: dict[tuple, list[dict]] = {}
+        for t in [trace] + [run.get(trace["id"]) for run in traces]:
+            calls = (t or {}).get("calls") or []
+            if not decides(calls, catalog):
+                continue
+            key = tuple(vote_key(c, catalog.get(c["name"])) for c in calls if decides([c], catalog))
+            votes.setdefault(key, []).append(t)
+        top = max((len(v) for v in votes.values()), default=0)
+        winners = [v for v in votes.values() if len(v) == top]
+        if top < 2 or len(winners) != 1 or winners[0][0] is trace:
+            return None
+        return [{"name": c["name"], "arguments": c["arguments"]} for c in winners[0][0]["calls"]]
+    return rewrite
+
+
+REWRITES: dict[str, Callable[..., Rewrite]] = {"freetext": freetext_rewrite, "minimal_reads": minimal_reads_rewrite,
+                                               "run_vote": run_vote}
 
 
 def rewrite_run(run: Path, data_root: Path, name: str, rewrite: Rewrite, out_dir: Path | None = None) -> dict:
@@ -73,7 +105,7 @@ def main(argv: list[str] | None = None) -> dict:
     if args.rewrite not in REWRITES:
         raise SystemExit(f"unknown rewrite {args.rewrite!r}; known: {', '.join(sorted(REWRITES)) or 'none'}")
     kw = parse_kw(args.kw)
-    label = "_".join([args.rewrite] + [f"{k}{v}" for k, v in kw.items()])
+    label = "_".join([args.rewrite] + [f"{k}{len(v) if isinstance(v, (list, dict)) else v}" for k, v in kw.items()])
     r = rewrite_run(args.run, args.data_root, label, REWRITES[args.rewrite](**kw))
     print(f"{label}: {format_result(r)}", flush=True)
     return r

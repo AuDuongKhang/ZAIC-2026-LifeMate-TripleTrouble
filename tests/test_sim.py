@@ -4,7 +4,7 @@ import pytest
 
 from lifemate.data import default_data_root, import_zaic_tools
 from lifemate.evaluate import evaluate
-from lifemate.sim import rewrite_run
+from lifemate.sim import main, rewrite_run, run_vote
 from lifemate.splits import load_splits
 
 
@@ -44,3 +44,71 @@ def test_dropping_all_calls_scores_zero_on_act_samples(gold_run):
     assert r["fired"] == 6 and r["mean_b"] == 0.0
     assert r["out"] == gold_run / "elsewhere" / "drop"
     assert (r["out"] / "per_sample.jsonl").exists()
+
+
+# --- run_vote: majority over the write and ask calls of several runs ---------------------------------------------------
+
+VOTE_CATALOG = {"m.send": {"kind": "write", "parameters": {"properties": {"to": {}, "body": {"x-match": "fuzzy"}}}},
+                "m.find": {"kind": "read", "parameters": {"properties": {"q": {}}}}}
+
+
+def _vote_trace(sample_id, *calls):
+    return {"id": sample_id, "request": "x",
+            "calls": [{"name": n, "arguments": a, "result": {}} for n, a in calls]}
+
+
+def _vote_run(root, name, *traces):
+    run = root / name
+    run.mkdir()
+    (run / "trace.jsonl").write_text("\n".join(json.dumps(t) for t in traces) + "\n", encoding="utf-8")
+    return run
+
+
+def _send(to, body="hi"):
+    return "m.send", {"to": to, "body": body}
+
+
+def test_run_vote_takes_the_majority(tmp_path):
+    a = _vote_run(tmp_path, "a", _vote_trace("s1", ("m.find", {"q": "bob"}), _send("b", "other words")))
+    b = _vote_run(tmp_path, "b", _vote_trace("s1", _send("b", "hello")))
+    first = _vote_trace("s1", _send("a"))
+    calls = run_vote(others=[str(a), str(b)])(first, VOTE_CATALOG)
+    assert calls == [{"name": "m.find", "arguments": {"q": "bob"}},
+                     {"name": "m.send", "arguments": {"to": "b", "body": "other words"}}]  # the first run in the majority
+
+
+def test_run_vote_keeps_first_without_majority(tmp_path):
+    a = _vote_run(tmp_path, "a", _vote_trace("s1", _send("b")))
+    b = _vote_run(tmp_path, "b", _vote_trace("s1", _send("c")))
+    assert run_vote(others=[str(a), str(b)])(_vote_trace("s1", _send("a")), VOTE_CATALOG) is None
+
+
+def test_run_vote_two_runs_that_disagree_keep_the_first(tmp_path):
+    a = _vote_run(tmp_path, "a", _vote_trace("s1", _send("b")))
+    assert run_vote(others=[str(a)])(_vote_trace("s1", _send("a")), VOTE_CATALOG) is None
+
+
+def test_run_vote_ignores_runs_without_a_write_or_ask(tmp_path):
+    a = _vote_run(tmp_path, "a", _vote_trace("s1", ("m.find", {"q": "x"})))
+    b = _vote_run(tmp_path, "b", _vote_trace("s1", ("m.find", {"q": "x"})))
+    assert run_vote(others=[str(a), str(b)])(_vote_trace("s1", _send("a")), VOTE_CATALOG) is None
+
+
+def test_run_vote_counts_an_ask_by_tool_and_missing_params(tmp_path):
+    ask = lambda params: ("sys.ask_missing_info", {"tool_name": "m.send", "params": params})  # noqa: E731
+    a = _vote_run(tmp_path, "a", _vote_trace("s1", ask(["to", "body"])))
+    b = _vote_run(tmp_path, "b", _vote_trace("s1", ask(["body", "to"])))
+    calls = run_vote(others=[str(a), str(b)])(_vote_trace("s1", _send("a")), VOTE_CATALOG)
+    assert calls and calls[0]["name"] == "sys.ask_missing_info"
+
+
+def test_run_vote_skips_a_run_that_lacks_the_sample(tmp_path):
+    a = _vote_run(tmp_path, "a", _vote_trace("other", _send("b")))
+    b = _vote_run(tmp_path, "b", _vote_trace("s1", _send("b")))
+    assert run_vote(others=[str(a), str(b)])(_vote_trace("s1", _send("a")), VOTE_CATALOG) is None
+
+
+def test_run_vote_cli_label_is_a_safe_folder_name(gold_run, tmp_path):
+    r = main(["run_vote", str(gold_run), "--kw", f"others={json.dumps([str(gold_run), str(gold_run)])}"])
+    assert r["fired"] == 0 and r["diff"] == 0.0  # identical runs: the first stands
+    assert r["out"].parent == gold_run / "sim" and "/" not in r["out"].name and "\\" not in r["out"].name
