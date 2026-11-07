@@ -11,6 +11,10 @@ Command line, no network:
     # paste each prompt into a free chat model, save its whole answer as p1/scenarios/prompt_00.json (fences are fine)
     python -m lifemate.sft.synth ingest --name p1                          # p1/scenarios/* -> p1.jsonl + report
 
+or let a local open model write the answers (development only, on a GPU; never at inference):
+
+    python -m lifemate.sft.synth answer --name p1 --teacher Qwen/Qwen3.5-27B --revision <sha>
+
 An answer maps a base sample id to [{"request", "kind": act|ask|empty, "calls": [{"name", "arguments"}]}]. The prompts
 hold train data (history, app contents) but not the base sample's own request or gold calls.
 """
@@ -144,6 +148,10 @@ Rules for the calls:
 - kind "empty": no installed tool can do what the user asks, or the user cancels their own request, or only chats.
   "calls" is [].
 - kind "act": everything needed is known; the calls carry out the request.
+- For each brief write at least one pair: one pair with the same intent, made of two scenarios that differ in one detail.
+- The kind "act" one: a detail in the request picks exactly one record, so the calls carry out the request.
+- The kind "ask" one: several records fit or a required value is missing, so the last call asks.
+- Read calls pass only the arguments the user stated: a filter the user did not say is left out.
 - Never put a placeholder such as "Đã xong" in an argument. Free-text arguments (title, content, name) are short phrases
   copying names and numbers word for word from the request or from tool results.
 - Use only tools listed in that brief's "tools".
@@ -182,18 +190,47 @@ def parse_answer(text: str) -> dict[str, list[dict]]:
     return out
 
 
-def main(argv: list[str] | None = None) -> None:
+ANSWER_TOKENS = 2048
+
+
+def answer(run: Path, llm=None, teacher: str | None = None, revision: str | None = None) -> int:
+    """Write run/scenarios/prompt_NN.json for every packed prompt that has no answer yet; returns how many it wrote.
+    `llm.generate(messages) -> text` is the local teacher (built from `teacher` when not given). Each answer is saved as
+    soon as it is written, so an interrupted run resumes where it stopped. The teacher module is imported here only."""
+    prompts = sorted((run / "prompts").glob("prompt_*.txt"))
+    todo = [(p, run / "scenarios" / (p.stem + ".json")) for p in prompts]
+    todo = [(p, out) for p, out in todo if not (out.exists() and out.stat().st_size)]
+    if todo and llm is None:
+        from .thoughts import Teacher
+
+        llm = Teacher(teacher, revision, max_new_tokens=ANSWER_TOKENS)
+    (run / "scenarios").mkdir(parents=True, exist_ok=True)
+    for i, (prompt, out) in enumerate(todo):
+        out.write_text(llm.generate([{"role": "user", "content": prompt.read_text(encoding="utf-8")}]), encoding="utf-8")
+        print(f"answered {out.name} ({i + 1}/{len(todo)})", flush=True)
+    print(f"-> {run / 'scenarios'}: {len(todo)} answered, {len(prompts) - len(todo)} already there", flush=True)
+    return len(todo)
+
+
+def main(argv: list[str] | None = None, llm=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("mode", choices=("pack", "ingest"))
+    ap.add_argument("mode", choices=("pack", "ingest", "answer"))
     ap.add_argument("--name", required=True)
     ap.add_argument("--subset", choices=("pool", "all"), default="pool")
     ap.add_argument("--offset", type=int, default=0)
     ap.add_argument("--limit", type=int, default=40)
     ap.add_argument("--per-prompt", type=int, default=4, help="briefs per prompt file")
     ap.add_argument("--scenarios", type=int, default=3, help="scenarios asked per brief")
+    ap.add_argument("--teacher", help="answer: HF id of the local model that writes the scenarios")
+    ap.add_argument("--revision", help="answer: pinned commit of --teacher")
     ap.add_argument("--data-root", type=Path, default=default_data_root())
     ap.add_argument("--out-dir", type=Path, default=SYNTH_DIR)
     args = ap.parse_args(argv)
+    if args.mode == "answer":
+        if llm is None and not (args.teacher and args.revision):
+            ap.error("answer needs --teacher and --revision (a pinned commit)")
+        answer(args.out_dir / args.name, llm, args.teacher, args.revision)
+        return
     from ..splits import load_splits
 
     samples = load_samples(args.data_root, "train")

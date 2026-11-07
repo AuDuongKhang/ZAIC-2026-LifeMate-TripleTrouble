@@ -195,3 +195,87 @@ def test_pack_and_ingest_roundtrip(train_samples, tmp_path):
     synth.main(["ingest", *argv])
     rows = [json.loads(line) for line in (tmp_path / "t.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [r["env_id"] for r in rows] == [base["id"]] and rows[0]["source"] == "synth"
+
+
+# --- answer: a local teacher writes the scenarios ---------------------------------------------------------------------
+
+class FakeTeacher:
+    """Stands in for sft.thoughts.Teacher: generate(messages) -> text."""
+
+    def __init__(self):
+        self.messages = []
+
+    def generate(self, messages):
+        self.messages.append(messages)
+        return f"answer {len(self.messages)}"
+
+
+def _packed(tmp_path, prompts=3):
+    from lifemate.sft import synth
+
+    argv = ["--name", "t", "--out-dir", str(tmp_path), "--limit", str(prompts), "--per-prompt", "1"]
+    synth.main(["pack", *argv])
+    return synth, ["--name", "t", "--out-dir", str(tmp_path), "--teacher", "x/y", "--revision", "abc"]
+
+
+def test_answer_writes_one_file_per_prompt(train_samples, tmp_path):
+    synth, argv = _packed(tmp_path)
+    teacher = FakeTeacher()
+    synth.main(["answer", *argv], llm=teacher)
+    files = sorted((tmp_path / "t" / "scenarios").glob("prompt_*.json"))
+    assert [f.name for f in files] == ["prompt_00.json", "prompt_01.json", "prompt_02.json"]
+    assert [f.read_text(encoding="utf-8") for f in files] == ["answer 1", "answer 2", "answer 3"]
+    prompts = sorted((tmp_path / "t" / "prompts").glob("prompt_*.txt"))
+    assert [m[0]["content"] for m in teacher.messages] == [p.read_text(encoding="utf-8") for p in prompts]
+    assert all(m[0]["role"] == "user" and len(m) == 1 for m in teacher.messages)
+
+
+def test_answer_skips_answered_prompts(train_samples, tmp_path):
+    synth, argv = _packed(tmp_path)
+    synth.main(["answer", *argv], llm=FakeTeacher())
+    again = FakeTeacher()
+    synth.main(["answer", *argv], llm=again)
+    assert again.messages == []  # a second run makes no LLM call
+    (tmp_path / "t" / "scenarios" / "prompt_01.json").unlink()
+    third = FakeTeacher()
+    synth.main(["answer", *argv], llm=third)
+    assert len(third.messages) == 1 and (tmp_path / "t" / "scenarios" / "prompt_01.json").exists()
+
+
+def test_answer_needs_a_teacher_and_a_revision(train_samples, tmp_path):
+    synth, _ = _packed(tmp_path, prompts=1)
+    with pytest.raises(SystemExit):
+        synth.main(["answer", "--name", "t", "--out-dir", str(tmp_path)])
+
+
+def test_answer_does_not_import_the_teacher_module_otherwise(train_samples, tmp_path):
+    import sys
+
+    sys.modules.pop("lifemate.sft.thoughts", None)
+    synth, argv = _packed(tmp_path, prompts=1)
+    synth.main(["answer", *argv], llm=FakeTeacher())
+    assert "lifemate.sft.thoughts" not in sys.modules
+
+
+def test_ingest_reads_the_files_answer_wrote(train_samples, tmp_path):
+    synth, argv = _packed(tmp_path, prompts=1)
+    base = _pool_act(train_samples, 1)[0]
+    answer = {base["id"]: [{"request": "thử", "kind": "act", "calls": base["label"]["tool_calls"]}]}
+
+    class Writer(FakeTeacher):
+        def generate(self, messages):
+            return "```json\n" + json.dumps(answer) + "\n```"
+
+    synth.main(["answer", *argv], llm=Writer())
+    synth.main(["ingest", "--name", "t", "--out-dir", str(tmp_path)])
+    rows = [json.loads(line) for line in (tmp_path / "t.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [r["env_id"] for r in rows] == [base["id"]]
+
+
+def test_the_writer_prompt_asks_for_act_ask_pairs_and_stated_arguments_only(train_samples, tmp_path):
+    synth, _ = _packed(tmp_path, prompts=1)
+    text = (tmp_path / "t" / "prompts" / "prompt_00.txt").read_text(encoding="utf-8")
+    assert 'one pair with the same intent' in text
+    assert 'The kind "act" one: a detail in the request picks exactly one record' in text
+    assert 'The kind "ask" one: several records fit or a required value is missing' in text
+    assert "read calls pass only the arguments the user stated" in text.lower()
