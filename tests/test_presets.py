@@ -141,7 +141,7 @@ def test_infer_builds_the_fewshot_bank_from_the_given_data_root(tmp_path, monkey
     assert "data_root" not in meta["agent_kw"]
 
 
-@pytest.mark.parametrize("name", ["sft-v2", "sft-final"])
+@pytest.mark.parametrize("name", ["sft-v2", "sft-final", "sft-final-h"])
 def test_sft_presets_name_their_merged_model_and_four_examples(name):
     backend, kw = resolve("agent", name, {"HF_MODEL_OWNER": "team"})
     assert backend == "react" and kw["model"] == f"team/lifemate-{name}" and kw["examples"] == 4
