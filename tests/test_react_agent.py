@@ -566,3 +566,26 @@ def test_read_only_majority_does_not_win():
 def test_vote_needs_examples():
     with pytest.raises(ValueError, match="vote_prompts"):
         ReActAgent(llm=FakeLLM([]), vote_prompts=3)
+
+
+# --- date_fix ----------------------------------------------------------------------------------------------------------
+
+DATE_TASK = Task(id="d", request="họp chiều mai", history=[], tools=[],
+                 context={"current_time": "2026-10-01T09:00:00+07:00", "timezone": "Asia/Ho_Chi_Minh"})
+
+
+def test_date_fix_corrects_the_date_before_validation():
+    env = FakeEnv()
+    agent = ReActAgent(llm=FakeLLM([CALL("calendar.create_event", {"start": "2026-09-30T15:00:00+07:00"}), "Xong."]),
+                       date_fix=True)
+    agent.run(DATE_TASK, env)
+    assert env.called == [("calendar.create_event", {"start": "2026-10-02T15:00:00+07:00"})]
+    assert agent.info["date_fix"] is True
+
+
+def test_date_fix_is_off_by_default():
+    env = FakeEnv()
+    agent = ReActAgent(llm=FakeLLM([CALL("calendar.create_event", {"start": "2026-09-30T15:00:00+07:00"}), "Xong."]))
+    agent.run(DATE_TASK, env)
+    assert env.called == [("calendar.create_event", {"start": "2026-09-30T15:00:00+07:00"})]
+    assert agent.info["date_fix"] is False

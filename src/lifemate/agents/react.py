@@ -12,6 +12,7 @@ from ..data import SYS_TOOL, default_data_root
 from ..task import Task
 from .ask_guard import fold
 from .base import Agent
+from .date_fix import fix_call_dates
 from .fewshot import ExampleBank, render_examples
 from .llm import ChatLLM, HFChatLLM
 from .parsing import BLOCK, parse_tool_calls
@@ -89,7 +90,8 @@ class ReActAgent(Agent):
                  clock: Callable[[], float] = time.perf_counter, revision: str | None = None,
                  date_hints: bool = False, empty_hint: bool = False,
                  refusal_check: bool = False, refusal_min_hits: int = 1,
-                 leak_guard: bool = False, vote_prompts: int = 0, vote_apply: bool = True):
+                 leak_guard: bool = False, vote_prompts: int = 0, vote_apply: bool = True,
+                 date_fix: bool = False):
         """time_budget_s counts from task.started_at (sample start, ASR included) when the runner sets it.
         A step only starts with at least min_step_s left, and its generation is capped at the time remaining.
         check_refs holds back calls whose x-ref ids were never seen in a tool result (off by default: with it the
@@ -109,7 +111,9 @@ class ReActAgent(Agent):
         examples (variant i: ranks i*k+1 .. i*k+k), and the majority proposal (at least 2 votes, ties to the original)
         is used instead (vote_apply=False only records the vote). Only proposals with a write or an ask can win;
         plain answers, read-only and invalid proposals are recorded but not counted, so the original is the fallback. Greedy decoding stays; only the used proposal is
-        sent. The vote is skipped when less than K * min_step_s is left after the original proposal."""
+        sent. The vote is skipped when less than K * min_step_s is left after the original proposal.
+        date_fix replaces the date of a call's single date argument with the one the request's only date phrase
+        resolves to (agents/date_fix.py), before the call is validated; no extra call is ever sent."""
         if vote_prompts and not examples:
             raise ValueError("vote_prompts needs examples (the variants differ only in their examples)")
         self.llm = llm if llm is not None else HFChatLLM(model, revision=revision)
@@ -118,7 +122,7 @@ class ReActAgent(Agent):
         self.prompt_version, self.check_refs, self.examples = prompt_version, check_refs, examples
         self.bank, self.date_hints, self.empty_hint = bank, date_hints, empty_hint
         self.refusal_check, self.refusal_min_hits = refusal_check, refusal_min_hits
-        self.leak_guard = leak_guard
+        self.leak_guard, self.date_fix = leak_guard, date_fix
         self.vote_prompts, self.vote_apply = vote_prompts, vote_apply
         if self.bank is None and examples:
             self.bank = ExampleBank.from_data(data_root or default_data_root(), split)
@@ -127,7 +131,7 @@ class ReActAgent(Agent):
                      "prompt": prompt_version, "check_refs": check_refs, "max_steps": max_steps, "time_budget_s": time_budget_s,
                      "examples": examples, "bank_size": len(self.bank) if self.bank is not None else 0,
                      "date_hints": date_hints, "empty_hint": empty_hint, "refusal_check": refusal_check, "refusal_min_hits": refusal_min_hits,
-                     "leak_guard": leak_guard, "vote_prompts": vote_prompts, "vote_apply": vote_apply}
+                     "leak_guard": leak_guard, "vote_prompts": vote_prompts, "vote_apply": vote_apply, "date_fix": date_fix}
 
     def run(self, task: Task, env) -> None:
         trace = self.last_trace = {"steps": [], "stop": None}  # None: a step raised
@@ -179,6 +183,11 @@ class ReActAgent(Agent):
             messages.append({"role": "assistant", "content": BLOCK.sub("", text).strip(), "tool_calls": [
                 {"type": "function", "function": {"name": c["name"], "arguments": c["arguments"]}} for c in calls]})
             for call in calls:
+                if self.date_fix:
+                    fixed = fix_call_dates(call, specs.get(call["name"]), task.request, task.context["current_time"])
+                    if fixed is not call:
+                        trace.setdefault("date_fixes", []).append({"from": call["arguments"], "to": fixed["arguments"]})
+                    call = fixed
                 key = json.dumps([call["name"], call["arguments"]], sort_keys=True, ensure_ascii=False)
                 if key in done:
                     invalid += 1

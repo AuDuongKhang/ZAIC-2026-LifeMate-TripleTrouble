@@ -18,15 +18,17 @@ import json
 from pathlib import Path
 from typing import Callable
 
+from .agents.date_fix import fix_call_dates
 from .agents.freetext import freetext_rewrite
 from .agents.minimal_reads import minimal_reads_rewrite
 from .agents.react import decides, vote_key
 from .compare import compare, load_scores, verdict
-from .data import default_data_root, import_zaic_tools, load_catalog
+from .data import default_data_root, import_zaic_tools, load_catalog, load_samples
 from .evaluate import evaluate
 from .utils import parse_kw
 
 Rewrite = Callable[[dict, "dict[str, dict]"], "list[dict] | None"]
+
 
 def run_vote(others: list[str]) -> Rewrite:
     """Majority over the write and ask calls of the run being rewritten and the runs in `others` (folders with a
@@ -57,8 +59,26 @@ def run_vote(others: list[str]) -> Rewrite:
     return rewrite
 
 
+def date_fix(times: dict[str, str] | None = None, data_root: Path | None = None) -> Rewrite:
+    """Put the date of the request's only date phrase into each call's single date argument (agents/date_fix.py). The
+    trace has no current_time, so it comes from the train samples (`times` {id: current_time} overrides, for tests)."""
+    if times is None:
+        times = {s["id"]: s["context"]["current_time"] for s in load_samples(data_root or default_data_root(), "train")}
+
+    def rewrite(trace: dict, catalog: dict[str, dict]) -> list[dict] | None:
+        now = times.get(trace["id"])
+        if now is None:
+            return None
+        fixed = [fix_call_dates(c, catalog.get(c["name"]), trace.get("request", ""), now) for c in trace["calls"]]
+        if all(f is c for f, c in zip(fixed, trace["calls"])):
+            return None
+        return [{"name": c["name"], "arguments": c["arguments"]} for c in fixed]
+    return rewrite
+
+
 REWRITES: dict[str, Callable[..., Rewrite]] = {"freetext": freetext_rewrite, "minimal_reads": minimal_reads_rewrite,
-                                               "run_vote": run_vote}
+                                               "run_vote": run_vote,
+                                               "date_fix": date_fix}
 
 
 def rewrite_run(run: Path, data_root: Path, name: str, rewrite: Rewrite, out_dir: Path | None = None) -> dict:
