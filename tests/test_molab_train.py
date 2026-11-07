@@ -29,7 +29,7 @@ def _value(value):
     return SimpleNamespace(value=value)
 
 
-def _commands(tmp_path, hints, thoughts="", synth="", leave_out=0):
+def _commands(tmp_path, hints, thoughts="", synth="", leave_out=0, remix=""):
     """Press Start training; returns (records commands, train command)."""
     fn, params = _cell("start", "date_hints")
     (tmp_path / "data" / "train").mkdir(parents=True)
@@ -43,8 +43,8 @@ def _commands(tmp_path, hints, thoughts="", synth="", leave_out=0):
         "mo": MagicMock(), "perturb": _value(True), "procs": {}, "records": _value("pool"), "repo_dir": tmp_path,
         "repo_name": lambda: "", "resume": _value(False), "run_dir": lambda name: tmp_path / "ckpt" / name,
         "run_name": _value("sft-v3d"), "shlex": shlex, "start": _value(True), "step_env": dict,
-        "stop": _value(False), "subprocess": subprocess, "synth": _value(synth), "sys": sys, "thoughts": _value(thoughts),
-        "work": tmp_path,
+        "remix": _value(remix), "stop": _value(False), "subprocess": subprocess, "synth": _value(synth), "sys": sys,
+        "thoughts": _value(thoughts), "work": tmp_path,
     }
     fn(**{p: fakes[p] for p in params})
     return [c.args[0] for c in subprocess.run.call_args_list], subprocess.Popen.call_args.args[0]
@@ -177,3 +177,43 @@ def test_thoughts_and_synthetic_samples_cannot_be_combined(tmp_path, fake_though
 ])
 def test_merge_suggests_prompt_v3_for_a_run_trained_with_sentences(tmp_path, field, saved, expected):
     assert ('"prompt_version": "v3"' in _merge_suggestion(tmp_path, False, saved, thoughts=field)) is expected
+
+
+@pytest.fixture
+def fake_remix_download(tmp_path, monkeypatch):
+    import huggingface_hub
+
+    asked = []
+
+    def fake(**kw):
+        asked.append(kw)
+        return str(tmp_path / "rx.json")
+
+    monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake)
+    return asked
+
+
+def test_remix_names_and_flags_the_train_records_only(tmp_path, fake_remix_download):
+    records, train = _commands(tmp_path, False, remix="remix/r1.json")
+    assert [_after(c, "--name") for c in records] == ["gold-pool-m2-p-rx", "gold-dev"]
+    assert _after(records[0], "--remix") == str(tmp_path / "rx.json") and "--remix" not in records[1]
+    assert _after(train, "--records") == "gold-pool-m2-p-rx" and _after(train, "--eval-records") == "gold-dev"
+    assert [(k["repo_id"], k["repo_type"], k["filename"]) for k in fake_remix_download] == [("r", "dataset", "remix/r1.json")]
+
+
+def test_remix_keeps_the_date_hint_suffix_last(tmp_path, fake_remix_download):
+    records, _ = _commands(tmp_path, True, remix="remix/r1.json")
+    assert _after(records[0], "--name") == "gold-pool-m2-p-rx-d"
+
+
+def test_without_remix_the_commands_stay_as_they_were(tmp_path):
+    records, _ = _commands(tmp_path, False)
+    assert [_after(c, "--name") for c in records] == ["gold-pool-m2-p", "gold-dev"]
+    assert not any("--remix" in c for c in records)
+
+
+def test_the_remix_field_is_empty_by_default():
+    tree = ast.parse(NOTEBOOK.read_text(encoding="utf-8"))
+    calls = [n.value for n in ast.walk(tree) if isinstance(n, ast.Assign) and getattr(n.targets[0], "id", "") == "remix"]
+    assert len(calls) == 1
+    assert {k.arg: k.value.value for k in calls[0].keywords if k.arg == "value"} == {"value": ""}

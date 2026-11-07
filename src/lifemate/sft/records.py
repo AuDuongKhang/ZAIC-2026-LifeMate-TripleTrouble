@@ -15,6 +15,10 @@ sample in the same file. `--mask K` adds K function-masked copies (lifemate.sft.
 
     python -m lifemate.sft.records --name v2-pool --subset pool --text gold --text cache:pho-large-fp16 --mask 1
 
+`--remix FILE` (lifemate.sft.remix) adds one schema-paraphrased copy of each record after its masked ones, when the
+table rewrites at least one app the record shows: new tool and app names, new descriptions, parameter synonyms; holdout
+apps in the table are refused. Without it the records are unchanged.
+
 `--extra-samples FILE` (repeatable) adds synthetic samples (lifemate.sft.synth) after the subset's own: rendered
 like real ones, with the same --mask/--perturb copies, but only with gold text (they have no audio, so `cache:`
 sources skip them). Each runs in the train environment named by its `env_id`, which must belong to the pool unless
@@ -50,6 +54,7 @@ from ..infer import build_task
 from ..splits import load_splits
 from .mask import mask_record
 from .perturb import perturb_record
+from .remix import applies, remix_record
 from .replay import replay
 from .synth import env_id, uses_holdout_app
 from .thoughts import load_thoughts
@@ -72,6 +77,8 @@ def main(argv: list[str] | None = None) -> Path:
                     help="synthetic samples (jsonl) rendered after the subset; repeatable")
     ap.add_argument("--thoughts", type=Path, default=None, metavar="FILE",
                     help="reasoning sentences (lifemate.sft.thoughts); needs --prompt v3")
+    ap.add_argument("--remix", type=Path, default=None, metavar="FILE",
+                    help="schema paraphrase table (lifemate.sft.remix): one remixed copy after the masked ones")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--prompt", default=DEFAULT_PROMPT, choices=sorted(PROMPTS))
     ap.add_argument("--examples", type=int, default=4, help="few-shot examples in the system prompt (0 = none)")
@@ -99,6 +106,15 @@ def main(argv: list[str] | None = None) -> Path:
     if args.thoughts and args.extra_samples:
         ap.error("--thoughts cannot be combined with --extra-samples (synthetic samples have no sentences)")
 
+    remix_table = None
+    if args.remix:
+        from .remix import check_table
+
+        try:
+            remix_table = json.loads(args.remix.read_text(encoding="utf-8"))
+            check_table(remix_table, load_splits()["holdout_apps"])
+        except (OSError, ValueError) as e:
+            ap.error(f"--remix {args.remix}: {e}")
     zaic_tools = import_zaic_tools(args.data_root, "train")
     samples = load_samples(args.data_root, "train")
     catalog = load_catalog(args.data_root, "train")
@@ -164,6 +180,10 @@ def main(argv: list[str] | None = None) -> Path:
                             masked = perturb_record(masked, random.Random(f"{args.seed}:{sample['id']}:{k}:p"))
                         f.write(json.dumps(masked, ensure_ascii=False) + "\n")
                         written["masked"] += 1
+                    if remix_table is not None and applies(rec, remix_table):  # no copy of a record the table leaves alone
+                        remixed = remix_record(rec, remix_table, random.Random(f"{args.seed}:{sample['id']}:rx"))
+                        f.write(json.dumps(remixed, ensure_ascii=False) + "\n")
+                        written["remixed"] += 1
 
     print(f"-> {out}: {sum(written.values())} records {dict(written)}, first source by kind {dict(kinds)}, "
           f"{len(dropped)} replays dropped" + (f" {dropped[:20]}" if dropped else "")
