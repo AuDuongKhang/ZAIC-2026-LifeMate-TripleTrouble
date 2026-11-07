@@ -233,3 +233,78 @@ def test_masked_copies_inherit_the_flag(train_samples, tmp_path):
     rows = _read(records.main(["--name", "m", "--subset", "pool", "--limit", "5", "--tokenizer", "none", "--mask", "1",
                                "--out-dir", str(tmp_path), "--leave-app-out", "1"]))
     assert any(r["source"] == "masked" for r in rows) and all(r["leave_app_out"] for r in rows)
+
+
+# --- recovery: a prefix of earlier calls before the gold ones ----------------------------------------------------------
+
+class WorldEnv:
+    """A fake ToolEnv: every call is logged, writes change the state hash, validate always passes."""
+
+    def __init__(self):
+        self.calls = []
+
+    def validate(self, name, args):
+        return {"ok": True}
+
+    def call(self, name, args):
+        self.calls.append({"name": name, "arguments": args})
+        return {"ok": True, "done": True}
+
+    def get_tool_calls(self):
+        return list(self.calls)
+
+    def get_state_hash(self):
+        return json.dumps([c for c in self.calls if c["name"].endswith("write")], sort_keys=True)
+
+
+def _fake_sample(gold, prefix=None):
+    sample = {"id": "s", "audio_text": "làm đi", "history": [],
+              "label": {"tool_calls": gold, "tool_results": [{"ok": True}] * len(gold)}}
+    if prefix is not None:
+        sample["prefix_calls"] = prefix
+    return sample
+
+
+def _fake_task():
+    from lifemate.task import Task
+
+    return Task(id="s", request="làm đi", history=[], tools=[], context={"current_time": "2026-11-01T09:00:00+07:00",
+                                                                         "timezone": "Asia/Ho_Chi_Minh", "installed_apps": {}},
+                label=None)
+
+
+READ_A = {"name": "m.read", "arguments": {"q": "a"}}
+READ_B = {"name": "m.read", "arguments": {"q": "b"}}
+WRITE = {"name": "m.write", "arguments": {"to": "c1"}}
+
+
+def _replay(sample, **kw):
+    from lifemate.sft.replay import replay
+
+    return replay(sample, _fake_task(), WorldEnv(), fresh_env=WorldEnv, **kw)
+
+
+def test_replay_emits_the_prefix_then_the_rest_of_the_gold_calls():
+    rec = _replay(_fake_sample([READ_A, WRITE], prefix=[READ_B, READ_A]))
+    assert rec is not None and rec["context_turns"] == 2
+    assert [c["name"] + json.dumps(c["arguments"]) for c in _calls(rec)] == [
+        'm.read{"q": "b"}', 'm.read{"q": "a"}', 'm.write{"to": "c1"}']  # READ_A is not repeated after the prefix made it
+
+
+def test_replay_rejects_a_changed_state():
+    assert _replay(_fake_sample([READ_A, WRITE], prefix=[{"name": "m.write", "arguments": {"to": "other"}}])) is None
+
+
+def test_replay_without_prefix_unchanged(train_samples):
+    s = next(x for x in train_samples if len(x["label"]["tool_calls"]) >= 2 and not x["history"])
+    rec = replay_sample(s)
+    assert rec is not None and "context_turns" not in rec
+    assert [(c["name"], c["arguments"]) for c in _calls(rec)] == [(g["name"], g["arguments"]) for g in s["label"]["tool_calls"]]
+    assert _replay(_fake_sample([READ_A, WRITE])) is not None and "context_turns" not in _replay(_fake_sample([READ_A, WRITE]))
+
+
+def test_replay_with_a_prefix_needs_a_way_to_make_a_fresh_env():
+    from lifemate.sft.replay import replay
+
+    with pytest.raises(ValueError, match="fresh_env"):
+        replay(_fake_sample([READ_A], prefix=[READ_B]), _fake_task(), WorldEnv())
