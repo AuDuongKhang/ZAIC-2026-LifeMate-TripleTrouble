@@ -240,6 +240,7 @@ def main(argv: list[str] | None = None, llm=None) -> None:
     ap.add_argument("--limit", type=int, default=40)
     ap.add_argument("--per-prompt", type=int, default=4, help="briefs per prompt file")
     ap.add_argument("--scenarios", type=int, default=3, help="scenarios asked per brief")
+    ap.add_argument("--hf-repo", default=None, help="ingest: private HF dataset to upload <name>.jsonl and its report to (synth/)")
     ap.add_argument("--teacher", help="answer: HF id of the local model that writes the scenarios")
     ap.add_argument("--revision", help="answer: pinned commit of --teacher")
     ap.add_argument("--data-root", type=Path, default=default_data_root())
@@ -287,6 +288,13 @@ def main(argv: list[str] | None = None, llm=None) -> None:
     (args.out_dir / f"{args.name}.report.json").write_text(json.dumps(report, ensure_ascii=False, indent=1),
                                                            encoding="utf-8")
     print(f"-> {args.out_dir / (args.name + '.jsonl')}: {report}", flush=True)
+    if args.hf_repo:  # the training notebook reads synthetic samples from the dataset, from another session
+        from huggingface_hub import HfApi
+
+        for path in (args.out_dir / f"{args.name}.jsonl", args.out_dir / f"{args.name}.report.json"):
+            HfApi().upload_file(path_or_fileobj=str(path), path_in_repo=f"synth/{path.name}", repo_id=args.hf_repo,
+                                repo_type="dataset")
+        print(f"uploaded synth/{args.name}.jsonl to {args.hf_repo}", flush=True)
 
 
 if __name__ == "__main__":

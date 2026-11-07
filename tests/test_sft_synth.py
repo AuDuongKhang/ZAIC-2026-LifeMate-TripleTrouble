@@ -329,3 +329,17 @@ def test_records_refuse_extra_samples_that_use_a_holdout_app(parts, tmp_path):
     path.write_text(json.dumps(bad, ensure_ascii=False) + "\n", encoding="utf-8")
     with pytest.raises(SystemExit):
         _run_records(tmp_path, path)
+
+
+def test_ingest_uploads_the_samples_and_report_with_hf_repo(train_samples, tmp_path, monkeypatch):
+    import huggingface_hub
+
+    uploads = []
+    monkeypatch.setattr(huggingface_hub.HfApi, "upload_file", lambda self, **kw: uploads.append(kw))
+    synth, argv = _packed(tmp_path, prompts=1)
+    synth.main(["answer", *argv], llm=FakeTeacher())
+    synth.main(["ingest", "--name", "t", "--out-dir", str(tmp_path), "--hf-repo", "o/d"])
+    assert [(u["path_in_repo"], u["repo_id"], u["repo_type"]) for u in uploads] == [
+        ("synth/t.jsonl", "o/d", "dataset"), ("synth/t.report.json", "o/d", "dataset")]
+    synth.main(["ingest", "--name", "t", "--out-dir", str(tmp_path)])
+    assert len(uploads) == 2  # no --hf-repo, no upload
