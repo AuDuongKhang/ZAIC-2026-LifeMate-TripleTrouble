@@ -19,6 +19,9 @@ sample in the same file. `--mask K` adds K function-masked copies (lifemate.sft.
 table rewrites at least one app the record shows: new tool and app names, new descriptions, parameter synonyms; holdout
 apps in the table are refused. Without it the records are unchanged.
 
+Recovery samples (lifemate.sft.recovery, with `prefix_calls`) go in through --extra-samples too: the record starts with the
+model's own earlier calls, marked `context_turns`, and the training loss skips them.
+
 `--extra-samples FILE` (repeatable) adds synthetic samples (lifemate.sft.synth) after the subset's own: rendered
 like real ones, with the same --mask/--perturb copies, but only with gold text (they have no audio, so `cache:`
 sources skip them). Each runs in the train environment named by its `env_id`, which must belong to the pool unless
@@ -166,7 +169,8 @@ def main(argv: list[str] | None = None) -> Path:
                 lao = (args.leave_app_out is not None
                        and random.Random(f"{args.seed}:{sample['id']}:{i}:lao").random() < args.leave_app_out)
                 rec = replay(sample, task, env, args.prompt, args.examples, bank, args.date_hints,
-                             thoughts[sample["id"]]["steps"] if args.thoughts else None, leave_gold_apps_out=lao)
+                             thoughts[sample["id"]]["steps"] if args.thoughts else None, leave_gold_apps_out=lao,
+                             fresh_env=lambda sample=sample: zaic_tools.ToolEnv("train", env_id(sample), root=args.data_root))
                 if rec is None:
                     dropped.append(f"{sample['id']}:{source}")
                     continue

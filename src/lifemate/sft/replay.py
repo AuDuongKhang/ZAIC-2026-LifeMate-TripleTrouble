@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import copy
 import json
+from typing import Callable
 
 from ..agents.fewshot import ExampleBank
 from ..agents.parsing import BLOCK, parse_tool_calls
@@ -58,7 +59,7 @@ def assistant_message(output: str) -> dict:
 
 def replay(sample: dict, task: Task, env, prompt_version: str = DEFAULT_PROMPT, examples: int = 0,
            bank: ExampleBank | None = None, date_hints: bool = False, thoughts: list[dict] | None = None,
-           leave_gold_apps_out: bool = False) -> dict | None:
+           leave_gold_apps_out: bool = False, fresh_env: Callable | None = None) -> dict | None:
     """{"id", "messages", "tools"}: the agent's last prompt plus the gold answer to it, or None when the agent did not
     send exactly the gold calls (a rejected or repeated call, calls after an ask). Never a record with partial calls.
     `thoughts` is a thoughts row's steps: one {"call", "thought"} per gold call ([None] for no gold calls). The calls
@@ -68,13 +69,29 @@ def replay(sample: dict, task: Task, env, prompt_version: str = DEFAULT_PROMPT, 
     if thoughts is not None and [s["call"] for s in thoughts] != ([c["name"] for c in gold] or [None]):
         raise ValueError(f"{sample['id']}: thought steps {[s['call'] for s in thoughts]} do not match the gold calls "
                          f"{[c['name'] for c in gold]}")
-    llm = ReplayLLM(gold, final_text(gold), None if thoughts is None else [s["thought"] for s in thoughts])
+    expected = gold
+    prefix = sample.get("prefix_calls") or []
+    if prefix:  # recovery: the model's own earlier calls come first, then the gold calls they did not already make
+        if fresh_env is None:
+            raise ValueError("a sample with prefix_calls needs fresh_env, a way to build the gold replay's environment")
+        made = {(c["name"], json.dumps(c["arguments"], sort_keys=True)) for c in prefix}
+        expected = prefix + [c for c in gold if (c["name"], json.dumps(c["arguments"], sort_keys=True)) not in made]
+    llm = ReplayLLM(expected, final_text(gold), None if thoughts is None else [s["thought"] for s in thoughts])
     agent = ReActAgent(llm=llm, prompt_version=prompt_version, examples=examples, bank=bank, clock=lambda: 0.0,
                        date_hints=date_hints, leave_gold_apps_out=leave_gold_apps_out)
     agent.run(task, env)
-    if [(c["name"], c["arguments"]) for c in env.get_tool_calls()] != [(c["name"], c["arguments"]) for c in gold]:
+    if [(c["name"], c["arguments"]) for c in env.get_tool_calls()] != [(c["name"], c["arguments"]) for c in expected]:
         return None
+    if prefix:  # the prefix must leave the app exactly where the gold calls leave it
+        reference = fresh_env()
+        for c in gold:
+            reference.call(c["name"], c["arguments"])
+        if env.get_state_hash() != reference.get_state_hash():
+            return None
     if not llm.recorded or llm.outputs:
         return None
     messages, tools, output = llm.recorded[-1]
-    return {"id": sample["id"], "messages": messages + [assistant_message(output)], "tools": tools}
+    record = {"id": sample["id"], "messages": messages + [assistant_message(output)], "tools": tools}
+    if prefix:
+        record["context_turns"] = len(prefix)  # these agent turns are context, never labelled (sft.tokenize)
+    return record

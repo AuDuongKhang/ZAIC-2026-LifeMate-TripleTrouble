@@ -83,7 +83,10 @@ def encode_record(record: dict, tokenizer, max_len: int = MAX_LEN, decision_weig
     """{"input_ids", "labels"}, labels -100 outside the assistant turns after the last user message (the turns the
     agent generates; history turns are context). None when longer than max_len: skipped by the caller, never cut.
     With decision_weight != 1 the result also has "weights", one per token: decision_weight at the decision_positions
-    of each labelled turn and 1.0 elsewhere. Without it the result is as it always was."""
+    of each labelled turn and 1.0 elsewhere. Without it the result is as it always was.
+
+    A recovery record (lifemate.sft.recovery) has "context_turns": K, and its first K agent turns are context too, because
+    they are the model's own earlier calls: training on them would teach the mistake."""
     messages, tools = record["messages"], record["tools"]
     full = render(tokenizer, messages, tools)
     if len(full) > max_len:
@@ -91,8 +94,12 @@ def encode_record(record: dict, tokenizer, max_len: int = MAX_LEN, decision_weig
     labels = [-100] * len(full)
     turns: list[tuple[int, int]] = []
     last_user = max(i for i, m in enumerate(messages) if m["role"] == "user")
+    context_left = record.get("context_turns", 0)
     for i in range(last_user + 1, len(messages)):
         if messages[i]["role"] != "assistant":
+            continue
+        if context_left > 0:
+            context_left -= 1
             continue
         before = render(tokenizer, messages[:i], tools, add_generation_prompt=True)
         upto = render(tokenizer, messages[: i + 1], tools)

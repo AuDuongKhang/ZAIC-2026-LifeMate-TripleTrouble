@@ -136,3 +136,22 @@ def test_weights_mark_decisions_in_the_labelled_turns_only(tok, two_call_record)
     assert heavy.endswith(FINAL_TEXT[0])  # only the first token of the closing answer, not its whole text
     assert FINAL_TEXT not in heavy
     assert enc["labels"] == encode_record(two_call_record, tok)["labels"]
+
+
+# --- recovery: context turns -------------------------------------------------------------------------------------------
+
+def test_prefix_turns_have_no_labels(tok, two_call_record):
+    plain = encode_record(two_call_record, tok)
+    rec = dict(two_call_record, context_turns=1)
+    enc = encode_record(rec, tok)
+    assert enc["input_ids"] == plain["input_ids"]
+    first = tok.decode([t for t, l in zip(plain["input_ids"], plain["labels"]) if l != -100]).split("<tool_call>")[1]
+    labelled = tok.decode(_labelled(enc))
+    assert labelled.count("<tool_call>") == 1 and first.split("</tool_call>")[0] not in labelled  # the first call is context
+    assert FINAL_TEXT in labelled  # the turns after the prefix are still trained on
+    n_prefix = sum(l != -100 for l in plain["labels"]) - sum(l != -100 for l in enc["labels"])
+    assert n_prefix > 0
+
+
+def test_context_turns_zero_or_absent_changes_nothing(tok, two_call_record):
+    assert encode_record(dict(two_call_record, context_turns=0), tok) == encode_record(two_call_record, tok)
