@@ -275,7 +275,10 @@ def test_hf_llm_loads_tokenizer_and_weights_at_the_revision(monkeypatch):
             pass
 
     def loader(kind):
-        return types.SimpleNamespace(from_pretrained=lambda name, **kw: calls.append((kind, name, kw)) or Loaded())
+        def load(name, **kw):
+            calls.append((kind, name, kw))
+            return (Loaded(), {"missing_keys": []}) if kw.get("output_loading_info") else Loaded()
+        return types.SimpleNamespace(from_pretrained=load)
 
     monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(bfloat16="bf16"))
     monkeypatch.setitem(sys.modules, "transformers", types.SimpleNamespace(
@@ -566,3 +569,22 @@ def test_read_only_majority_does_not_win():
 def test_vote_needs_examples():
     with pytest.raises(ValueError, match="vote_prompts"):
         ReActAgent(llm=FakeLLM([]), vote_prompts=3)
+
+
+# --- beam search and token budget --------------------------------------------------------------------------------------
+
+def test_num_beams_and_max_new_tokens_reach_the_llm_and_info(monkeypatch):
+    import lifemate.agents.react as react
+    seen = {}
+
+    class Fake(FakeLLM):
+        def __init__(self, model, revision=None, max_new_tokens=384, num_beams=1):
+            super().__init__([])
+            seen.update(model=model, max_new_tokens=max_new_tokens, num_beams=num_beams)
+            self.max_new_tokens = max_new_tokens
+
+    monkeypatch.setattr(react, "HFChatLLM", Fake)
+    agent = ReActAgent(model="m", max_new_tokens=1024, num_beams=3)
+    assert seen == {"model": "m", "max_new_tokens": 1024, "num_beams": 3}
+    assert agent.info["max_new_tokens"] == 1024 and agent.info["num_beams"] == 3
+    assert ReActAgent(llm=FakeLLM([])).info["num_beams"] == 1

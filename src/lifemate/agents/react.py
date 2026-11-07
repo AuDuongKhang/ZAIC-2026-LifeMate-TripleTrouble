@@ -89,7 +89,8 @@ class ReActAgent(Agent):
                  clock: Callable[[], float] = time.perf_counter, revision: str | None = None,
                  date_hints: bool = False, empty_hint: bool = False,
                  refusal_check: bool = False, refusal_min_hits: int = 1,
-                 leak_guard: bool = False, vote_prompts: int = 0, vote_apply: bool = True):
+                 leak_guard: bool = False, vote_prompts: int = 0, vote_apply: bool = True,
+                 max_new_tokens: int = 384, num_beams: int = 1):
         """time_budget_s counts from task.started_at (sample start, ASR included) when the runner sets it.
         A step only starts with at least min_step_s left, and its generation is capped at the time remaining.
         check_refs holds back calls whose x-ref ids were never seen in a tool result (off by default: with it the
@@ -109,10 +110,14 @@ class ReActAgent(Agent):
         examples (variant i: ranks i*k+1 .. i*k+k), and the majority proposal (at least 2 votes, ties to the original)
         is used instead (vote_apply=False only records the vote). Only proposals with a write or an ask can win;
         plain answers, read-only and invalid proposals are recorded but not counted, so the original is the fallback. Greedy decoding stays; only the used proposal is
-        sent. The vote is skipped when less than K * min_step_s is left after the original proposal."""
+        sent. The vote is skipped when less than K * min_step_s is left after the original proposal.
+        max_new_tokens and num_beams go to the LLM the agent builds (an `llm` passed in keeps its own); beam search
+        stays deterministic but costs time."""
         if vote_prompts and not examples:
             raise ValueError("vote_prompts needs examples (the variants differ only in their examples)")
-        self.llm = llm if llm is not None else HFChatLLM(model, revision=revision)
+        llm_kw = {"revision": revision, **({"max_new_tokens": max_new_tokens} if max_new_tokens != 384 else {}),
+                  **({"num_beams": num_beams} if num_beams != 1 else {})}  # only what differs from the LLM's defaults
+        self.llm = llm if llm is not None else HFChatLLM(model, **llm_kw)
         self.max_steps, self.max_invalid, self.clock = max_steps, max_invalid, clock
         self.time_budget_s, self.min_step_s = time_budget_s, min_step_s
         self.prompt_version, self.check_refs, self.examples = prompt_version, check_refs, examples
@@ -127,7 +132,8 @@ class ReActAgent(Agent):
                      "prompt": prompt_version, "check_refs": check_refs, "max_steps": max_steps, "time_budget_s": time_budget_s,
                      "examples": examples, "bank_size": len(self.bank) if self.bank is not None else 0,
                      "date_hints": date_hints, "empty_hint": empty_hint, "refusal_check": refusal_check, "refusal_min_hits": refusal_min_hits,
-                     "leak_guard": leak_guard, "vote_prompts": vote_prompts, "vote_apply": vote_apply}
+                     "leak_guard": leak_guard, "vote_prompts": vote_prompts, "vote_apply": vote_apply,
+                     "max_new_tokens": max_new_tokens, "num_beams": num_beams}
 
     def run(self, task: Task, env) -> None:
         trace = self.last_trace = {"steps": [], "stop": None}  # None: a step raised

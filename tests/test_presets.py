@@ -179,3 +179,9 @@ def test_context_prompt_asr_presets_only_add_the_flag():
     for base, context in (("pho-large-ft-b", "pho-large-ft-b-context"), ("pho-large-ft-b-beam5", "pho-large-ft-b-beam5-context")):
         name, kw = resolve("asr", base, env)
         assert resolve("asr", context, env) == (name, {**kw, "context_prompt": True})
+
+
+def test_beam_preset_passes_num_beams():
+    env = {"HF_MODEL_OWNER": "team"}
+    name, kw = resolve("agent", "sft-v2-refs", env)
+    assert resolve("agent", "sft-v2-refs-beam3", env) == (name, {**kw, "num_beams": 3})
