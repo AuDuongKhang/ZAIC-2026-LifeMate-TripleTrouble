@@ -106,3 +106,56 @@ def test_fix_ignores_time_only_and_non_string_values():
 def test_fix_works_without_a_spec():
     fixed = fix_call_dates(call(start="2026-09-30"), None, "ngày mai", NOW)
     assert fixed["arguments"]["start"] == "2026-10-02"
+
+
+# --- false positives found in review ----------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text", [
+    "hôm nay tôi đi bộ ba lăm phút, à mai tám giờ sáng nhắc tôi uống thuốc",   # a second time reference ("mai")
+    "ghi buổi yoga từ sáu rưỡi sáng nay, rồi bảy giờ tối mai nhắc em uống thuốc",
+    "buổi đầu tám giờ sáng thứ hai tuần sau, hôm trước em đã đăng ký",
+    "thứ ba nhắc anh, mười một tháng mười là ngày khám",
+    "tám giờ tối nay, với chủ nhật nữa",
+    "mai với thứ bảy em học nhóm",
+    "sớm mai sáu giờ đón đoàn, chuông tối thứ năm là shipper",
+    "bữa lên Bà Nà trời mưa không, tám giờ tối thứ ba nhắc anh",
+])
+def test_a_second_time_reference_gives_no_date(text):
+    assert resolve_date(text, NOW) is None
+
+
+@pytest.mark.parametrize("text", [
+    "chọn quán thứ hai giúp anh",
+    "đặt chuyến thứ hai trong danh sách",
+    "mở bài thứ ba",
+    "lần thứ năm rồi đó",
+])
+def test_an_ordinal_is_not_a_weekday(text):
+    assert resolve_date(text, NOW) is None
+
+
+def test_a_real_weekday_after_a_non_counter_still_resolves():
+    assert resolve_date("họp lúc ba giờ chiều thứ sáu tuần sau", NOW) == "2026-10-09"
+    assert resolve_date("nhắc tôi uống thuốc ngày mai", NOW) == "2026-10-02"
+
+
+def test_fix_calls_changes_nothing_when_two_calls_carry_a_date():
+    from lifemate.agents.date_fix import fix_calls
+
+    two = [call(start="2026-09-30T15:00:00+07:00"), {"name": "tasks.add", "arguments": {"due": "2026-09-30T18:00:00+07:00"}}]
+    assert fix_calls(two, {"calendar.create_event": SPEC}, "họp ngày mai", NOW) == two
+    one = fix_calls([call(start="2026-09-30T15:00:00+07:00"), {"name": "x.read", "arguments": {}}], {}, "họp ngày mai", NOW)
+    assert one[0]["arguments"]["start"] == "2026-10-02T15:00:00+07:00" and one[1] == {"name": "x.read", "arguments": {}}
+
+
+def test_the_fix_never_changes_a_gold_call_of_train(train_samples):
+    """Regression scan: on the gold calls of all train samples the fix may only touch these known semantic cases, where
+    the date of a call belongs to something the request does not date by a phrase (a draw date, a trip date)."""
+    from lifemate.data import default_data_root, load_catalog
+    from lifemate.agents.date_fix import fix_calls
+
+    catalog = load_catalog(default_data_root(), "train")
+    changed = {s["id"] for s in train_samples
+               if fix_calls(s["label"]["tool_calls"], catalog, s["audio_text"], s["context"]["current_time"])
+               != s["label"]["tool_calls"]}
+    assert changed <= {"train_1249", "train_1338"}, sorted(changed)

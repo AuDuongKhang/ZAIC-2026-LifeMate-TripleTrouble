@@ -18,7 +18,7 @@ import json
 from pathlib import Path
 from typing import Callable
 
-from .agents.date_fix import fix_call_dates
+from .agents.date_fix import fix_calls
 from .agents.freetext import freetext_rewrite
 from .agents.minimal_reads import minimal_reads_rewrite
 from .agents.react import decides, vote_key
@@ -69,8 +69,8 @@ def date_fix(times: dict[str, str] | None = None, data_root: Path | None = None)
         now = times.get(trace["id"])
         if now is None:
             return None
-        fixed = [fix_call_dates(c, catalog.get(c["name"]), trace.get("request", ""), now) for c in trace["calls"]]
-        if all(f is c for f, c in zip(fixed, trace["calls"])):
+        fixed = fix_calls(trace["calls"], catalog, trace.get("request", ""), now)
+        if fixed is trace["calls"]:
             return None
         return [{"name": c["name"], "arguments": c["arguments"]} for c in fixed]
     return rewrite

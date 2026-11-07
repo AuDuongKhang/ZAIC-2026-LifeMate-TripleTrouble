@@ -12,7 +12,7 @@ from ..data import SYS_TOOL, default_data_root
 from ..task import Task
 from .ask_guard import fold
 from .base import Agent
-from .date_fix import fix_call_dates
+from .date_fix import fix_calls
 from .fewshot import ExampleBank, render_examples
 from .llm import ChatLLM, HFChatLLM
 from .parsing import BLOCK, parse_tool_calls
@@ -180,14 +180,15 @@ class ReActAgent(Agent):
             if not calls and not errors:
                 trace["stop"] = "no_call"  # a plain answer: finished, or nothing to do (out of scope)
                 return
+            if self.date_fix:  # before the assistant turn is written, so the model reads back the call that was sent
+                fixed = fix_calls(calls, specs, task.request, task.context["current_time"])
+                if fixed is not calls:
+                    trace.setdefault("date_fixes", []).extend({"from": a["arguments"], "to": b["arguments"]}
+                                                              for a, b in zip(calls, fixed) if a is not b)
+                calls = fixed
             messages.append({"role": "assistant", "content": BLOCK.sub("", text).strip(), "tool_calls": [
                 {"type": "function", "function": {"name": c["name"], "arguments": c["arguments"]}} for c in calls]})
             for call in calls:
-                if self.date_fix:
-                    fixed = fix_call_dates(call, specs.get(call["name"]), task.request, task.context["current_time"])
-                    if fixed is not call:
-                        trace.setdefault("date_fixes", []).append({"from": call["arguments"], "to": fixed["arguments"]})
-                    call = fixed
                 key = json.dumps([call["name"], call["arguments"]], sort_keys=True, ensure_ascii=False)
                 if key in done:
                     invalid += 1

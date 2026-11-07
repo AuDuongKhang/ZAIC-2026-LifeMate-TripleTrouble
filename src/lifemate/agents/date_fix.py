@@ -22,6 +22,18 @@ _PHRASE = re.compile(
     r"(?<!\w)(?:(?P<day>hôm nay|ngày mốt|ngày mai|(?:sáng|trưa|chiều|tối) mai)"
     r"|(?P<weekday>thứ (?:hai|ba|tư|năm|sáu|bảy)|chủ nhật)(?P<when> tuần sau| tuần này| này)?)(?!\w)")
 _DATE_VALUE = re.compile(r"^\d{4}-\d{2}-\d{2}(?=$|[T ])")
+# Any other time reference in the request makes the phrase ambiguous: the date may belong to another call or to a day the
+# phrase does not name ("hôm nay tôi đi bộ, à mai nhắc tôi", "sáng nay ... tối mai", "mười một tháng mười").
+_OTHER_TIME = re.compile(
+    r"(?<!\w)(?:mai|nay|này|hôm qua|hôm kia|hôm trước|hôm đó|hôm ấy|bữa|tuần trước|tuần sau|tuần này|tháng|năm ngoái|"
+    r"đầu tuần|cuối tuần|cuối tháng|thứ (?:hai|ba|tư|năm|sáu|bảy)|chủ nhật|ngày \w*\d\w*|\d+/\d+)(?!\w)")
+# "thứ hai" is an ordinal after a counting word or before "trong danh sách": "quán thứ hai", "chuyến thứ ba"
+_COUNTERS = {"cái", "quán", "chuyến", "bài", "lần", "cuốn", "món", "bộ", "phim", "tập", "người", "căn", "nhà", "vé", "dòng",
+             "mục", "số", "bản", "video", "ứng", "viên", "lựa", "chọn", "phương", "án", "đáp", "địa", "chỉ", "tiệm", "hàng",
+             "tin", "cuộc", "thư", "ảnh", "tệp", "hát", "album", "kết", "quả", "bác", "sĩ", "cô", "thầy", "bạn", "anh", "chị",
+             "ông", "bà", "em", "khách", "sạn", "hãng", "đợt", "vòng", "trận", "ca", "buổi", "tiết", "hạng", "giải", "câu",
+             "chương", "phần", "trang", "khóa", "lớp", "đơn", "hóa", "phòng", "tầng", "lô", "nhóm", "đội", "thẻ", "tài", "khoản"}
+_ORDINAL_AFTER = re.compile(r"^\s*(?:trong|ở|của)\s+(?:danh sách|kết quả|các|những|số)")
 _PAST_RANGE = re.compile(r"tu thoi diem|qua khu|da qua|truoc day|lich su|since")  # matched on folded words
 
 
@@ -30,10 +42,17 @@ def resolve_date(request: str, current_time: str) -> str | None:
 
     hôm nay, ngày mai, ngày mốt, sáng/trưa/chiều/tối mai; thứ X tuần sau (that weekday of next week); thứ X này (this
     week, None when already past); thứ X without a qualifier and chủ nhật (the next one, today included)."""
-    matches = list(_PHRASE.finditer(unicodedata.normalize("NFC", request).lower()))
+    matches = list(_PHRASE.finditer(unicodedata.normalize("NFC", request).lower()))  # offsets are those of `lowered`
     if len(matches) != 1:
         return None
     m = matches[0]
+    lowered = unicodedata.normalize("NFC", request).lower()
+    if _OTHER_TIME.search(lowered[: m.start()] + " " + lowered[m.end():]):
+        return None
+    if m["weekday"] and m["weekday"].startswith("thứ"):
+        before = lowered[: m.start()].split()
+        if (before and before[-1] in _COUNTERS) or _ORDINAL_AFTER.match(lowered[m.end():]):
+            return None
     today = date.fromisoformat(current_time[:10])  # the local date as written, no timezone conversion
     if m["day"]:
         offset = 0 if m["day"] == "hôm nay" else 2 if m["day"] == "ngày mốt" else 1
@@ -64,3 +83,13 @@ def fix_call_dates(call: dict, spec: dict | None, request: str, current_time: st
     if new is None or value[:10] == new:
         return call
     return dict(call, arguments=dict(call["arguments"], **{dated[0]: new + value[10:]}))
+
+
+def fix_calls(calls: list[dict], specs: dict[str, dict], request: str, current_time: str) -> list[dict]:
+    """fix_call_dates over the calls of one turn, only when exactly one of them carries a date-valued string argument:
+    with two, the phrase may date either (or neither), so nothing is changed. Returns the same list when nothing changes."""
+    dated = [c for c in calls if any(isinstance(v, str) and _DATE_VALUE.match(v) for v in c.get("arguments", {}).values())]
+    if len(dated) != 1:
+        return calls
+    fixed = [fix_call_dates(c, specs.get(c["name"]), request, current_time) for c in calls]
+    return calls if all(f is c for f, c in zip(fixed, calls)) else fixed
