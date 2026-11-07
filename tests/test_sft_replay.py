@@ -132,3 +132,40 @@ def test_records_cli_rejects_unknown_text_sources(train_samples, tmp_path, text)
     with pytest.raises(SystemExit):
         records.main(["--name", "t", "--subset", "pool", "--tokenizer", "none", "--out-dir", str(tmp_path),
                       "--text", text])
+
+
+def test_replay_llm_puts_each_sentence_before_its_call():
+    calls = [{"name": "a.b", "arguments": {}}, {"name": "c.d", "arguments": {}}]
+    llm = ReplayLLM(calls, "Đã xong.", ["Câu một.", "Câu hai."])
+    first = llm.generate([], [])
+    assert first.startswith("Câu một.\n<tool_call>") and first.endswith("</tool_call>")
+    assert llm.generate([], []).startswith("Câu hai.\n<tool_call>")
+    assert llm.generate([], []) == "Đã xong."  # the closing text has no sentence
+
+
+def test_replay_llm_puts_the_sentence_before_a_refusal():
+    assert ReplayLLM([], REFUSAL_TEXT, ["Người dùng tự huỷ yêu cầu."]).generate([], []) == (
+        "Người dùng tự huỷ yêu cầu.\n" + REFUSAL_TEXT)
+
+
+def _steps(sample):
+    gold = sample["label"]["tool_calls"]
+    return [{"call": c["name"], "thought": f"Câu {i}."} for i, c in enumerate(gold)] or [{"call": None, "thought": "Câu 0."}]
+
+
+@pytest.mark.parametrize("kind", ["act", "ask", "empty"])
+def test_replay_with_thoughts_keeps_the_calls_and_adds_the_sentences(train_samples, kind):
+    s = next(x for x in train_samples if label_kind(x["label"]["tool_calls"]) == kind and not x["history"])
+    plain, rec = replay_sample(s), replay_sample(s, thoughts=_steps(s))
+    assert _calls(rec) == _calls(plain)
+    agent = [m for m in rec["messages"] if m["role"] == "assistant"]
+    if kind == "empty":
+        assert agent[-1]["content"] == "Câu 0.\n" + REFUSAL_TEXT
+    else:
+        assert [m["content"] for m in agent if m.get("tool_calls")] == [x["thought"] for x in _steps(s)]
+
+
+def test_replay_raises_when_the_steps_do_not_name_the_gold_calls(train_samples):
+    s = next(x for x in train_samples if label_kind(x["label"]["tool_calls"]) == "act")
+    with pytest.raises(ValueError, match=s["id"]):
+        replay_sample(s, thoughts=[{"call": "other.tool", "thought": "x"}])

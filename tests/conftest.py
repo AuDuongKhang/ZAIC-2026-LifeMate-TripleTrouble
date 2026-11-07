@@ -22,7 +22,7 @@ def _train_parts(examples: bool):
     return import_zaic_tools(root, "train"), load_catalog(root, "train"), bank
 
 
-def replay_sample(sample: dict, examples: int = 0) -> dict | None:
+def replay_sample(sample: dict, examples: int = 0, thoughts: list[dict] | None = None) -> dict | None:
     """SFT record of one train sample: gold-ASR task, a fresh train ToolEnv, replayed through the agent."""
     from lifemate.asr.base import GoldTranscriptASR
     from lifemate.infer import build_task
@@ -31,4 +31,5 @@ def replay_sample(sample: dict, examples: int = 0) -> dict | None:
     zaic_tools, catalog, bank = _train_parts(bool(examples))
     root = default_data_root()
     task = build_task(sample, GoldTranscriptASR(), catalog, root, "train")
-    return replay(sample, task, zaic_tools.ToolEnv("train", sample["id"], root=root), examples=examples, bank=bank)
+    return replay(sample, task, zaic_tools.ToolEnv("train", sample["id"], root=root), examples=examples, bank=bank,
+                  thoughts=thoughts)

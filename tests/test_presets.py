@@ -179,3 +179,8 @@ def test_context_prompt_asr_presets_only_add_the_flag():
     for base, context in (("pho-large-ft-b", "pho-large-ft-b-context"), ("pho-large-ft-b-beam5", "pho-large-ft-b-beam5-context")):
         name, kw = resolve("asr", base, env)
         assert resolve("asr", context, env) == (name, {**kw, "context_prompt": True})
+
+
+def test_sft_r1_preset_serves_with_prompt_v3():
+    backend, kw = resolve("agent", "sft-r1-refs", {"HF_MODEL_OWNER": "o"})
+    assert backend == "react" and kw == {"model": "o/lifemate-sft-r1", "examples": 4, "check_refs": True, "prompt_version": "v3"}

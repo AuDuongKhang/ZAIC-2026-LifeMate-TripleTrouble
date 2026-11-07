@@ -16,16 +16,21 @@ from ..task import Task
 
 class ReplayLLM:
     """ChatLLM that answers with the gold calls, one per step, then final_text (None: stop after the last call).
+    With `thoughts` (one sentence per step), each call is preceded by its sentence on its own line; for a sample with
+    no gold calls the single sentence goes before final_text (the refusal). The closing text never gets one.
     Records (messages, tools, output) of every generate call."""
 
     context_limit = 16384
     max_new_tokens = 0
 
-    def __init__(self, gold_calls: list[dict], final_text: str | None):
+    def __init__(self, gold_calls: list[dict], final_text: str | None, thoughts: list[str] | None = None):
         self.outputs = ["<tool_call>" + json.dumps({"name": c["name"], "arguments": c["arguments"]}, ensure_ascii=False)
                         + "</tool_call>" for c in gold_calls]
         if final_text is not None:
             self.outputs.append(final_text)
+        if thoughts is not None:
+            for i, thought in enumerate(thoughts):
+                self.outputs[i] = f"{thought}\n{self.outputs[i]}"
         self.recorded: list[tuple[list[dict], list[dict], str]] = []
 
     def generate(self, messages: list[dict], tools: list[dict], max_time: float | None = None) -> str:
@@ -52,11 +57,16 @@ def assistant_message(output: str) -> dict:
 
 
 def replay(sample: dict, task: Task, env, prompt_version: str = DEFAULT_PROMPT, examples: int = 0,
-           bank: ExampleBank | None = None, date_hints: bool = False) -> dict | None:
+           bank: ExampleBank | None = None, date_hints: bool = False, thoughts: list[dict] | None = None) -> dict | None:
     """{"id", "messages", "tools"}: the agent's last prompt plus the gold answer to it, or None when the agent did not
-    send exactly the gold calls (a rejected or repeated call, calls after an ask). Never a record with partial calls."""
+    send exactly the gold calls (a rejected or repeated call, calls after an ask). Never a record with partial calls.
+    `thoughts` is a thoughts row's steps: one {"call", "thought"} per gold call ([None] for no gold calls). The calls
+    must match the gold names, else ValueError naming the sample."""
     gold = sample["label"]["tool_calls"]
-    llm = ReplayLLM(gold, final_text(gold))
+    if thoughts is not None and [s["call"] for s in thoughts] != ([c["name"] for c in gold] or [None]):
+        raise ValueError(f"{sample['id']}: thought steps {[s['call'] for s in thoughts]} do not match the gold calls "
+                         f"{[c['name'] for c in gold]}")
+    llm = ReplayLLM(gold, final_text(gold), None if thoughts is None else [s["thought"] for s in thoughts])
     agent = ReActAgent(llm=llm, prompt_version=prompt_version, examples=examples, bank=bank, clock=lambda: 0.0,
                        date_hints=date_hints)
     agent.run(task, env)

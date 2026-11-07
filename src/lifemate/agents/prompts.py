@@ -27,6 +27,11 @@ Rules:
 8. If none of the tools can do the request, reply in one short sentence without calling any tool.
 9. When the request is done, reply in one short sentence without calling any tool.""",
 }
+# v3 = v1 plus one rule: a short Vietnamese sentence before each tool call (SFT with reasoning lines, see
+# docs/superpowers/specs/2026-11-05-reasoning-lines-design.md). Not measured yet.
+PROMPTS["v3"] = PROMPTS["v1"] + (
+    "\n7. Before each tool call, write one short sentence in Vietnamese: what the request needs, what the results show, "
+    "or what is missing. The examples show only the calls.")
 FINAL_TEXT = "Đã xong."  # act samples end on this after their last call
 REFUSAL_TEXT = "Xin lỗi, tôi không làm được việc này."  # out-of-scope samples answer this without any call
 DEFAULT_PROMPT = "v1"  # the best measured version; v2 scored 14.88 vs 16.58 (train 100, gold ASR)

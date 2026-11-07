@@ -45,7 +45,10 @@ def _(mo):
        pool) with the model given, which must **not** be fine-tuned on the pool clips (keep the off-the-shelf
        `vinai/PhoWhisper-large`). *Synthetic samples* names a file in the HF data repo (for example
        `synth/synth-v1.jsonl`, written by `lifemate.sft.synth`); it is rendered with the train records only (pool
-       environments, or all for `all`). The log and plots below refresh every minute. Checkpoints go to
+       environments, or all for `all`). *Reasoning sentences* names a file in the HF data repo (for example
+       `thoughts/r1.jsonl`, written by `molab_thoughts.py`); every record then carries one sentence before each tool
+       call, the records switch to prompt `v3` (names get `-thoughts-<file>`), and the merge cell suggests a preset with
+       `"prompt_version": "v3"`. It cannot be combined with synthetic samples. The log and plots below refresh every minute. Checkpoints go to
        `<model repo>/checkpoints/<run>/last` every 30 minutes and at the end. *Weekday table* adds the date hints to the
        prompt of the train and eval records (record names end in `-d`); serve that model with `"date_hints": true`.
     5. **Stop** saves a checkpoint at the next optimizer step, then exits. In a new session (or after Stop) tick
@@ -173,6 +176,8 @@ def _(mo):
     asr_model = mo.ui.text(value="vinai/PhoWhisper-large", label="ASR model that writes that cache")
     synth = mo.ui.text(value="", label="synthetic samples (file in the HF data repo, empty = none)",
                        placeholder="synth/synth-v1.jsonl", full_width=True)
+    thoughts = mo.ui.text(value="", label="reasoning sentences (file in the HF data repo, empty = none)",
+                          placeholder="thoughts/r1.jsonl", full_width=True)
     resume = mo.ui.checkbox(value=False, label="resume from the last checkpoint")
     max_steps = mo.ui.number(start=0, stop=100000, value=0, label="--max-steps (0 = full run)")
     extra = mo.ui.text(value="", label="extra train args (e.g. --epochs 1)", full_width=True)
@@ -180,9 +185,10 @@ def _(mo):
     stop = mo.ui.run_button(label="Stop")
     mo.vstack([mo.hstack([run_name, records, eval_records], justify="start"),
                mo.hstack([examples, masked, perturb, date_hints, max_steps, resume], justify="start"),
-               mo.hstack([asr_cache, asr_model], justify="start"), synth, extra, mo.hstack([start, stop], justify="start")])
+               mo.hstack([asr_cache, asr_model], justify="start"), synth, thoughts, extra,
+               mo.hstack([start, stop], justify="start")])
     return (asr_cache, asr_model, date_hints, eval_records, examples, extra, masked, max_steps, perturb, records, resume,
-            run_name, synth, start, stop)
+            run_name, synth, thoughts, start, stop)
 
 
 @app.cell
@@ -206,7 +212,7 @@ def _(commit, data_root, hf_write, model_repo, os, repo_dir, work):
 @app.cell
 def _(Path, asr_cache, asr_model, data_root, date_hints, eval_records, examples, extra, hf_repo, hf_token, hf_write, masked,
       max_steps, mo, perturb, procs, records, repo_dir, repo_name, resume, run_dir, run_name, shlex, start, step_env, stop,
-      subprocess, synth, sys, work):
+      subprocess, synth, sys, thoughts, work):
     if stop.value and procs.get("train") and procs["train"].poll() is None:
         (run_dir(run_name.value) / "STOP").write_text("", encoding="utf-8")  # saves at the next step, then exits
     mo.stop(not start.value, mo.md("_Press **Start training**._"))
@@ -225,6 +231,14 @@ def _(Path, asr_cache, asr_model, data_root, date_hints, eval_records, examples,
     _perturb = bool(_mask and perturb.value)  # only masked copies are perturbed
     _synth = synth.value.strip()
     _synth_file = None
+    _thoughts = thoughts.value.strip()
+    if _thoughts and _synth:
+        raise RuntimeError("reasoning sentences cannot be combined with synthetic samples (they have no sentences)")
+    if _thoughts:  # written by molab_thoughts.py; lives in the private HF data repo, never in git
+        from huggingface_hub import hf_hub_download
+
+        _thoughts_file = hf_hub_download(repo_id=hf_repo.value.strip(), repo_type="dataset", filename=_thoughts,
+                                         token=hf_token.value or None, local_dir=work / "thoughts")
     if _synth:  # verified synthetic samples (lifemate.sft.synth) live in the private HF data repo, never in git
         from huggingface_hub import hf_hub_download
 
@@ -234,11 +248,13 @@ def _(Path, asr_cache, asr_model, data_root, date_hints, eval_records, examples,
     def _name(subset, train=False):
         extras = ((f"-m{_mask}" if train and _mask else "") + ("-p" if train and _perturb else "")
                   + (f"-asr-{_asr}" if train and _asr else "")
-                  + (f"-{Path(_synth).stem}" if train and _synth else ""))
+                  + (f"-{Path(_synth).stem}" if train and _synth else "")
+                  + (f"-thoughts-{Path(_thoughts).stem}" if _thoughts else ""))  # eval records carry the sentences too
         return (f"gold-{subset}{extras}" + ("-d" if date_hints.value else "")  # never reuse records without the hints
                 + ("" if int(examples.value) == 4 else f"-k{int(examples.value)}"))
 
-    _k = ["--examples", str(int(examples.value)), "--tokenizer", "none", *(["--date-hints"] if date_hints.value else [])]
+    _k = ["--examples", str(int(examples.value)), "--tokenizer", "none", *(["--date-hints"] if date_hints.value else []),
+          *(["--prompt", "v3", "--thoughts", str(_thoughts_file)] if _thoughts else [])]
     _train_k = (["--mask", str(_mask)] if _mask else []) + (["--perturb"] if _perturb else [])
     if _synth_file:
         _train_k += ["--extra-samples", _synth_file]
@@ -310,7 +326,7 @@ def _(mo):
 
 @app.cell
 def _(date_hints, examples, json, merge, mo, procs, re, repo_dir, repo_name, run_dir, run_name, step_env, subprocess, sys,
-      work):
+      thoughts, work):
     mo.stop(not merge.value, mo.md("_**Merge** once training has finished._"))
     if procs.get("train") and procs["train"].poll() is None:
         raise RuntimeError("training is still running")
@@ -324,9 +340,11 @@ def _(date_hints, examples, json, merge, mo, procs, re, repo_dir, repo_name, run
     _name = repo_name().split("/")[-1] if repo_name() else "<repo name>"
     # Serve it the way it was trained: the run's records name decides, since a new session starts with the box unticked
     _saved = run_dir(run_name.value) / "last" / "run_config.json"
-    _trained_with_hints = (bool(re.search(r"-d(-k\d+)?$", json.loads(_saved.read_text(encoding="utf-8"))["records"]))
-                           if _saved.exists() else date_hints.value)
-    _hints = ', "date_hints": true' if _trained_with_hints else ""
+    _records = json.loads(_saved.read_text(encoding="utf-8"))["records"] if _saved.exists() else None
+    _trained_with_hints = bool(re.search(r"-d(-k\d+)?$", _records)) if _records else date_hints.value
+    _trained_with_thoughts = "-thoughts-" in _records if _records else bool(thoughts.value.strip())
+    _hints = (', "date_hints": true' if _trained_with_hints else "") + (
+        ', "prompt_version": "v3"' if _trained_with_thoughts else "")
     mo.md(f"```\n{_r.stdout[-2000:]}\n```\nPreset for `configs/presets.json`: "
           f'`"{run_name.value}": {{"agent": "react", "agent_kw": {{"model": "${{HF_MODEL_OWNER}}/{_name}", "examples": {int(examples.value)}{_hints}}}}}`')
     return

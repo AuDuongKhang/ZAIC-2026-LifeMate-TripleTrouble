@@ -71,3 +71,11 @@ def test_render_that_is_not_a_prefix_raises():
                                                   {"role": "assistant", "content": "a"}]}
     with pytest.raises(ValueError, match="r1"):
         encode_record(rec, ShiftingTokenizer())
+
+
+def test_the_sentence_is_labelled_before_its_call(tok, train_samples):
+    s = next(x for x in train_samples if label_kind(x["label"]["tool_calls"]) == "act" and not x["history"])
+    steps = [{"call": c["name"], "thought": "Cần tìm thông tin trước."} for c in s["label"]["tool_calls"]]
+    labelled = tok.decode(_labelled(encode_record(replay_sample(s, thoughts=steps), tok)))
+    assert labelled.count("Cần tìm thông tin trước.") == len(steps)
+    assert labelled.index("Cần tìm thông tin trước.") < labelled.index("<tool_call>")

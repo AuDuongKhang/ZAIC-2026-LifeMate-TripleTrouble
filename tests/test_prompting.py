@@ -94,3 +94,10 @@ def test_build_messages_appends_examples_to_the_system_prompt_only():
     assert with_examples[0]["content"] == plain[0]["content"] + "\n\nEXAMPLES"
     assert with_examples[1:] == plain[1:]
     assert build_messages(task, count_tokens=len, budget=10, examples_text="") == plain
+
+
+def test_v3_is_v1_plus_one_rule():
+    from lifemate.agents.prompts import DEFAULT_PROMPT, PROMPTS
+    extra = PROMPTS["v3"][len(PROMPTS["v1"]):]
+    assert PROMPTS["v3"].startswith(PROMPTS["v1"]) and extra.startswith("\n7. ") and extra.count("\n") == 1
+    assert "Vietnamese" in extra and DEFAULT_PROMPT == "v1"
