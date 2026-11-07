@@ -69,9 +69,10 @@ def _ident_error(label: str, name) -> str | None:
     return None
 
 
-def check_app(app_spec: dict, answer) -> str | None:
+def check_app(app_spec: dict, answer, taken=frozenset()) -> str | None:
     """None when `answer` is a usable paraphrase of the catalog app `app_spec`, else the reason: every tool present,
-    identifiers valid, the app name and the tool names new, the tool names unique, descriptions not empty."""
+    identifiers valid, the app name and the tool names new, the tool names unique, descriptions not empty. `taken` holds
+    names the new app name must not equal: every catalog app id (holdout ones included) and the names given so far."""
     if not isinstance(answer, dict):
         return "the answer is not a JSON object"
     reason = _ident_error("app name", answer.get("name"))
@@ -79,6 +80,8 @@ def check_app(app_spec: dict, answer) -> str | None:
         return reason
     if answer["name"] == app_spec["id"]:
         return f"app name {answer['name']!r} is not new"
+    if answer["name"] in taken:
+        return f"app name {answer['name']!r} is taken by another app"
     tools = answer.get("tools")
     if not isinstance(tools, dict):
         return "tools is not an object"
@@ -139,13 +142,18 @@ def clean_params(raw, existing: set[str]) -> dict[str, str]:
     return out
 
 
-def check_table(table: dict, holdout: list[str]) -> None:
-    """Raises ValueError when the table names a holdout app or is not shaped like a remix table."""
+def check_table(table: dict, holdout: list[str], known: set[str] | None = None) -> None:
+    """Raises ValueError when the table names a holdout app, is not shaped like a remix table, gives two apps one new
+    name, or (with `known`, the catalog's app ids) gives an app the name of another existing app."""
     if not isinstance(table, dict) or not isinstance(table.get("apps"), dict) or not isinstance(table.get("params"), dict):
         raise ValueError("a remix table is {'params': {...}, 'apps': {...}}")
     named = sorted(set(table["apps"]) & set(holdout))
     if named:
         raise ValueError(f"the remix table names holdout apps: {', '.join(named)}")
+    new = [entry["name"] for entry in table["apps"].values()]
+    repeated = sorted({n for n in new if new.count(n) > 1} | (set(new) & (known or set())))
+    if repeated:
+        raise ValueError(f"new app names are not unique or are existing app names: {', '.join(repeated)}")
 
 
 def applies(record: dict, table: dict) -> bool:
@@ -193,6 +201,10 @@ def remix_record(record: dict, table: dict, rng: random.Random) -> dict:
         renamed["function"]["name"] = tool_map[fn["name"]]
         renamed["function"]["description"] = entry["description"].strip() + (note.group(0) if note else "")
         new_tools.append(renamed)
+    names = [t["function"]["name"] for t in new_tools]
+    duplicated = sorted({n for n in names if names.count(n) > 1})
+    if duplicated:
+        raise ValueError(f"{record.get('id')}: the remixed copy would hold two tools named {', '.join(duplicated)}")
     rng.shuffle(new_tools)
 
     messages = []
@@ -268,11 +280,13 @@ def main(argv: list[str] | None = None, llm=None) -> Path:
 
     table: dict = {"params": {}, "apps": {}}
     report: dict = {"teacher": args.teacher, "revision": args.revision, "apps_asked": len(apps), "failed": {}}
+    taken = {a["id"] for a in catalog}  # every existing app, holdout ones included, and the new names given so far
     for i, app in enumerate(apps):
-        answer, reason = _ask(llm, app_prompt(app), lambda a, app=app: check_app(app, a))
+        answer, reason = _ask(llm, app_prompt(app), lambda a, app=app: check_app(app, a, taken))
         if answer is None:
             report["failed"][app["id"]] = reason  # left out after one retry
         else:
+            taken.add(answer["name"])
             table["apps"][app["id"]] = {"name": answer["name"], "tools": {
                 t["name"].split(".", 1)[1]: {"name": answer["tools"][t["name"].split(".", 1)[1]]["name"],
                                              "description": answer["tools"][t["name"].split(".", 1)[1]]["description"].strip()}
@@ -283,7 +297,7 @@ def main(argv: list[str] | None = None, llm=None) -> Path:
     reason = check_params(table["params"], names)
     if reason:  # clean_params keeps only valid entries, so this is a bug guard
         raise SystemExit(f"the parameter table is invalid: {reason}")
-    check_table(table, holdout)
+    check_table(table, holdout, {a["id"] for a in catalog})
     report.update(apps_passed=len(table["apps"]), share_passed=round(len(table["apps"]) / max(len(apps), 1), 4),
                   params_renamed=len(table["params"]), params_total=len(names))
     args.out_dir.mkdir(parents=True, exist_ok=True)

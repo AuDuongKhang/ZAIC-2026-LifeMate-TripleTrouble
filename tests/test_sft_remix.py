@@ -271,3 +271,52 @@ def test_clean_params_keeps_only_usable_entries():
     raw = {"a": "alpha", "b": "alpha", "c": "d", "x": "zed", "d": "Bad Name", "": "q"}
     assert remix.clean_params(raw, existing) == {"a": "alpha"}
     assert remix.clean_params("oops", existing) == {}
+
+
+# --- new names must not collide (review) ------------------------------------------------------------------------------
+
+def test_check_app_rejects_a_new_app_name_that_is_taken():
+    assert "taken" in remix.check_app(APP, GOOD, taken={"shop", "news"})
+    assert remix.check_app(APP, GOOD, taken={"news"}) is None
+
+
+def test_check_table_rejects_duplicate_and_known_new_app_names():
+    holdout = ["news"]
+    two = {"params": {}, "apps": {"a": {"name": "shop", "tools": {}}, "b": {"name": "shop", "tools": {}}}}
+    with pytest.raises(ValueError, match="shop"):
+        remix.check_table(two, holdout)
+    named_like_holdout = {"params": {}, "apps": {"a": {"name": "news", "tools": {}}}}
+    with pytest.raises(ValueError, match="news"):
+        remix.check_table(named_like_holdout, holdout, known={"a", "b", "news"})
+    remix.check_table({"params": {}, "apps": {"a": {"name": "shop", "tools": {}}}}, holdout, known={"a", "b", "news"})
+
+
+def test_the_writer_never_gives_an_app_the_name_of_a_holdout_or_another_app(tmp_path):
+    holdout = load_splits()["holdout_apps"]
+    allowed = remix.apps_to_write(_apps(), holdout)
+
+    class Greedy(FakeWriter):
+        def generate(self, messages):
+            first = messages[0]["content"]
+            if "SPEC: " in first:
+                spec = json.loads(first.split("SPEC: ", 1)[1])
+                text = super().generate(messages)
+                answer = json.loads(text)
+                answer["name"] = "news" if spec["app"] == allowed[0] else allowed[1] if spec["app"] == allowed[2] else answer["name"]
+                return json.dumps(answer)
+            return super().generate(messages)
+
+    out = remix.main(["--name", "t", "--out-dir", str(tmp_path)], llm=Greedy())
+    table = json.loads(out.read_text(encoding="utf-8"))
+    assert allowed[0] not in table["apps"] and allowed[2] not in table["apps"]  # their only answers were refused
+    names = [e["name"] for e in table["apps"].values()]
+    assert len(names) == len(set(names)) and not set(names) & ({a["id"] for a in _apps()})
+
+
+def test_remix_record_refuses_a_copy_with_two_tools_of_one_name():
+    tool = lambda name: {"type": "function", "function": {"name": name, "description": "d",  # noqa: E731
+                                                          "parameters": {"type": "object", "properties": {}}}}
+    rec = {"id": "x", "source": "gold", "messages": [{"role": "system", "content": "s"}], "tools": [tool("app.a"), tool("prog.run")]}
+    table = {"params": {}, "apps": {"app": {"name": "prog", "tools": {"a": {"name": "run", "description": "Chạy."}}}}}
+    with pytest.raises(ValueError, match="prog.run"):
+        remix.remix_record(rec, table, random.Random(0))

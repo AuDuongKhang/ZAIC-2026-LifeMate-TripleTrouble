@@ -65,6 +65,10 @@ SUBSETS = ("pool", "dev", "holdout", "all")
 MAX_MISSING = 0.05  # --thoughts: share of chosen samples that may lack a row before the run stops
 
 
+def _catalog_apps(data_root: Path) -> list[dict]:
+    return json.loads((data_root / "train" / "train_tools_catalog.json").read_text(encoding="utf-8"))["apps"]
+
+
 def main(argv: list[str] | None = None) -> Path:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--name", required=True)
@@ -112,7 +116,7 @@ def main(argv: list[str] | None = None) -> Path:
 
         try:
             remix_table = json.loads(args.remix.read_text(encoding="utf-8"))
-            check_table(remix_table, load_splits()["holdout_apps"])
+            check_table(remix_table, load_splits()["holdout_apps"], known={a["id"] for a in _catalog_apps(args.data_root)})
         except (OSError, ValueError) as e:
             ap.error(f"--remix {args.remix}: {e}")
     zaic_tools = import_zaic_tools(args.data_root, "train")
