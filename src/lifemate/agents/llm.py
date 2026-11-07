@@ -18,12 +18,13 @@ class ChatLLM(Protocol):
 def finish_text(text: str, stop_strings: set[str], open_think: bool) -> str:
     """The completion as the agent should read it: the stop strings removed; when it holds `</think>`, only what follows
     the last one (a call written inside the thinking is a draft and must never reach env.call); and nothing at all when
-    the prompt opened a thinking block (open_think) that was never closed, because the token limit cut it off."""
+    a thinking block was never closed, because the token limit cut it off: one the prompt opened (open_think) or one the
+    model opened itself (the completion starts with <think>)."""
     for stop in stop_strings:
         text = text.replace(stop, "")
     if "</think>" in text:
         text = text.rsplit("</think>", 1)[1]
-    elif open_think:
+    elif open_think or text.lstrip().startswith("<think>"):  # a model that opens the block itself and is cut off too
         return ""
     return text.strip()
 

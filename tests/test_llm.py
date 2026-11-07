@@ -69,3 +69,15 @@ def test_json_template_renders_prefixes(tok, train_samples):
     labelled = tok.decode([t for t, l in zip(enc["input_ids"], enc["labels"]) if l != -100])
     assert labelled.count("<tool_call>") == 2 and "<think>" not in labelled  # the empty think belongs to the prompt
     assert render(tok, record["messages"][:1], record["tools"], True)  # renders with tools
+
+
+def test_finish_text_with_a_self_opened_think_that_never_closes_is_empty():
+    """A hybrid model that writes <think> itself and is cut off: its drafted call must not reach the agent."""
+    draft = '<think>\nmaybe <tool_call>{"name":"phone.call","arguments":{}}</tool_call> but'
+    assert finish_text(draft, set(), False) == ""
+    assert finish_text("  " + draft, {"<|im_end|>"}, False) == ""
+
+
+def test_finish_text_keeps_a_closed_self_opened_think():
+    call = '<tool_call>{"name":"x","arguments":{}}</tool_call>'
+    assert finish_text(f"<think>\nhmm</think>\n\n{call}<|im_end|>", {"<|im_end|>"}, False) == call

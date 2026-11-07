@@ -81,3 +81,17 @@ def test_tied_embeddings_are_not_reported_missing(tmp_path):
 def test_the_converted_checkpoint_loads(multimodal, tmp_path):
     convert_model(multimodal).save_pretrained(tmp_path / "text")
     assert load_causal_lm(str(tmp_path / "text"), torch.float32) is not None
+
+
+def test_tied_embeddings_stay_tied_and_the_parameter_count_is_the_text_part_only():
+    torch.manual_seed(0)
+    cfg = Qwen3_5Config(text_config=TEXT, vision_config=VISION, tie_word_embeddings=True)
+    tied = Qwen3_5ForConditionalGeneration(cfg).eval()
+    assert tied.config.tie_word_embeddings is True
+    text = convert_model(tied)
+    non_vision = sum(p.numel() for n, p in tied.named_parameters() if "visual" not in n)  # shared weights counted once
+    assert sum(p.numel() for p in text.parameters()) == non_vision
+    assert text.lm_head.weight.data_ptr() == text.model.embed_tokens.weight.data_ptr()
+    ids = torch.randint(0, 120, (1, 6))
+    with torch.no_grad():
+        assert torch.allclose(tied(input_ids=ids).logits, text.eval()(input_ids=ids).logits, atol=1e-4)
