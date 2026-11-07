@@ -90,7 +90,9 @@ def main(argv: list[str] | None = None) -> Path:
     import torch
     import torch.nn.functional as F
     from peft import LoraConfig, PeftModel, get_peft_model
-    from transformers import AutoModelForCausalLM, AutoTokenizer, get_cosine_schedule_with_warmup
+    from transformers import AutoTokenizer, get_cosine_schedule_with_warmup
+
+    from ..agents.llm import load_causal_lm
 
     run, out = args.out.name, args.out
     out.mkdir(parents=True, exist_ok=True)
@@ -150,7 +152,7 @@ def main(argv: list[str] | None = None) -> Path:
     evals = load_encoded(args.eval_records, tokenizer, args.max_len, args.records_dir) if args.eval_records else []
 
     device = "cuda" if torch.cuda.is_available() else "cpu"  # cpu: local smoke tests with a tiny model only
-    model = AutoModelForCausalLM.from_pretrained(args.model, dtype=torch.bfloat16).to(device)
+    model = load_causal_lm(args.model, torch.bfloat16).to(device)  # refuses a checkpoint whose weights would stay random
     model.config.use_cache = False
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     model.enable_input_require_grads()

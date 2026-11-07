@@ -190,3 +190,9 @@ def test_date_fix_preset_is_its_base_plus_the_flag():
     env = {"HF_MODEL_OWNER": "team"}
     name, kw = resolve("agent", "sft-v2-refs", env)
     assert resolve("agent", "sft-v2-refs-datefix", env) == (name, {**kw, "date_fix": True})
+
+
+def test_beam_preset_passes_num_beams():
+    env = {"HF_MODEL_OWNER": "team"}
+    name, kw = resolve("agent", "sft-v2-refs", env)
+    assert resolve("agent", "sft-v2-refs-beam3", env) == (name, {**kw, "num_beams": 3})
