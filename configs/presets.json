@@ -10,6 +10,7 @@
     "sft-v2-refs": {"agent": "react", "agent_kw": {"model": "${HF_MODEL_OWNER}/lifemate-sft-v2", "examples": 4, "check_refs": true}},
     "sft-v2-refs-datefix": {"agent": "react", "agent_kw": {"model": "${HF_MODEL_OWNER}/lifemate-sft-v2", "examples": 4, "check_refs": true, "date_fix": true}},
     "sft-v2-refs-beam3": {"agent": "react", "agent_kw": {"model": "${HF_MODEL_OWNER}/lifemate-sft-v2", "examples": 4, "check_refs": true, "num_beams": 3}},
+    "sft-v2-refs-lao-diag": {"agent": "react", "agent_kw": {"model": "${HF_MODEL_OWNER}/lifemate-sft-v2", "examples": 4, "check_refs": true, "leave_gold_apps_out": true}},
     "sft-v2-refs-dates": {"agent": "react", "agent_kw": {"model": "${HF_MODEL_OWNER}/lifemate-sft-v2", "examples": 4, "check_refs": true, "date_hints": true}},
     "sft-r1-refs": {"agent": "react", "agent_kw": {"model": "${HF_MODEL_OWNER}/lifemate-sft-r1", "examples": 4, "check_refs": true, "prompt_version": "v3"}},
     "sft-final": {"agent": "react", "agent_kw": {"model": "${HF_MODEL_OWNER}/lifemate-sft-final", "examples": 4, "check_refs": true}},

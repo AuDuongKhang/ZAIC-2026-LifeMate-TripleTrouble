@@ -648,3 +648,53 @@ def test_num_beams_and_max_new_tokens_reach_the_llm_and_info(monkeypatch):
     assert seen == {"model": "m", "max_new_tokens": 1024, "num_beams": 3}
     assert agent.info["max_new_tokens"] == 1024 and agent.info["num_beams"] == 3
     assert ReActAgent(llm=FakeLLM([])).info["num_beams"] == 1
+
+
+# --- leave_gold_apps_out -----------------------------------------------------------------------------------------------
+
+def test_leave_gold_apps_out_passes_the_label_apps_to_the_bank():
+    seen = {}
+
+    class Bank:
+        def __len__(self):
+            return 1
+
+        def select(self, *args, **kw):
+            seen.update(kw)
+            return []
+
+    label = {"tool_calls": [{"name": "alarm.delete", "arguments": {"alarm_id": "a1"}}]}
+    task = dataclasses.replace(TASK, label=label, context={**TASK.context, "installed_apps": {"alarm": {"tools": []}}})
+    agent = ReActAgent(llm=FakeLLM(["Xong."]), examples=2, bank=Bank(), leave_gold_apps_out=True)
+    agent.run(task, FakeEnv())
+    assert seen["exclude_apps"] == {"alarm"} and agent.info["leave_gold_apps_out"] is True
+
+
+def test_leave_gold_apps_out_refuses_a_task_without_a_label():
+    task = dataclasses.replace(TASK, context={**TASK.context, "installed_apps": {}})
+    agent = ReActAgent(llm=FakeLLM(["Xong."]), examples=2, bank=StubBank("EX"), leave_gold_apps_out=True)
+    with pytest.raises(ValueError, match="label"):
+        agent.run(task, FakeEnv())
+
+
+def test_leave_gold_apps_out_off_never_passes_the_keyword():
+    bank = StubBank("EX")  # its select() has no exclude_apps parameter
+    agent = ReActAgent(llm=FakeLLM(["Xong."]), examples=2, bank=bank)
+    agent.run(dataclasses.replace(TASK, context={**TASK.context, "installed_apps": {"alarm": {}}}), FakeEnv())
+    assert agent.info["leave_gold_apps_out"] is False and len(bank.asked) == 1
+
+
+def test_leave_gold_apps_out_reaches_the_prompt_vote_selects_too():
+    seen = []
+
+    class Bank(StubBank):
+        def select(self, request, installed_apps, k, exclude_id, offset=0, exclude_apps=frozenset()):
+            seen.append(exclude_apps)
+            return super().select(request, installed_apps, k, exclude_id, offset)
+
+    label = {"tool_calls": [{"name": "alarm.delete", "arguments": {"alarm_id": "a1"}}]}
+    task = dataclasses.replace(VOTE_TASK, label=label)
+    agent = ReActAgent(llm=FakeLLM([DEL("a1"), DEL("a1"), DEL("a1"), "Xong."]), examples=2, bank=Bank("EX"),
+                       vote_prompts=3, leave_gold_apps_out=True)
+    agent.run(task, FakeEnv())
+    assert len(seen) == 3 and all(s == {"alarm"} for s in seen)

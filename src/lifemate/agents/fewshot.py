@@ -17,10 +17,10 @@ K1, B = 1.5, 0.75
 NEAR_TOOLS = 3  # installed tools of apps the bank has no example of, nearest to the request, that an example may resemble
 
 
-def _gold_apps(sample: dict) -> set[str]:
-    """Apps of the gold calls, including the app of the tool a sys.ask_missing_info asks about."""
+def gold_apps(label: dict) -> set[str]:
+    """Apps of the gold calls of a label, including the app of the tool a sys.ask_missing_info asks about."""
     apps = set()
-    for call in sample["label"]["tool_calls"]:
+    for call in label["tool_calls"]:
         name = call["arguments"].get("tool_name", "") if call["name"] == "sys.ask_missing_info" else call["name"]
         apps.add(name.split(".", 1)[0])
     return apps - {"sys", ""}
@@ -68,7 +68,7 @@ class ExampleBank:
         self.docs = sorted((s for s in samples if s["id"] in pool_ids and (catalog is None or _sees_its_ids(s, catalog))),
                            key=lambda s: s["id"])
         self.tokens = [Counter(normalize(s["audio_text"])) for s in self.docs]
-        self.apps = [_gold_apps(s) for s in self.docs]
+        self.apps = [gold_apps(s["label"]) for s in self.docs]
         self.bank_apps = set().union(*self.apps) if self.apps else set()
         self.catalog = catalog
         self.example_tools = [[tool_tokens({**catalog[n], "name": n}) for n in gold_tool_names(s) if n in catalog]
@@ -107,10 +107,12 @@ class ExampleBank:
         return [tool_tokens(spec) for _, _, spec in sorted(scored, key=lambda t: t[:2])[:NEAR_TOOLS]]
 
     def select(self, request: str, installed_apps: set[str], k: int, exclude_id: str | None = None,
-               offset: int = 0, tools: list[dict] | None = None, analog_weight: float = 0.0) -> list[dict]:
+               offset: int = 0, tools: list[dict] | None = None, analog_weight: float = 0.0,
+               exclude_apps: "frozenset[str] | set[str]" = frozenset()) -> list[dict]:
         """Up to k pool samples whose gold-call apps are all installed (out-of-scope ones always qualify), best
         BM25 match to the request first, ties by id. exclude_id is never returned. offset skips that many of the
-        best matches (the prompt vote shows each variant the next k).
+        best matches (the prompt vote shows each variant the next k). Docs whose gold apps intersect exclude_apps are
+        skipped (out-of-scope docs have no gold apps, so they still qualify).
 
         analog_weight > 0 adds analog_weight x the mean, over the example's gold tools, of the best Jaccard of
         tool_tokens against the NEAR_TOOLS installed tools of apps the bank has no example of (`tools` are the
@@ -131,7 +133,7 @@ class ExampleBank:
                                               for t in self.example_tools[i]) / len(self.example_tools[i])
 
         ranked = sorted((-score(i), doc["id"], i) for i, doc in enumerate(self.docs)
-                        if doc["id"] != exclude_id and self.apps[i] <= installed_apps)
+                        if doc["id"] != exclude_id and self.apps[i] <= installed_apps and not self.apps[i] & exclude_apps)
         return [self.docs[i] for _, _, i in ranked[offset:offset + k]]
 
 

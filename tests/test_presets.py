@@ -196,3 +196,14 @@ def test_beam_preset_passes_num_beams():
     env = {"HF_MODEL_OWNER": "team"}
     name, kw = resolve("agent", "sft-v2-refs", env)
     assert resolve("agent", "sft-v2-refs-beam3", env) == (name, {**kw, "num_beams": 3})
+
+
+def test_only_diagnostic_presets_read_labels():
+    readers = {k for k, v in load_presets()["agent"].items() if v["agent_kw"].get("leave_gold_apps_out")}
+    assert readers == {"sft-v2-refs-lao-diag"}
+
+
+def test_diagnostic_preset_is_sft_v2_refs_plus_the_flag():
+    env = {"HF_MODEL_OWNER": "team"}
+    name, kw = resolve("agent", "sft-v2-refs", env)
+    assert resolve("agent", "sft-v2-refs-lao-diag", env) == (name, {**kw, "leave_gold_apps_out": True})
