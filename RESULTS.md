@@ -87,13 +87,13 @@ kept as recorded. None passes the default gate (holdout diff >= +0.5 with the 95
 | minimal_reads                                   | gold | -0.93 [-2.33, +0.48], 3 better / 8 worse | -0.58 [-1.90, +0.57], 8 better / 9 worse  |
 | minreads_exempt (variant, code not in the repo) | ASR  | -0.09 [-0.53, +0.29], 1 better / 2 worse | -1.24 [-2.52, -0.05], 6 better / 11 worse |
 | run_vote, sft-v2 + sft-v3 + sft-v3d (branch exp/run-vote) | ASR  | +0.04 [-2.00, +2.07], 6 better / 5 worse | +0.76 [-1.50, +3.04], 10 better / 8 worse |
-| date_fix (branch exp/date-fix, phrases not tuned) | ASR  | +0.00 [+0.00, +0.00], 0 better / 0 worse | +0.00 [+0.00, +0.00], 0 better / 0 worse |
-| date_fix (branch exp/date-fix, phrases not tuned) | gold | -0.17 [-0.50, +0.00], 0 better / 1 worse | +0.79 [+0.00, +1.80], 3 better / 0 worse |
+| date_fix (branch exp/date-fix, after the review fixes) | ASR  | +0.00 [+0.00, +0.00], 0 better / 0 worse | +0.00 [+0.00, +0.00], 0 better / 0 worse |
+| date_fix (branch exp/date-fix, after the review fixes) | gold | -0.17 [-0.50, +0.00], 0 better / 1 worse | +0.45 [+0.00, +1.12], 2 better / 0 worse |
 
 Added 7 Nov 2026 (ten-experiments plan):
 
 - `run_vote` (majority of the write and ask calls of sft-v2, sft-v3 and sft-v3d, ASR text): fired on 23 dev and 32 holdout samples. The plan closes the experiment below +1 on holdout or with a CI touching 0, so it is closed.
-- `date_fix` fired on 2 samples of each ASR baseline and changed no score; on gold text it fired on 1 dev and 3 holdout samples. The ASR simulation cannot pass the gate, so no GPU run has been made.
+- `date_fix` (after the review made it conservative: a second time reference, an ordinal such as "quán thứ hai" or two dated calls in a turn leave the call alone) fired on 1 dev and 2 holdout ASR samples and changed no score; on gold text it fired on 1 dev and 2 holdout samples. On the gold calls of all 1,545 train samples it changed 12 calls before the fix and 2 after (train_1249, train_1338). The ASR simulation cannot pass the gate, so no GPU run has been made.
 - Arithmetic triage (`ceilings/num` on both ASR baselines, 22 fired samples read by hand): 13 computed from tool values or from the request (9 of 17 on holdout, 4 of 5 on dev), 6 are a `shopping_list.add` quantity copied from a converted value, 2 an extra optional argument, 1 wrong digits from ASR. At least half are computed, so a follow-up task is written (`docs/superpowers/plans/2026-11-07-arithmetic-followup.md`).
 - Few-shot selection by tool structure (`python -m lifemate.fewshot_report`, holdout, 290 samples with a gold tool, hit rate of an analogous tool among the 4 examples): weight 0 58.62%, 1 58.62%, 2 58.62%, 4 59.66%. Among the 225 samples calling an app absent from the bank: 48.89% to 49.78%. Under the plan's 10 points, so no inference run.
 
