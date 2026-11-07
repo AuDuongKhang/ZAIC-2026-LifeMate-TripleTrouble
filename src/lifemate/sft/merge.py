@@ -27,7 +27,9 @@ def main(argv: list[str] | None = None) -> Path:
 
     import torch
     from peft import PeftModel
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoTokenizer
+
+    from ..agents.llm import load_causal_lm
 
     if not args.adapter.exists():
         if not args.adapter_repo:
@@ -42,7 +44,7 @@ def main(argv: list[str] | None = None) -> Path:
             shutil.copytree(Path(tmp) / sub, args.adapter)
     base = args.model or json.loads((args.adapter / "adapter_config.json").read_text(encoding="utf-8"))[
         "base_model_name_or_path"]
-    model = AutoModelForCausalLM.from_pretrained(base, dtype=torch.bfloat16)
+    model = load_causal_lm(base, torch.bfloat16)
     model = PeftModel.from_pretrained(model, str(args.adapter)).merge_and_unload()
     model = model.to(torch.bfloat16)  # the adapter is fp32; keep the merged weights in the base dtype
     args.out.mkdir(parents=True, exist_ok=True)

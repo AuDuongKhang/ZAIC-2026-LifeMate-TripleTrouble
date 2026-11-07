@@ -91,7 +91,7 @@ class ReActAgent(Agent):
                  date_hints: bool = False, empty_hint: bool = False,
                  refusal_check: bool = False, refusal_min_hits: int = 1,
                  leak_guard: bool = False, vote_prompts: int = 0, vote_apply: bool = True,
-                 date_fix: bool = False, analog_weight: float = 0.0):
+                 date_fix: bool = False, analog_weight: float = 0.0, max_new_tokens: int = 384, num_beams: int = 1):
         """time_budget_s counts from task.started_at (sample start, ASR included) when the runner sets it.
         A step only starts with at least min_step_s left, and its generation is capped at the time remaining.
         check_refs holds back calls whose x-ref ids were never seen in a tool result (off by default: with it the
@@ -115,10 +115,14 @@ class ReActAgent(Agent):
         date_fix replaces the date of a call's single date argument with the one the request's only date phrase
         resolves to (agents/date_fix.py), before the call is validated; no extra call is ever sent.
         analog_weight > 0 makes the example selection also reward examples whose tools have the shape of an installed
-        tool of an app the bank has no example of (ExampleBank.select); 0 is plain BM25."""
+        tool of an app the bank has no example of (ExampleBank.select); 0 is plain BM25.
+        max_new_tokens and num_beams go to the LLM the agent builds (an `llm` passed in keeps its own); beam search
+        stays deterministic but costs time."""
         if vote_prompts and not examples:
             raise ValueError("vote_prompts needs examples (the variants differ only in their examples)")
-        self.llm = llm if llm is not None else HFChatLLM(model, revision=revision)
+        llm_kw = {"revision": revision, **({"max_new_tokens": max_new_tokens} if max_new_tokens != 384 else {}),
+                  **({"num_beams": num_beams} if num_beams != 1 else {})}  # only what differs from the LLM's defaults
+        self.llm = llm if llm is not None else HFChatLLM(model, **llm_kw)
         self.max_steps, self.max_invalid, self.clock = max_steps, max_invalid, clock
         self.time_budget_s, self.min_step_s = time_budget_s, min_step_s
         self.prompt_version, self.check_refs, self.examples = prompt_version, check_refs, examples
@@ -135,7 +139,7 @@ class ReActAgent(Agent):
                      "examples": examples, "bank_size": len(self.bank) if self.bank is not None else 0,
                      "date_hints": date_hints, "empty_hint": empty_hint, "refusal_check": refusal_check, "refusal_min_hits": refusal_min_hits,
                      "leak_guard": leak_guard, "vote_prompts": vote_prompts, "vote_apply": vote_apply, "date_fix": date_fix,
-                     "analog_weight": analog_weight}
+                     "analog_weight": analog_weight, "max_new_tokens": max_new_tokens, "num_beams": num_beams}
 
     def run(self, task: Task, env) -> None:
         trace = self.last_trace = {"steps": [], "stop": None}  # None: a step raised
