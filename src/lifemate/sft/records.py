@@ -25,6 +25,11 @@ of an out-of-scope sample, in every copy of a sample (gold, masked and ASR). It 
 combined with `--extra-samples`. A sample with no row in FILE is dropped with all its copies and counted; more than
 MAX_MISSING of the chosen samples without a row stops the run before anything is written. Rows for samples outside
 the chosen subset are ignored, and a row whose call names differ from the gold calls raises ValueError.
+
+`--leave-app-out P` (a share between 0 and 1) renders that share of the records with the apps of their own gold calls
+(the asked tool's app for an ask) left out of the few-shot examples, chosen per (sample, source) from --seed, so the
+model also trains on prompts where no example shows its app, as for an app it never saw. Every record then carries a
+`leave_app_out` boolean (masked and perturbed copies inherit it); without the option the records are unchanged.
 """
 from __future__ import annotations
 
@@ -71,11 +76,15 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--prompt", default=DEFAULT_PROMPT, choices=sorted(PROMPTS))
     ap.add_argument("--examples", type=int, default=4, help="few-shot examples in the system prompt (0 = none)")
     ap.add_argument("--date-hints", action="store_true", help="add the weekday table to the system prompt")
+    ap.add_argument("--leave-app-out", type=float, default=None, metavar="P",
+                    help="share in [0, 1] of the records whose few-shot examples leave out the apps of their own gold calls")
     ap.add_argument("--limit", type=int, default=None, help="first N samples of the subset only")
     ap.add_argument("--tokenizer", default="Qwen/Qwen3-4B-Instruct-2507", help="for the token report; 'none' skips it")
     ap.add_argument("--data-root", type=Path, default=default_data_root())
     ap.add_argument("--out-dir", type=Path, default=RECORDS_DIR)
     args = ap.parse_args(argv)
+    if args.leave_app_out is not None and not 0 <= args.leave_app_out <= 1:
+        ap.error("--leave-app-out is a share between 0 and 1")
     sources: list[tuple[ASR, str]] = []
     for text in args.text or ["gold"]:
         if text == "gold":
@@ -120,7 +129,7 @@ def main(argv: list[str] | None = None) -> Path:
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     out = args.out_dir / f"{args.name}.jsonl"
-    kinds, written, dropped = Counter(), Counter(), []
+    kinds, written, dropped, flagged = Counter(), Counter(), [], 0
     gold_only = [(GoldTranscriptASR(), "gold")]
     work = [(s, sources) for s in chosen] + [(s, gold_only) for s in extras]
     asr_skipped = len(extras) * sum(1 for _, source in sources if source != "gold")
@@ -131,12 +140,17 @@ def main(argv: list[str] | None = None) -> Path:
                 if "env_id" in sample:  # the base sample must not come back as its own few-shot example
                     task = dataclasses.replace(task, id=env_id(sample))
                 env = zaic_tools.ToolEnv("train", env_id(sample), root=args.data_root)  # fresh env per record
+                lao = (args.leave_app_out is not None
+                       and random.Random(f"{args.seed}:{sample['id']}:{i}:lao").random() < args.leave_app_out)
                 rec = replay(sample, task, env, args.prompt, args.examples, bank, args.date_hints,
-                             thoughts[sample["id"]]["steps"] if args.thoughts else None)
+                             thoughts[sample["id"]]["steps"] if args.thoughts else None, leave_gold_apps_out=lao)
                 if rec is None:
                     dropped.append(f"{sample['id']}:{source}")
                     continue
                 rec["source"] = source
+                if args.leave_app_out is not None:  # no key without the option, so default records are unchanged
+                    rec["leave_app_out"] = lao
+                    flagged += lao
                 f.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 written[source] += 1
                 if i == 0:
@@ -152,7 +166,9 @@ def main(argv: list[str] | None = None) -> Path:
           f"{len(dropped)} replays dropped" + (f" {dropped[:20]}" if dropped else "")
           + (f", {len(extras)} extra samples ({asr_skipped} asr skipped)" if extras else "")
           + (f", {len(missing)} samples without sentences" + (f" {missing[:20]}" if missing else "")
-             if args.thoughts else ""), flush=True)
+             if args.thoughts else "")
+          + (f", {flagged} records with the gold apps left out of the examples" if args.leave_app_out is not None else ""),
+          flush=True)
     if args.tokenizer != "none":
         from transformers import AutoTokenizer
 

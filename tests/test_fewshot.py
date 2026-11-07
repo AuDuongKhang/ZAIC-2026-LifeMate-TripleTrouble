@@ -4,13 +4,9 @@ import sys
 
 import pytest
 
-from lifemate.agents.fewshot import ExampleBank, render_examples, tool_tokens
+from lifemate.agents.fewshot import ExampleBank, gold_apps, render_examples, tool_tokens
 from lifemate.data import default_data_root
 from lifemate.splits import load_splits
-
-
-def gold_apps(sample):
-    return {c["name"].split(".", 1)[0] for c in sample["label"]["tool_calls"]} - {"sys"}
 
 
 def test_select_never_returns_the_sample_itself(train_samples):
@@ -30,7 +26,7 @@ def test_select_only_uses_pool(train_samples):
 def test_select_requires_example_apps_installed(train_samples):
     bank = ExampleBank(train_samples, pool_ids={s["id"] for s in train_samples})
     picked = bank.select("bật đèn phòng khách", {"smart_home"}, k=2, exclude_id=None)
-    assert len(picked) == 2 and all(gold_apps(p) <= {"smart_home"} for p in picked)
+    assert len(picked) == 2 and all(gold_apps(p["label"]) <= {"smart_home"} for p in picked)
 
 
 def test_select_ranks_the_most_similar_request_first(train_samples):
@@ -191,3 +187,23 @@ def test_report_counts_a_same_shape_tool_as_a_hit_only_with_the_weight():
     assert with_weight["hits"] == 1 and with_weight["unseen_share"] == 100.0
     assert analogous(catalog["ride.end_ride"], catalog["parking.end_session"])
     assert not analogous(catalog["calendar.cancel_event"], catalog["weather.today"])
+
+
+def test_select_leaves_out_excluded_apps(train_samples):
+    bank = ExampleBank(train_samples, pool_ids={s["id"] for s in train_samples})
+    s = next(x for x in train_samples if x["label"]["tool_calls"] and len(x["context"]["installed_apps"]) > 3)
+    apps = gold_apps(s["label"])
+    picked = bank.select(s["audio_text"], set(s["context"]["installed_apps"]), k=4, exclude_id=s["id"], exclude_apps=apps)
+    assert picked and all(not (gold_apps(p["label"]) & apps) for p in picked)
+
+
+def test_ask_target_counts_as_a_gold_app():
+    label = {"tool_calls": [{"name": "sys.ask_missing_info", "arguments": {"tool_name": "sms.send", "params": ["contact_id"]}}]}
+    assert gold_apps(label) == {"sms"}
+
+
+def test_out_of_scope_examples_survive_any_exclusion(train_samples):
+    bank = ExampleBank(train_samples, pool_ids={s["id"] for s in train_samples})
+    installed = set(train_samples[0]["context"]["installed_apps"])
+    picked = bank.select("kể chuyện cười", installed, k=20, exclude_apps=installed)
+    assert picked and all(not p["label"]["tool_calls"] for p in picked)

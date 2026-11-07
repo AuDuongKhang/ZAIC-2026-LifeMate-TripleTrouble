@@ -57,18 +57,20 @@ def assistant_message(output: str) -> dict:
 
 
 def replay(sample: dict, task: Task, env, prompt_version: str = DEFAULT_PROMPT, examples: int = 0,
-           bank: ExampleBank | None = None, date_hints: bool = False, thoughts: list[dict] | None = None) -> dict | None:
+           bank: ExampleBank | None = None, date_hints: bool = False, thoughts: list[dict] | None = None,
+           leave_gold_apps_out: bool = False) -> dict | None:
     """{"id", "messages", "tools"}: the agent's last prompt plus the gold answer to it, or None when the agent did not
     send exactly the gold calls (a rejected or repeated call, calls after an ask). Never a record with partial calls.
     `thoughts` is a thoughts row's steps: one {"call", "thought"} per gold call ([None] for no gold calls). The calls
-    must match the gold names, else ValueError naming the sample."""
+    must match the gold names, else ValueError naming the sample.
+    leave_gold_apps_out leaves the apps of the gold calls out of the few-shot examples (the task needs its label)."""
     gold = sample["label"]["tool_calls"]
     if thoughts is not None and [s["call"] for s in thoughts] != ([c["name"] for c in gold] or [None]):
         raise ValueError(f"{sample['id']}: thought steps {[s['call'] for s in thoughts]} do not match the gold calls "
                          f"{[c['name'] for c in gold]}")
     llm = ReplayLLM(gold, final_text(gold), None if thoughts is None else [s["thought"] for s in thoughts])
     agent = ReActAgent(llm=llm, prompt_version=prompt_version, examples=examples, bank=bank, clock=lambda: 0.0,
-                       date_hints=date_hints)
+                       date_hints=date_hints, leave_gold_apps_out=leave_gold_apps_out)
     agent.run(task, env)
     if [(c["name"], c["arguments"]) for c in env.get_tool_calls()] != [(c["name"], c["arguments"]) for c in gold]:
         return None

@@ -13,7 +13,7 @@ from ..task import Task
 from .ask_guard import fold
 from .base import Agent
 from .date_fix import fix_calls
-from .fewshot import ExampleBank, render_examples
+from .fewshot import ExampleBank, gold_apps, render_examples
 from .llm import ChatLLM, HFChatLLM
 from .parsing import BLOCK, parse_tool_calls
 from .prompting import build_messages, system_message, tool_schema
@@ -91,7 +91,8 @@ class ReActAgent(Agent):
                  date_hints: bool = False, empty_hint: bool = False,
                  refusal_check: bool = False, refusal_min_hits: int = 1,
                  leak_guard: bool = False, vote_prompts: int = 0, vote_apply: bool = True,
-                 date_fix: bool = False, analog_weight: float = 0.0, max_new_tokens: int = 384, num_beams: int = 1):
+                 date_fix: bool = False, analog_weight: float = 0.0, max_new_tokens: int = 384, num_beams: int = 1,
+                 leave_gold_apps_out: bool = False):
         """time_budget_s counts from task.started_at (sample start, ASR included) when the runner sets it.
         A step only starts with at least min_step_s left, and its generation is capped at the time remaining.
         check_refs holds back calls whose x-ref ids were never seen in a tool result (off by default: with it the
@@ -117,7 +118,9 @@ class ReActAgent(Agent):
         analog_weight > 0 makes the example selection also reward examples whose tools have the shape of an installed
         tool of an app the bank has no example of (ExampleBank.select); 0 is plain BM25.
         max_new_tokens and num_beams go to the LLM the agent builds (an `llm` passed in keeps its own); beam search
-        stays deterministic but costs time."""
+        stays deterministic but costs time.
+        leave_gold_apps_out (SFT rendering and the train-only diagnostic, never a real run) leaves the apps of the
+        task's gold calls out of the examples; it reads Task.label and raises ValueError without one."""
         if vote_prompts and not examples:
             raise ValueError("vote_prompts needs examples (the variants differ only in their examples)")
         llm_kw = {"revision": revision, **({"max_new_tokens": max_new_tokens} if max_new_tokens != 384 else {}),
@@ -131,6 +134,7 @@ class ReActAgent(Agent):
         self.leak_guard, self.date_fix = leak_guard, date_fix
         self.vote_prompts, self.vote_apply = vote_prompts, vote_apply
         self.analog_weight = analog_weight
+        self.leave_gold_apps_out = leave_gold_apps_out
         if self.bank is None and examples:
             self.bank = ExampleBank.from_data(data_root or default_data_root(), split)
         # Recorded in meta.json, so every RESULTS.md row traces back to its prompt and settings.
@@ -139,11 +143,15 @@ class ReActAgent(Agent):
                      "examples": examples, "bank_size": len(self.bank) if self.bank is not None else 0,
                      "date_hints": date_hints, "empty_hint": empty_hint, "refusal_check": refusal_check, "refusal_min_hits": refusal_min_hits,
                      "leak_guard": leak_guard, "vote_prompts": vote_prompts, "vote_apply": vote_apply, "date_fix": date_fix,
-                     "analog_weight": analog_weight, "max_new_tokens": max_new_tokens, "num_beams": num_beams}
+                     "analog_weight": analog_weight, "max_new_tokens": max_new_tokens, "num_beams": num_beams,
+                     "leave_gold_apps_out": leave_gold_apps_out}
 
     def run(self, task: Task, env) -> None:
         trace = self.last_trace = {"steps": [], "stop": None}  # None: a step raised
         start = task.started_at if task.started_at is not None else self.clock()
+        if self.leave_gold_apps_out and task.label is None:
+            raise ValueError("leave_gold_apps_out reads the gold label, but this task has no label")
+        left_out = {"exclude_apps": gold_apps(task.label)} if self.leave_gold_apps_out else {}
         tools = [tool_schema(spec) for spec in task.tools]
         specs = {spec["name"]: spec for spec in task.tools}
         seen = scalar_strings([turn.get("tool_results") for turn in task.history], set())
@@ -152,7 +160,7 @@ class ReActAgent(Agent):
         if self.bank is not None:
             analog = {"tools": task.tools, "analog_weight": self.analog_weight} if self.analog_weight else {}
             picked = self.bank.select(task.request, set(task.context["installed_apps"]), self.examples, exclude_id=task.id,
-                                      **analog)
+                                      **analog, **left_out)
             examples_text = render_examples(picked)
         messages = build_messages(task, lambda m: self.llm.count_tokens(m, tools), budget, self.prompt_version,
                                   examples_text, self.date_hints)
@@ -254,7 +262,8 @@ class ReActAgent(Agent):
         apps = set(task.context["installed_apps"])
         texts: list[str | None] = [text]
         for i in range(1, self.vote_prompts):
-            picked = self.bank.select(task.request, apps, self.examples, exclude_id=task.id, offset=i * self.examples)
+            picked = self.bank.select(task.request, apps, self.examples, exclude_id=task.id, offset=i * self.examples,
+                                      **({"exclude_apps": gold_apps(task.label)} if self.leave_gold_apps_out else {}))
             variant = [system_message(task.context, self.prompt_version, render_examples(picked), self.date_hints), *messages[1:]]
             fits = self.llm.count_tokens(variant, tools) <= budget  # a variant that does not fit gets no vote
             texts.append(self.llm.generate(variant, tools, max_time=self.time_budget_s - (self.clock() - start))
