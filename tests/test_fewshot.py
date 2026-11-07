@@ -1,4 +1,10 @@
-from lifemate.agents.fewshot import ExampleBank, render_examples
+import os
+import subprocess
+import sys
+
+import pytest
+
+from lifemate.agents.fewshot import ExampleBank, render_examples, tool_tokens
 from lifemate.data import default_data_root
 from lifemate.splits import load_splits
 
@@ -99,3 +105,89 @@ def test_examples_with_ids_that_never_appear_in_their_own_results_are_skipped():
 def test_from_data_drops_only_blind_examples(train_samples):
     bank = ExampleBank.from_data(default_data_root(), "train")
     assert 0 < len(bank) < len(load_splits()["pool"])
+
+
+# --- selection by tool structure ---------------------------------------------------------------------------------------
+
+def spec(name, params, kind="write", description=""):
+    return {"name": name, "kind": kind, "description": description,
+            "parameters": {"properties": {p: {"type": "string"} for p in params}}}
+
+
+ANALOG_CATALOG = {s["name"]: s for s in (
+    spec("ride.end_ride", ["ride_id"]), spec("calendar.cancel_event", ["event_id"]),
+    spec("weather.today", ["city"], kind="read"))}
+END_RIDE = _sample("end_ride", "dừng chuyến taxi giúp tôi", [{"name": "ride.end_ride", "arguments": {"ride_id": "r1"}}])
+CANCEL = _sample("cancel", "kết thúc phiên họp giúp tôi", [{"name": "calendar.cancel_event",
+                                                         "arguments": {"event_id": "e1"}}])
+SESSION = spec("parking.end_session", ["session_id"], description="Kết thúc phiên đỗ xe")
+ANALOG_REQUEST = "kết thúc phiên đỗ xe"
+ANALOG_INSTALLED = {"ride", "calendar", "parking"}
+
+
+def analog_bank():
+    return ExampleBank([END_RIDE, CANCEL], {"end_ride", "cancel"}, catalog=ANALOG_CATALOG)
+
+
+def test_tool_tokens_are_name_suffix_parameters_and_kind():
+    assert tool_tokens(spec("parking.end_session", ["session_id", "plate"])) == {"end", "session", "id", "plate", "write"}
+    assert tool_tokens({"name": "x.y"}) == {"y"}
+
+
+def test_analog_weight_zero_is_bm25():
+    bank = analog_bank()
+    plain = bank.select(ANALOG_REQUEST, ANALOG_INSTALLED, k=2)
+    assert plain[0]["id"] == "cancel"  # the words of the request match this one
+    assert bank.select(ANALOG_REQUEST, ANALOG_INSTALLED, k=2, tools=[SESSION], analog_weight=0.0) == plain
+    assert bank.select(ANALOG_REQUEST, ANALOG_INSTALLED, k=2, tools=None, analog_weight=5.0) == plain
+
+
+def test_analog_prefers_same_shape_tool():
+    bank = analog_bank()
+    picked = bank.select(ANALOG_REQUEST, ANALOG_INSTALLED, k=2, tools=[SESSION], analog_weight=10.0)
+    assert [e["id"] for e in picked] == ["end_ride", "cancel"]  # end_ride shares end, id, write with end_session
+
+
+def test_seen_app_sample_is_unchanged():
+    bank = analog_bank()
+    seen_tool = spec("ride.end_ride", ["ride_id"], description="Kết thúc phiên đỗ xe")
+    plain = bank.select(ANALOG_REQUEST, ANALOG_INSTALLED, k=2)
+    for weight in (1.0, 4.0, 100.0):
+        assert bank.select(ANALOG_REQUEST, ANALOG_INSTALLED, k=2, tools=[seen_tool], analog_weight=weight) == plain
+
+
+def test_analog_needs_a_tool_that_shares_words_with_the_request():
+    bank = analog_bank()
+    unrelated = spec("parking.end_session", ["session_id"], description="Gia hạn thẻ thư viện")
+    plain = bank.select(ANALOG_REQUEST, ANALOG_INSTALLED, k=2)
+    assert bank.select(ANALOG_REQUEST, ANALOG_INSTALLED, k=2, tools=[unrelated], analog_weight=4.0) == plain
+
+
+def test_analog_weight_without_a_catalog_is_an_error():
+    bank = ExampleBank([END_RIDE], {"end_ride"})
+    with pytest.raises(ValueError):
+        bank.select(ANALOG_REQUEST, ANALOG_INSTALLED, k=1, tools=[SESSION], analog_weight=1.0)
+
+
+def test_analog_is_deterministic():
+    code = ("from tests.test_fewshot import *; b = analog_bank(); "
+            "print([e['id'] for e in b.select(ANALOG_REQUEST, ANALOG_INSTALLED, k=2, tools=[SESSION], analog_weight=10.0)])")
+    outs = {subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env={**os.environ, "PYTHONHASHSEED": seed,
+            "PYTHONUTF8": "1", "PYTHONPATH": os.pathsep.join(["src", "."])}).stdout for seed in ("1", "2", "3")}
+    assert len(outs) == 1 and "end_ride" in outs.pop()
+
+
+def test_report_counts_a_same_shape_tool_as_a_hit_only_with_the_weight():
+    from lifemate.fewshot_report import analogous, report
+    catalog = {**ANALOG_CATALOG, "parking.end_session": SESSION}
+    sample = {**_sample("p", ANALOG_REQUEST, [{"name": "parking.end_session", "arguments": {"session_id": "s1"}}]),
+              "context": {"installed_apps": {a: {} for a in ANALOG_INSTALLED}},
+              "audio_text": ANALOG_REQUEST}
+    sample["context"]["installed_apps"] = {a: {"tools": [t for t in catalog if t.startswith(a + ".")]} for a in ANALOG_INSTALLED}
+    bank = analog_bank()
+    assert report([sample], bank, catalog, 0.0, k=1) == {"n": 1, "hits": 0, "share": 0.0, "unseen_n": 1, "unseen_hits": 0,
+                                                         "unseen_share": 0.0}
+    with_weight = report([sample], bank, catalog, 10.0, k=1)
+    assert with_weight["hits"] == 1 and with_weight["unseen_share"] == 100.0
+    assert analogous(catalog["ride.end_ride"], catalog["parking.end_session"])
+    assert not analogous(catalog["calendar.cancel_event"], catalog["weather.today"])

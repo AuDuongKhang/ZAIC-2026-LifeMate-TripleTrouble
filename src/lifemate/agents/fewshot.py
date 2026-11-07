@@ -14,6 +14,7 @@ from ..splits import load_splits
 from .refs import scalar_strings, unseen_refs
 
 K1, B = 1.5, 0.75
+NEAR_TOOLS = 3  # installed tools of apps the bank has no example of, nearest to the request, that an example may resemble
 
 
 def _gold_apps(sample: dict) -> set[str]:
@@ -36,6 +37,31 @@ def _sees_its_ids(sample: dict, catalog: dict[str, dict]) -> bool:
     return True
 
 
+def tool_tokens(spec: dict) -> set[str]:
+    """The shape of a tool, free of its app: the words of its name after the app (end_session -> end, session), of its
+    parameter names, and its kind (read / write)."""
+    words = set(spec["name"].split(".", 1)[-1].lower().split("_"))
+    for param in ((spec.get("parameters") or {}).get("properties") or {}):
+        words |= set(param.lower().split("_"))
+    if spec.get("kind"):
+        words.add(spec["kind"])
+    return {w for w in words if w}
+
+
+def _jaccard(a: set[str], b: set[str]) -> float:
+    return len(a & b) / len(a | b) if a | b else 0.0
+
+
+def gold_tool_names(sample: dict) -> list[str]:
+    """The tools of the gold calls (for an ask, the tool it asks about), in order, without repeats."""
+    names = []
+    for call in sample["label"]["tool_calls"]:
+        name = call["arguments"].get("tool_name", "") if call["name"] == "sys.ask_missing_info" else call["name"]
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
 class ExampleBank:
     def __init__(self, samples: list[dict], pool_ids: set[str], catalog: dict[str, dict] | None = None):
         """With a tool catalog, samples whose ids come from their history rather than their own results are left out."""
@@ -43,6 +69,10 @@ class ExampleBank:
                            key=lambda s: s["id"])
         self.tokens = [Counter(normalize(s["audio_text"])) for s in self.docs]
         self.apps = [_gold_apps(s) for s in self.docs]
+        self.bank_apps = set().union(*self.apps) if self.apps else set()
+        self.catalog = catalog
+        self.example_tools = [[tool_tokens({**catalog[n], "name": n}) for n in gold_tool_names(s) if n in catalog]
+                              for s in self.docs] if catalog else []
         self.lengths = [sum(t.values()) for t in self.tokens]
         self.avg_len = sum(self.lengths) / max(len(self.lengths), 1)
         df = Counter(w for t in self.tokens for w in t)
@@ -63,13 +93,44 @@ class ExampleBank:
         tf, norm = self.tokens[i], 1 - B + B * self.lengths[i] / max(self.avg_len, 1e-9)
         return sum(self.idf[w] * tf[w] * (K1 + 1) / (tf[w] + K1 * norm) for w in query if w in tf)
 
+    def _near_tools(self, query: set[str], tools: list[dict]) -> list[set[str]]:
+        """tool_tokens of the NEAR_TOOLS installed tools of apps absent from the bank that share the most words with the
+        request (the words of their description and name), ties by name. A tool sharing no word is not near."""
+        scored = []
+        for spec in tools:
+            app = spec["name"].split(".", 1)[0]
+            if app == "sys" or app in self.bank_apps:
+                continue
+            words = set(normalize(spec.get("description", "") + " " + spec["name"].split(".", 1)[-1].replace("_", " ")))
+            if query & words:
+                scored.append((-len(query & words), spec["name"], spec))
+        return [tool_tokens(spec) for _, _, spec in sorted(scored, key=lambda t: t[:2])[:NEAR_TOOLS]]
+
     def select(self, request: str, installed_apps: set[str], k: int, exclude_id: str | None = None,
-               offset: int = 0) -> list[dict]:
+               offset: int = 0, tools: list[dict] | None = None, analog_weight: float = 0.0) -> list[dict]:
         """Up to k pool samples whose gold-call apps are all installed (out-of-scope ones always qualify), best
         BM25 match to the request first, ties by id. exclude_id is never returned. offset skips that many of the
-        best matches (the prompt vote shows each variant the next k)."""
+        best matches (the prompt vote shows each variant the next k).
+
+        analog_weight > 0 adds analog_weight x the mean, over the example's gold tools, of the best Jaccard of
+        tool_tokens against the NEAR_TOOLS installed tools of apps the bank has no example of (`tools` are the
+        installed specs). It finds a tool of the same shape on another app, such as end_ride for end_session. With
+        no such tool the score is plain BM25, so a sample whose apps are all in the bank keeps its examples."""
         query = set(normalize(request))
-        ranked = sorted((-self._bm25(i, query), doc["id"], i) for i, doc in enumerate(self.docs)
+        near = []
+        if analog_weight and tools:
+            if self.catalog is None:
+                raise ValueError("analog_weight needs the tool catalog (ExampleBank(..., catalog=...))")
+            near = self._near_tools(query, tools)
+
+        def score(i: int) -> float:
+            bm25 = self._bm25(i, query)
+            if not near or not self.example_tools[i]:
+                return bm25
+            return bm25 + analog_weight * sum(max(_jaccard(t, n) for n in near)
+                                              for t in self.example_tools[i]) / len(self.example_tools[i])
+
+        ranked = sorted((-score(i), doc["id"], i) for i, doc in enumerate(self.docs)
                         if doc["id"] != exclude_id and self.apps[i] <= installed_apps)
         return [self.docs[i] for _, _, i in ranked[offset:offset + k]]
 
