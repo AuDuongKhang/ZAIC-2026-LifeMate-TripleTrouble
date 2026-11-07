@@ -104,3 +104,18 @@ def test_cli_refuses_a_run_that_is_not_a_pool_run(train_samples, tmp_path):
     run, _ = _real_run(tmp_path, [s])
     with pytest.raises(SystemExit):
         recovery.main(["--run", str(run), "--name", "t", "--out-dir", str(tmp_path / "synth")])
+
+
+def test_cli_uploads_the_file_and_report_to_the_private_dataset(train_samples, tmp_path, monkeypatch):
+    import huggingface_hub
+
+    uploads = []
+    monkeypatch.setattr(huggingface_hub.HfApi, "upload_file", lambda self, **kw: uploads.append(kw))
+    catalog = load_catalog(default_data_root(), "train")
+    pool = set(load_splits()["pool"])
+    picked = [s for s in train_samples if s["id"] in pool and s["label"]["tool_calls"]
+              and (catalog.get(s["label"]["tool_calls"][0]["name"]) or {}).get("kind") == "read"][:3]
+    run, _ = _real_run(tmp_path, picked)
+    recovery.main(["--run", str(run), "--name", "t", "--max", "2", "--out-dir", str(tmp_path / "synth"), "--hf-repo", "o/d"])
+    assert [(u["path_in_repo"], u["repo_id"], u["repo_type"]) for u in uploads] == [
+        ("synth/recovery-t.jsonl", "o/d", "dataset"), ("synth/recovery-t.report.json", "o/d", "dataset")]

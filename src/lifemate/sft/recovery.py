@@ -8,7 +8,8 @@ train environment the sample points at, and the final state must equal the gold 
 `context_turns`, the prefix length, and `sft.tokenize.encode_record` leaves those turns unlabelled, so the loss never
 teaches the mistake itself, only what to do after it.
 
-    python -m lifemate.sft.recovery --run runs/<run> --name <n> --max 200      # -> train_records/synth/recovery-<n>.jsonl
+    python -m lifemate.sft.recovery --run runs/<run> --name <n> --max 200 [--hf-repo <dataset>]
+                                                                          # -> train_records/synth/recovery-<n>.jsonl
 
 The run must be a scored pool run of the untrained model (`react-fewshot-k4`, gold text, `--subset pool`): sft-v2 has seen
 the pool and makes too few mistakes on it. Development only; nothing at inference imports this.
@@ -51,6 +52,7 @@ def main(argv: list[str] | None = None) -> Path:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--run", type=Path, required=True, help="scored train run folder with trace.jsonl")
     ap.add_argument("--name", required=True)
+    ap.add_argument("--hf-repo", default=None, help="private HF dataset to upload the file and report to (synth/<file>)")
     ap.add_argument("--max", type=int, default=200, help="most records to write")
     ap.add_argument("--data-root", type=Path, default=default_data_root())
     ap.add_argument("--out-dir", type=Path, default=OUT_DIR)
@@ -96,6 +98,13 @@ def main(argv: list[str] | None = None) -> Path:
     print(f"-> {out}: {report}", flush=True)
     if len(rows) < 100:
         print(f"WARNING: only {len(rows)} usable records (the plan stops below 100): report to K before training", flush=True)
+    if args.hf_repo:  # the training notebook reads it from the dataset: another session has not got this folder
+        from huggingface_hub import HfApi
+
+        for path in (out, args.out_dir / f"recovery-{args.name}.report.json"):
+            HfApi().upload_file(path_or_fileobj=str(path), path_in_repo=f"synth/{path.name}", repo_id=args.hf_repo,
+                                repo_type="dataset")
+        print(f"uploaded synth/{out.name} to {args.hf_repo}", flush=True)
     return out
 
 
