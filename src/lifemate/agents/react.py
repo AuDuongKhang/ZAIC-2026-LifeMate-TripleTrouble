@@ -91,7 +91,7 @@ class ReActAgent(Agent):
                  date_hints: bool = False, empty_hint: bool = False,
                  refusal_check: bool = False, refusal_min_hits: int = 1,
                  leak_guard: bool = False, vote_prompts: int = 0, vote_apply: bool = True,
-                 date_fix: bool = False):
+                 date_fix: bool = False, analog_weight: float = 0.0):
         """time_budget_s counts from task.started_at (sample start, ASR included) when the runner sets it.
         A step only starts with at least min_step_s left, and its generation is capped at the time remaining.
         check_refs holds back calls whose x-ref ids were never seen in a tool result (off by default: with it the
@@ -113,7 +113,9 @@ class ReActAgent(Agent):
         plain answers, read-only and invalid proposals are recorded but not counted, so the original is the fallback. Greedy decoding stays; only the used proposal is
         sent. The vote is skipped when less than K * min_step_s is left after the original proposal.
         date_fix replaces the date of a call's single date argument with the one the request's only date phrase
-        resolves to (agents/date_fix.py), before the call is validated; no extra call is ever sent."""
+        resolves to (agents/date_fix.py), before the call is validated; no extra call is ever sent.
+        analog_weight > 0 makes the example selection also reward examples whose tools have the shape of an installed
+        tool of an app the bank has no example of (ExampleBank.select); 0 is plain BM25."""
         if vote_prompts and not examples:
             raise ValueError("vote_prompts needs examples (the variants differ only in their examples)")
         self.llm = llm if llm is not None else HFChatLLM(model, revision=revision)
@@ -124,6 +126,7 @@ class ReActAgent(Agent):
         self.refusal_check, self.refusal_min_hits = refusal_check, refusal_min_hits
         self.leak_guard, self.date_fix = leak_guard, date_fix
         self.vote_prompts, self.vote_apply = vote_prompts, vote_apply
+        self.analog_weight = analog_weight
         if self.bank is None and examples:
             self.bank = ExampleBank.from_data(data_root or default_data_root(), split)
         # Recorded in meta.json, so every RESULTS.md row traces back to its prompt and settings.
@@ -131,7 +134,8 @@ class ReActAgent(Agent):
                      "prompt": prompt_version, "check_refs": check_refs, "max_steps": max_steps, "time_budget_s": time_budget_s,
                      "examples": examples, "bank_size": len(self.bank) if self.bank is not None else 0,
                      "date_hints": date_hints, "empty_hint": empty_hint, "refusal_check": refusal_check, "refusal_min_hits": refusal_min_hits,
-                     "leak_guard": leak_guard, "vote_prompts": vote_prompts, "vote_apply": vote_apply, "date_fix": date_fix}
+                     "leak_guard": leak_guard, "vote_prompts": vote_prompts, "vote_apply": vote_apply, "date_fix": date_fix,
+                     "analog_weight": analog_weight}
 
     def run(self, task: Task, env) -> None:
         trace = self.last_trace = {"steps": [], "stop": None}  # None: a step raised
@@ -142,7 +146,9 @@ class ReActAgent(Agent):
         budget = self.llm.context_limit - self.llm.max_new_tokens
         examples_text = ""
         if self.bank is not None:
-            picked = self.bank.select(task.request, set(task.context["installed_apps"]), self.examples, exclude_id=task.id)
+            analog = {"tools": task.tools, "analog_weight": self.analog_weight} if self.analog_weight else {}
+            picked = self.bank.select(task.request, set(task.context["installed_apps"]), self.examples, exclude_id=task.id,
+                                      **analog)
             examples_text = render_examples(picked)
         messages = build_messages(task, lambda m: self.llm.count_tokens(m, tools), budget, self.prompt_version,
                                   examples_text, self.date_hints)

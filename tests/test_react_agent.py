@@ -603,3 +603,26 @@ def test_date_fix_leaves_a_turn_with_two_dated_calls_alone():
     two = CALL("calendar.create_event", {"start": "2026-09-30T15:00:00+07:00"}) + CALL("tasks.add", {"due": "2026-09-30T18:00:00+07:00"})
     ReActAgent(llm=FakeLLM([two, "Xong."]), date_fix=True).run(DATE_TASK, env)
     assert [a for _, a in env.called] == [{"start": "2026-09-30T15:00:00+07:00"}, {"due": "2026-09-30T18:00:00+07:00"}]
+
+
+# --- analog_weight -----------------------------------------------------------------------------------------------------
+
+class AnalogBank(StubBank):
+    def select(self, request, installed_apps, k, exclude_id, offset=0, tools=None, analog_weight=0.0):
+        self.asked.append((request, installed_apps, k, exclude_id, [t["name"] for t in tools or []], analog_weight))
+        return super().select(request, installed_apps, k, exclude_id, offset)
+
+
+def test_analog_weight_is_passed_to_the_bank_with_the_installed_tools():
+    bank = AnalogBank("EX")
+    task = dataclasses.replace(TASK, tools=[{"name": "alarm.list"}], context={**TASK.context, "installed_apps": {"alarm": {}}})
+    agent = ReActAgent(llm=FakeLLM(["Xong."]), examples=2, bank=bank, analog_weight=2.0)
+    agent.run(task, FakeEnv())
+    assert bank.asked[0][-2:] == (["alarm.list"], 2.0) and agent.info["analog_weight"] == 2.0
+
+
+def test_analog_weight_off_keeps_the_bank_call_as_before():
+    bank = StubBank("EX")  # a bank without the new keywords still works
+    agent = ReActAgent(llm=FakeLLM(["Xong."]), examples=2, bank=bank)
+    agent.run(dataclasses.replace(TASK, context={**TASK.context, "installed_apps": {"alarm": {}}}), FakeEnv())
+    assert agent.info["analog_weight"] == 0.0 and len(bank.asked) == 1
