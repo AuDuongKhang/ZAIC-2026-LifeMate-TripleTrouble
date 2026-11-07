@@ -14,6 +14,7 @@ the tokenizer and prints the parameter count. Development only: nothing at infer
 from __future__ import annotations
 
 import argparse
+import copy
 from pathlib import Path
 
 LANGUAGE_PREFIX = "model.language_model."
@@ -23,7 +24,11 @@ def convert_model(model):
     """A causal LM of the text part of `model` (a *ForConditionalGeneration), with its weights, in its dtype."""
     from transformers import AutoModelForCausalLM
 
-    text_config = model.config.text_config
+    text_config = copy.deepcopy(model.config.text_config)
+    # The flag lives on the composite config; the text config does not inherit it, and an untied copy would carry a second
+    # vocab x hidden matrix (about 0.6B parameters for Qwen3.5-4B) that the competition counts.
+    text_config.tie_word_embeddings = bool(getattr(model.config, "tie_word_embeddings", False)
+                                           or getattr(model.config.text_config, "tie_word_embeddings", False))
     dtype = next(model.parameters()).dtype
     target = AutoModelForCausalLM.from_config(text_config, dtype=dtype)
     state = {}
