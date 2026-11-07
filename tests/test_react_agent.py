@@ -566,3 +566,40 @@ def test_read_only_majority_does_not_win():
 def test_vote_needs_examples():
     with pytest.raises(ValueError, match="vote_prompts"):
         ReActAgent(llm=FakeLLM([]), vote_prompts=3)
+
+
+# --- date_fix ----------------------------------------------------------------------------------------------------------
+
+DATE_TASK = Task(id="d", request="họp chiều mai", history=[], tools=[],
+                 context={"current_time": "2026-10-01T09:00:00+07:00", "timezone": "Asia/Ho_Chi_Minh"})
+
+
+def test_date_fix_corrects_the_date_before_validation():
+    env = FakeEnv()
+    agent = ReActAgent(llm=FakeLLM([CALL("calendar.create_event", {"start": "2026-09-30T15:00:00+07:00"}), "Xong."]),
+                       date_fix=True)
+    agent.run(DATE_TASK, env)
+    assert env.called == [("calendar.create_event", {"start": "2026-10-02T15:00:00+07:00"})]
+    assert agent.info["date_fix"] is True
+
+
+def test_date_fix_is_off_by_default():
+    env = FakeEnv()
+    agent = ReActAgent(llm=FakeLLM([CALL("calendar.create_event", {"start": "2026-09-30T15:00:00+07:00"}), "Xong."]))
+    agent.run(DATE_TASK, env)
+    assert env.called == [("calendar.create_event", {"start": "2026-09-30T15:00:00+07:00"})]
+    assert agent.info["date_fix"] is False
+
+
+def test_date_fix_shows_the_model_the_corrected_call():
+    env, llm = FakeEnv(), FakeLLM([CALL("calendar.create_event", {"start": "2026-09-30T15:00:00+07:00"}), "Xong."])
+    ReActAgent(llm=llm, date_fix=True).run(DATE_TASK, env)
+    shown = llm.seen[1][-2]["tool_calls"][0]["function"]["arguments"]
+    assert shown == {"start": "2026-10-02T15:00:00+07:00"}  # what the model reads back is what was sent
+
+
+def test_date_fix_leaves_a_turn_with_two_dated_calls_alone():
+    env = FakeEnv()
+    two = CALL("calendar.create_event", {"start": "2026-09-30T15:00:00+07:00"}) + CALL("tasks.add", {"due": "2026-09-30T18:00:00+07:00"})
+    ReActAgent(llm=FakeLLM([two, "Xong."]), date_fix=True).run(DATE_TASK, env)
+    assert [a for _, a in env.called] == [{"start": "2026-09-30T15:00:00+07:00"}, {"due": "2026-09-30T18:00:00+07:00"}]

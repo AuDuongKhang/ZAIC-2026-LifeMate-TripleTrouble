@@ -112,3 +112,16 @@ def test_run_vote_cli_label_is_a_safe_folder_name(gold_run, tmp_path):
     r = main(["run_vote", str(gold_run), "--kw", f"others={json.dumps([str(gold_run), str(gold_run)])}"])
     assert r["fired"] == 0 and r["diff"] == 0.0  # identical runs: the first stands
     assert r["out"].parent == gold_run / "sim" and "/" not in r["out"].name and "\\" not in r["out"].name
+
+
+# --- date_fix --------------------------------------------------------------------------------------------------------
+
+def test_date_fix_rewrite_changes_only_the_date(tmp_path):
+    from lifemate.sim import REWRITES
+    catalog = {"calendar.create_event": {"parameters": {"properties": {"start": {"type": "string"}}}}}
+    rewrite = REWRITES["date_fix"](times={"s1": "2026-10-01T09:00:00+07:00"})
+    trace = {"id": "s1", "request": "họp chiều mai",
+             "calls": [{"name": "calendar.create_event", "arguments": {"start": "2026-09-30T15:00:00+07:00"}, "result": {}}]}
+    assert rewrite(trace, catalog) == [{"name": "calendar.create_event", "arguments": {"start": "2026-10-02T15:00:00+07:00"}}]
+    assert rewrite(dict(trace, request="họp lúc ba giờ"), catalog) is None
+    assert rewrite(dict(trace, id="unknown"), catalog) is None
