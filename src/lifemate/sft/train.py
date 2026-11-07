@@ -15,6 +15,10 @@ with --hf-repo the HF copy is used (a local copy only when it is newer, e.g. aft
 <out>/train_log.jsonl gets one line per optimizer step; loss.png, lr.png and grad_norm.png are redrawn at each save.
 --max-steps only stops early (smoke tests): the LR schedule is always that of the full run.
 
+--decision-weight W (default 1) gives the tokens that decide a turn (its first token, tool names, argument keys) W times the
+weight of the others in the training loss, which is the weighted sum over the weight sum. The logged `loss` and the eval
+loss stay plain cross-entropy over the same tokens, so curves compare with runs without the option.
+
 Needs torch (preinstalled on molab) and requirements-train.txt (peft, accelerate), installed with --no-deps.
 """
 from __future__ import annotations
@@ -39,15 +43,16 @@ from .tokenize import MAX_LEN, encode_record
 BASE_MODEL = "Qwen/Qwen3-4B-Instruct-2507"
 # Arguments a resumed run must share with its checkpoint (the rest, such as --max-steps or --hf-repo, may change).
 RUN_KEYS = ("records", "model", "epochs", "lr", "warmup", "micro_bs", "grad_accum", "lora_r", "lora_alpha",
-            "lora_dropout", "max_len", "seed")
+            "lora_dropout", "max_len", "seed", "decision_weight")
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
 
-def load_encoded(name: str, tokenizer, max_len: int, records_dir: Path = RECORDS_DIR) -> list[dict]:
+def load_encoded(name: str, tokenizer, max_len: int, records_dir: Path = RECORDS_DIR,
+                 decision_weight: float = 1.0) -> list[dict]:
     path = records_dir / f"{name}.jsonl"
     with open(path, encoding="utf-8") as f:
         records = [json.loads(line) for line in f if line.strip()]
-    encoded = [e for e in (encode_record(r, tokenizer, max_len) for r in records) if e is not None]
+    encoded = [e for e in (encode_record(r, tokenizer, max_len, decision_weight) for r in records) if e is not None]
     tokens = sum(len(e["input_ids"]) for e in encoded)
     print(f"{path.name}: {len(encoded)} records, {len(records) - len(encoded)} skipped as longer than {max_len} "
           f"tokens, {tokens} tokens", flush=True)
@@ -61,6 +66,13 @@ def checkpoint_step(folder: Path) -> int | None:
 
 def labelled_count(enc: dict) -> int:
     return sum(label != -100 for label in enc["labels"][1:])
+
+
+def labelled_weight(enc: dict) -> float:
+    """What the training loss divides by: the weights of the labelled tokens (their count without weights)."""
+    if "weights" not in enc:
+        return labelled_count(enc)
+    return sum(w for label, w in zip(enc["labels"][1:], enc["weights"][1:]) if label != -100)
 
 
 def main(argv: list[str] | None = None) -> Path:
@@ -85,6 +97,9 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--eval-every", type=int, default=50, help="optimizer steps between eval losses")
     ap.add_argument("--save-minutes", type=float, default=30)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--decision-weight", type=float, default=1.0,
+                    help="loss weight of the tokens that decide a turn (its first token, tool names, argument keys); "
+                         "1 = every token counts the same. The logged loss and the eval loss stay unweighted")
     args = ap.parse_args(argv)
 
     import torch
@@ -129,8 +144,8 @@ def main(argv: list[str] | None = None) -> Path:
             raise SystemExit(f"--resume: train_records/{args.records}.jsonl differs from the one the checkpoint was "
                              f"trained on (sha {records_sha} vs {saved.get('records_sha')}); rebuild it with the same "
                              "code and options")
-        changed = [f"--{k.replace('_', '-')} {saved.get(k)} -> {getattr(args, k)}" for k in RUN_KEYS
-                   if saved.get(k) != getattr(args, k)]
+        changed = [f"--{k.replace('_', '-')} {saved.get(k, ap.get_default(k))} -> {getattr(args, k)}" for k in RUN_KEYS
+                   if saved.get(k, ap.get_default(k)) != getattr(args, k)]
         if changed:  # the schedule, the surviving records or the model would silently change mid-run
             raise SystemExit(f"--resume: training arguments differ from the checkpoint's: {'; '.join(changed)}")
         if (ckpt / "train_log.jsonl").exists() and len(read_log(log_path)) < len(read_log(ckpt / "train_log.jsonl")):
@@ -148,7 +163,7 @@ def main(argv: list[str] | None = None) -> Path:
 
     seed_everything(args.seed)
     tokenizer = AutoTokenizer.from_pretrained(args.model)
-    train = load_encoded(args.records, tokenizer, args.max_len, args.records_dir)
+    train = load_encoded(args.records, tokenizer, args.max_len, args.records_dir, args.decision_weight)
     evals = load_encoded(args.eval_records, tokenizer, args.max_len, args.records_dir) if args.eval_records else []
 
     device = "cuda" if torch.cuda.is_available() else "cpu"  # cpu: local smoke tests with a tiny model only
@@ -178,21 +193,28 @@ def main(argv: list[str] | None = None) -> Path:
     stop_at = min(total, args.max_steps) if args.max_steps else total
     print(f"{n} train records, {total} optimizer steps in the full run, stopping at step {stop_at}", flush=True)
 
-    def record_loss(enc: dict):
-        """(sum of cross-entropy over the labelled tokens, their count), logits only at those positions."""
+    def record_loss(enc: dict, weighted: bool = False):
+        """(sum of cross-entropy over the labelled tokens, their count), logits only at those positions. With
+        weighted=True and a record that has weights, the first value is the weighted sum (what training minimises);
+        without weights it is the plain sum, exactly as before the option existed."""
         ids = torch.tensor([enc["input_ids"]], device=device)
         labels = torch.tensor(enc["labels"], device=device)
         pos = (labels[1:] != -100).nonzero(as_tuple=True)[0]
         with torch.autocast(device, dtype=torch.bfloat16):
             logits = model(input_ids=ids, logits_to_keep=pos).logits[0]
-        return F.cross_entropy(logits.float(), labels[pos + 1], reduction="sum"), len(pos)
+        if weighted and "weights" in enc:
+            ce = F.cross_entropy(logits.float(), labels[pos + 1], reduction="none")
+            weights = torch.tensor(enc["weights"], device=device)[pos + 1]
+            return (ce * weights).sum(), len(pos), ce.sum()
+        loss = F.cross_entropy(logits.float(), labels[pos + 1], reduction="sum")
+        return loss, len(pos), loss
 
     def eval_loss() -> float:
         model.eval()
         total_loss, count = 0.0, 0
         with torch.no_grad():
             for enc in evals:
-                loss, k = record_loss(enc)
+                loss, k, _ = record_loss(enc)
                 total_loss, count = total_loss + loss.item(), count + k
         model.train()
         return total_loss / max(count, 1)
@@ -236,11 +258,11 @@ def main(argv: list[str] | None = None) -> Path:
     model.train()
     if state.step < stop_at:
         for batch in batches(n, state, args.micro_bs, args.epochs):
-            count = sum(labelled_count(train[i]) for i in batch)
+            count = sum(labelled_weight(train[i]) for i in batch)
             for i in batch:
-                loss, k = record_loss(train[i])
+                loss, k, plain = record_loss(train[i], weighted=True)
                 (loss / max(count, 1) / args.grad_accum).backward()
-                step_loss, step_count, step_tokens = step_loss + loss.item(), step_count + k, step_tokens + len(train[i]["input_ids"])
+                step_loss, step_count, step_tokens = step_loss + plain.item(), step_count + k, step_tokens + len(train[i]["input_ids"])
             done = state.epoch * mb_per_epoch + math.ceil(state.pos / args.micro_bs)
             if done % args.grad_accum and done < args.epochs * mb_per_epoch:
                 continue

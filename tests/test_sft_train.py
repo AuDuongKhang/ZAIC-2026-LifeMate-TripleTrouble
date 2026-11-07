@@ -160,3 +160,47 @@ def test_resume_takes_the_newer_hub_checkpoint_over_a_stale_local_one(tiny, tmp_
     _train(tiny, part, "--resume", "--hf-repo", "me/x")
     assert "resuming part at step 2" in capsys.readouterr().out
     assert [r["loss"] for r in _log(part)] == pytest.approx([r["loss"] for r in _log(full)], rel=1e-4)
+
+
+def test_weight_one_keeps_the_loss(tiny, tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    _train(tiny, a, "--max-steps", "2")
+    _train(tiny, b, "--max-steps", "2", "--decision-weight", "1.0")
+    assert [r["loss"] for r in _log(a)] == [r["loss"] for r in _log(b)]
+    assert [r["grad_norm"] for r in _log(a)] == [r["grad_norm"] for r in _log(b)]
+
+
+def test_decision_weight_changes_the_updates_but_not_what_is_logged(tiny, tmp_path):
+    a, b = tmp_path / "a", tmp_path / "b"
+    _train(tiny, a, "--max-steps", "2")
+    _train(tiny, b, "--max-steps", "2", "--decision-weight", "3")
+    la, lb = _log(a), _log(b)
+    assert la[0]["loss"] == pytest.approx(lb[0]["loss"], rel=1e-6)  # the first step starts from the same model
+    assert la[0]["grad_norm"] != pytest.approx(lb[0]["grad_norm"], rel=1e-3)  # but weights the tokens differently
+    from safetensors.torch import load_file
+
+    wa, wb = (load_file(r / "last" / "adapter_model.safetensors") for r in (a, b))
+    assert any(not torch.equal(wa[k], wb[k]) for k in wa)  # so the adapters end up different
+    assert "eval_loss" in lb[1]
+
+
+def test_resume_refuses_a_changed_decision_weight(tiny, tmp_path):
+    run = tmp_path / "run"
+    _train(tiny, run, "--max-steps", "1")
+    with pytest.raises(SystemExit):
+        _train(tiny, run, "--resume", "--decision-weight", "3")
+    _train(tiny, run, "--resume", "--max-steps", "2")  # the same weight resumes
+
+
+def test_eval_loss_ignores_the_weights(tiny, tmp_path):
+    from lifemate.sft import train
+
+    a = tmp_path / "a"
+    train.main(["--records", "r", "--eval-records", "r", "--records-dir", str(tiny / "records"), "--out", str(a),
+                "--model", str(tiny / "model"), "--epochs", "1", "--grad-accum", "2", "--eval-every", "1",
+                "--lr", "0", "--max-steps", "1", "--decision-weight", "5"])
+    b = tmp_path / "b"
+    train.main(["--records", "r", "--eval-records", "r", "--records-dir", str(tiny / "records"), "--out", str(b),
+                "--model", str(tiny / "model"), "--epochs", "1", "--grad-accum", "2", "--eval-every", "1",
+                "--lr", "0", "--max-steps", "1"])
+    assert _log(a)[0]["eval_loss"] == _log(b)[0]["eval_loss"]  # lr 0: same model, so the same unweighted eval loss

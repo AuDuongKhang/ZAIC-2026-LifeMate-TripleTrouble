@@ -79,3 +79,60 @@ def test_the_sentence_is_labelled_before_its_call(tok, train_samples):
     labelled = tok.decode(_labelled(encode_record(replay_sample(s, thoughts=steps), tok)))
     assert labelled.count("Cần tìm thông tin trước.") == len(steps)
     assert labelled.index("Cần tìm thông tin trước.") < labelled.index("<tool_call>")
+
+
+# --- decision weights ----------------------------------------------------------------------------------------------------
+
+def _decoded(tok, ids, positions):
+    return "".join(tok.decode([ids[p]]) for p in sorted(positions))
+
+
+def test_decision_positions_cover_name_and_keys(tok):
+    from lifemate.sft.tokenize import decision_positions
+
+    text = '<tool_call>\n{"name": "a.b", "arguments": {"k": "dài", "nested": {"inner": 1}, "z": [1, 2]}}\n</tool_call><|im_end|>\n'
+    ids = tok.encode(text)
+    picked = _decoded(tok, ids, decision_positions(ids, tok))
+    assert "a.b" in picked and "k" in picked and "nested" in picked and "z" in picked
+    assert "dài" not in picked and "inner" not in picked  # values and nested keys are not decisions
+
+
+def test_every_call_of_a_turn_is_covered(tok):
+    from lifemate.sft.tokenize import decision_positions
+
+    one = '<tool_call>\n{"name": "x.first", "arguments": {"p": 1}}\n</tool_call>'
+    two = '<tool_call>\n{"name": "y.second", "arguments": {"q": 2}}\n</tool_call>'
+    ids = tok.encode(one + "\n" + two + "<|im_end|>\n")
+    picked = _decoded(tok, ids, decision_positions(ids, tok))
+    assert "x.first" in picked and "y.second" in picked and "p" in picked and "q" in picked
+
+
+def test_first_token_of_plain_answer_is_a_decision(tok):
+    from lifemate.sft.tokenize import decision_positions
+
+    ids = tok.encode("Đã xong.<|im_end|>\n")
+    assert decision_positions(ids, tok) == {0}
+
+
+def test_decision_positions_of_an_empty_turn_is_empty(tok):
+    from lifemate.sft.tokenize import decision_positions
+
+    assert decision_positions([], tok) == set()
+
+
+def test_no_weights_by_default(tok, two_call_record):
+    assert "weights" not in encode_record(two_call_record, tok)
+    assert "weights" not in encode_record(two_call_record, tok, decision_weight=1.0)
+
+
+def test_weights_mark_decisions_in_the_labelled_turns_only(tok, two_call_record):
+    enc = encode_record(two_call_record, tok, decision_weight=3.0)
+    w, labels = enc["weights"], enc["labels"]
+    assert len(w) == len(labels) == len(enc["input_ids"])
+    assert set(w) == {1.0, 3.0}
+    assert all(weight == 1.0 for weight, label in zip(w, labels) if label == -100)  # the prompt is never weighted
+    heavy = tok.decode([t for t, weight in zip(enc["input_ids"], w) if weight == 3.0])
+    assert "<tool_call>" in heavy and two_call_record["messages"][-3]["tool_calls"][0]["function"]["name"] in heavy
+    assert heavy.endswith(FINAL_TEXT[0])  # only the first token of the closing answer, not its whole text
+    assert FINAL_TEXT not in heavy
+    assert enc["labels"] == encode_record(two_call_record, tok)["labels"]
