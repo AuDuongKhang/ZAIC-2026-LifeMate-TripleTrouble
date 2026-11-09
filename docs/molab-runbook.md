@@ -232,7 +232,7 @@ which model. The owner then applies the thresholds, adds the rows to `RESULTS.md
   against the best single run. The owner prepares the options and will send the exact fields.
 - **9 Nov: `sft-final2`**: the winning recipe on all train (*Train records* = `all train (final retrain only)`), about 4.5 hours,
   then one `public_test` run (split `public_test`, ASR preset `pho-large-ft-all-beam5`), check `over_time_limit` is 0 and keep it
-  only if it beats 56.01. The owner sends the exact fields.
+  only if it beats 57.5 (sft-final-h, `docs/shipped-model.md`). The owner sends the exact fields.
 - Docker work starts on 11 Nov whatever the score; deadline 16 Nov 23:59 GMT+7.
 
 ## D. Closed, nothing to run
