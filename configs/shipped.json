@@ -1,7 +1,7 @@
 {
-  "agent_preset": "empty",
-  "asr_preset": "none",
-  "agent_kw": {},
-  "asr_kw": {},
+  "agent_preset": "sft-final-h",
+  "asr_preset": "pho-large-ft-all-beam5",
+  "agent_kw": {"revision": "e3a659cb166907460f564c31a01e613786a835b6"},
+  "asr_kw": {"revision": "73bb56a73e1e1470bbda0fad99353b6f1ed6c338"},
   "hf_model_owner": "TripleTrouble"
 }
