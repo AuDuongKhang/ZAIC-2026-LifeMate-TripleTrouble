@@ -95,3 +95,11 @@ def test_tied_embeddings_stay_tied_and_the_parameter_count_is_the_text_part_only
     ids = torch.randint(0, 120, (1, 6))
     with torch.no_grad():
         assert torch.allclose(tied(input_ids=ids).logits, text.eval()(input_ids=ids).logits, atol=1e-4)
+
+
+def test_text_only_keeps_the_generation_config(multimodal):
+    """Without it the saved checkpoint gets a default one, generate() does not stop at the end of a turn and writes
+    made-up turns after it."""
+    source = Qwen3_5ForConditionalGeneration(multimodal.config).eval()
+    source.generation_config.eos_token_id = [11, 13]
+    assert convert_model(source).generation_config.eos_token_id == [11, 13]

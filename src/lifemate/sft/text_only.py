@@ -39,6 +39,8 @@ def convert_model(model):
             state[key] = value
     missing, unexpected = target.load_state_dict(state, strict=False)
     target.tie_weights()
+    # The end-of-turn tokens live in the generation config; the default one built from the text config stops nowhere.
+    target.generation_config = copy.deepcopy(model.generation_config)
     tied = {"lm_head.weight"} if getattr(text_config, "tie_word_embeddings", False) else set()
     if set(missing) - tied or unexpected:
         raise RuntimeError(f"text-only conversion: missing {sorted(set(missing) - tied)[:5]}, unexpected {unexpected[:5]}")
