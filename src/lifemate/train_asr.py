@@ -12,6 +12,9 @@ backend loads directly:
     python -m lifemate.transcribe --split train --asr whisper --asr-kw model=asr_runs/phoasr-small-ft-a/final \
         --name phoasr-small-ft-a --subset eval
 
+`--speed-perturb 0.9,1.0,1.1`, `--noise-prob P` and `--babble-prob P` (with `--snr-db LOW,HIGH`) augment the train clips
+on the fly (lifemate.asr_augment); eval clips are never augmented. All are off by default.
+
 `--subset all` is the final retrain: every train clip, no eval and no checkpoint selection, so <out>/final is the model
 after the last step. Keep the recipe of the pool run, whose eval clips are now training data. Nothing local can score it.
 
@@ -23,10 +26,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import random
 from dataclasses import dataclass
 from pathlib import Path
 
 from .asr.base import SAMPLE_RATE, load_audio
+from .asr_augment import Augment, parse_floats
 from .asr.wer import cer, wer
 from .asr_data import build_eval_manifest, build_train_manifest
 from .data import audio_path, default_data_root, load_samples
@@ -47,15 +52,36 @@ def selection_args(subset: str, eval_steps: int) -> dict:
 
 
 class ClipDataset:
-    def __init__(self, rows: list[dict], data_root: Path, processor):
+    def __init__(self, rows: list[dict], data_root: Path, processor, augment: Augment | None = None, seed: int = 0):
         self.rows, self.data_root, self.processor = rows, data_root, processor
+        self.augment, self.seed = augment, seed
+        self.draws: dict[int, int] = {}  # times each clip was read in this process
 
     def __len__(self) -> int:
         return len(self.rows)
 
+    def _wav(self, i: int):
+        return load_audio(audio_path(self.data_root, "train", self.rows[i]["audio"]))
+
     def __getitem__(self, i: int) -> dict:
         row = self.rows[i]
-        wav = load_audio(audio_path(self.data_root, "train", row["audio"]))
+        wav = self._wav(i)
+        if self.augment is not None and self.augment.active:
+            # torch's seed differs per dataloader worker and per epoch (workers are rebuilt each epoch, which resets
+            # `draws`) and follows the run seed, so each epoch gets new augmentations and a rerun gets the same ones
+            try:
+                import torch
+                worker_seed = torch.initial_seed()
+            except ImportError:  # unit tests without torch
+                worker_seed = 0
+            n = self.draws[i] = self.draws.get(i, -1) + 1
+            rng = random.Random(f"{self.seed}:{worker_seed}:{i}:{n}")
+
+            def other():
+                j = rng.randrange(len(self.rows) - 1)
+                return self._wav(j + (j >= i))  # any clip but this one
+
+            wav = self.augment(wav, rng, other if len(self.rows) > 1 else None)
         feats = self.processor.feature_extractor(wav, sampling_rate=SAMPLE_RATE).input_features[0]
         return {"input_features": feats, "labels": self.processor.tokenizer(row["text"]).input_ids}
 
@@ -113,6 +139,10 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--eval-steps", type=int, default=200, help="evaluate + checkpoint every N optimizer steps")
     ap.add_argument("--eval-clips", type=int, default=400, help="fixed random subset of dev + holdout clips")
     ap.add_argument("--mask-time-prob", type=float, default=0.05, help="SpecAugment; 0 turns it off")
+    ap.add_argument("--speed-perturb", default="", help="speed factors drawn per clip, e.g. 0.9,1.0,1.1 (empty = off)")
+    ap.add_argument("--noise-prob", type=float, default=0.0, help="share of train clips with white noise added")
+    ap.add_argument("--babble-prob", type=float, default=0.0, help="share of train clips with another clip mixed in")
+    ap.add_argument("--snr-db", default="10,30", help="SNR range in dB for noise and background speech")
     ap.add_argument("--subset", choices=("pool", "all"), default="pool", help="all = final retrain, no eval")
     ap.add_argument("--freeze-encoder", action="store_true")
     ap.add_argument("--grad-checkpointing", action="store_true", help="for large models on small GPUs")
@@ -133,6 +163,13 @@ def main(argv: list[str] | None = None) -> Path:
     from transformers import (Seq2SeqTrainer, Seq2SeqTrainingArguments, WhisperForConditionalGeneration,
                               WhisperProcessor)
 
+    snr = parse_floats(args.snr_db)
+    if len(snr) != 2 or snr[0] > snr[1]:
+        ap.error("--snr-db takes LOW,HIGH")
+    augment = Augment(speeds=parse_floats(args.speed_perturb), noise_prob=args.noise_prob,
+                      babble_prob=args.babble_prob, snr_db=(snr[0], snr[1]))
+    if any(f <= 0 for f in augment.speeds):
+        ap.error("--speed-perturb factors must be positive")
     seed_everything(args.seed)
     args.out.mkdir(parents=True, exist_ok=True)
     processor = WhisperProcessor.from_pretrained(args.model)
@@ -153,7 +190,8 @@ def main(argv: list[str] | None = None) -> Path:
     samples = load_samples(args.data_root, "train")
     train_rows = build_train_manifest(samples, training_ids(args.subset, samples))[: args.limit]
     eval_rows = [] if args.subset == "all" else build_eval_manifest(samples, limit=args.eval_clips, seed=args.seed)
-    print(f"train clips {len(train_rows)}, eval clips {len(eval_rows)}", flush=True)
+    print(f"train clips {len(train_rows)}, eval clips {len(eval_rows)}, augment {augment if augment.active else 'off'}",
+          flush=True)
     (args.out / "manifest_train.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in train_rows),
                                                    encoding="utf-8")
 
@@ -182,7 +220,7 @@ def main(argv: list[str] | None = None) -> Path:
         hub_strategy="checkpoint", hub_token=os.environ.get("HF_TOKEN"),
     )
     trainer = Seq2SeqTrainer(
-        model=model, args=targs, train_dataset=ClipDataset(train_rows, args.data_root, processor),
+        model=model, args=targs, train_dataset=ClipDataset(train_rows, args.data_root, processor, augment, args.seed),
         eval_dataset=ClipDataset(eval_rows, args.data_root, processor) if eval_rows else None,
         data_collator=Collator(processor, model.config.decoder_start_token_id),
         compute_metrics=compute_metrics if eval_rows else None, processing_class=processor.feature_extractor,
