@@ -128,3 +128,14 @@ def test_stop_token_ids_of_a_model_that_already_stops_are_unchanged():
 def test_stop_token_ids_skip_tokens_missing_from_the_vocab():
     from lifemate.agents.llm import stop_token_ids
     assert stop_token_ids(_Tok({"</s>": 2}, eos_token="</s>"), _GenConfig(2)) == [2]
+
+
+@pytest.mark.parametrize("model", ["Qwen/Qwen3.5-4B", MODEL])
+def test_stop_token_ids_of_real_tokenizers_contain_im_end(model):
+    from lifemate.agents.llm import stop_token_ids
+    transformers = pytest.importorskip("transformers")
+    try:
+        real = transformers.AutoTokenizer.from_pretrained(model, local_files_only=True)
+    except OSError:
+        pytest.skip(f"{model} tokenizer not in the local HF cache")
+    assert real.convert_tokens_to_ids("<|im_end|>") in stop_token_ids(real, None)
