@@ -29,6 +29,31 @@ def finish_text(text: str, stop_strings: set[str], open_think: bool) -> str:
     return text.strip()
 
 
+END_OF_TURN = ("<|im_end|>", "<|endoftext|>")
+
+
+def end_of_turn_ids(tokenizer, generation_config=None) -> list[int]:
+    """Token ids that end a completion: the tokenizer's and the generation config's EOS plus the chat end-of-turn markers
+    that exist in the vocabulary. Qwen3.5 ships no generation_config.json and its config names only <|endoftext|> as EOS,
+    so without <|im_end|> here generate() runs past the end of the turn and writes a made-up next turn (tool results
+    included) until max_new_tokens."""
+    ids: list[int] = []
+
+    def add(x):
+        for i in (x if isinstance(x, (list, tuple)) else [x]):
+            if isinstance(i, int) and i >= 0 and i not in ids:
+                ids.append(i)
+
+    add(getattr(tokenizer, "eos_token_id", None))
+    if generation_config is not None:
+        add(getattr(generation_config, "eos_token_id", None))
+    vocab = tokenizer.get_vocab() if hasattr(tokenizer, "get_vocab") else {}
+    for token in END_OF_TURN:
+        if token in vocab:
+            add(vocab[token])
+    return ids
+
+
 def load_causal_lm(model: str, dtype, revision: str | None = None):
     """AutoModelForCausalLM.from_pretrained that refuses a checkpoint with missing weights. A multimodal checkpoint (for
     example Qwen3.5, whose text weights live under model.language_model.*) loads into a text model with other parameter
@@ -62,7 +87,10 @@ class HFChatLLM:
         self.model = load_causal_lm(model, getattr(torch, dtype), revision).to("cuda")
         self.model.eval()
         # Strings to cut from the completion: end-of-turn markers, not the <tool_call> markup.
-        self.stop_strings = {t for t in (self.tokenizer.eos_token, self.tokenizer.pad_token, "<|im_end|>", "<|endoftext|>") if t}
+        self.stop_strings = {t for t in (self.tokenizer.eos_token, self.tokenizer.pad_token, *END_OF_TURN) if t}
+        self.eos_ids = end_of_turn_ids(self.tokenizer, getattr(self.model, "generation_config", None))
+        pad = getattr(self.tokenizer, "pad_token_id", None)
+        self.pad_id = pad if pad is not None else (self.eos_ids[0] if self.eos_ids else None)
 
     def _encode(self, messages: list[dict], tools: list[dict]):
         return self.tokenizer.apply_chat_template(messages, tools=tools or None, add_generation_prompt=True,
@@ -76,7 +104,8 @@ class HFChatLLM:
         inputs = self._encode(messages, tools).to(self.model.device)
         with self.torch.inference_mode():
             out = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens, do_sample=False, num_beams=self.num_beams,
-                                      temperature=None, top_p=None, top_k=None, max_time=max_time)
+                                      temperature=None, top_p=None, top_k=None, max_time=max_time,
+                                      eos_token_id=self.eos_ids or None, pad_token_id=self.pad_id)
         prompt_len = inputs["input_ids"].shape[1]
         tail = self.tokenizer.decode(inputs["input_ids"][0, -8:], skip_special_tokens=False)
         open_think = tail.endswith("<think>\n")  # the prompt opened a thinking block the output has to close

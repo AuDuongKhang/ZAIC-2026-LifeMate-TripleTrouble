@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from conftest import replay_sample
-from lifemate.agents.llm import finish_text
+from lifemate.agents.llm import end_of_turn_ids, finish_text
 from lifemate.evaluate import label_kind
 from lifemate.sft.tokenize import encode_record, render
 
@@ -81,3 +81,34 @@ def test_finish_text_with_a_self_opened_think_that_never_closes_is_empty():
 def test_finish_text_keeps_a_closed_self_opened_think():
     call = '<tool_call>{"name":"x","arguments":{}}</tool_call>'
     assert finish_text(f"<think>\nhmm</think>\n\n{call}<|im_end|>", {"<|im_end|>"}, False) == call
+
+
+class _Tok:
+    def __init__(self, eos, vocab):
+        self.eos_token_id, self._vocab = eos, vocab
+
+    def get_vocab(self):
+        return self._vocab
+
+
+def test_end_of_turn_ids_adds_im_end_when_eos_is_endoftext():
+    # Qwen3.5: config EOS is <|endoftext|> (248044), the turn ends with <|im_end|> (248046), no generation_config.json
+    tok = _Tok(248044, {"<|im_end|>": 248046, "<|endoftext|>": 248044, "a": 1})
+    assert end_of_turn_ids(tok, None) == [248044, 248046]
+
+
+def test_end_of_turn_ids_merges_generation_config_and_skips_missing_markers():
+    gen = type("G", (), {"eos_token_id": [151645, 151643]})()
+    tok = _Tok(151645, {"<|im_end|>": 151645, "<|endoftext|>": 151643})
+    assert end_of_turn_ids(tok, gen) == [151645, 151643]
+    assert end_of_turn_ids(_Tok(2, {"</s>": 2}), None) == [2]
+
+
+@pytest.mark.parametrize("model", ["Qwen/Qwen3.5-4B", MODEL])
+def test_end_of_turn_ids_of_real_tokenizers_contain_im_end(model):
+    transformers = pytest.importorskip("transformers")
+    try:
+        real = transformers.AutoTokenizer.from_pretrained(model, local_files_only=True)
+    except OSError:
+        pytest.skip(f"{model} tokenizer not in the local HF cache")
+    assert real.convert_tokens_to_ids("<|im_end|>") in end_of_turn_ids(real, None)
