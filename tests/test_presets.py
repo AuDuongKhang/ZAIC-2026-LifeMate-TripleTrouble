@@ -204,7 +204,7 @@ def test_diagnostic_preset_is_sft_v2_refs_plus_the_flag():
     assert resolve("agent", "sft-v2-refs-lao-diag", env) == (name, {**kw, "leave_gold_apps_out": True})
 
 
-@pytest.mark.parametrize("name", ["kd1", "t1", "kd2"])
-def test_distillation_presets_name_their_merged_model(name):
+@pytest.mark.parametrize("name", ["kd1", "t1", "kd2", "q1b"])
+def test_sft_presets_name_their_merged_model(name):
     agent, kw = resolve("agent", f"sft-{name}-refs", {"HF_MODEL_OWNER": "team"})
     assert (agent, kw) == ("react", {"model": f"team/lifemate-sft-{name}", "examples": 4, "check_refs": True})
