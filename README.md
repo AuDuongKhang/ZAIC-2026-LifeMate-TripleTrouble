@@ -138,8 +138,11 @@ Solution* (secrets `HF_TOKEN`, `HF_DATASET`, `RCLONE_CONFIG`).
 
 Running the workflow several times:
 
-- Start it from the Actions tab (*Run workflow*, optional label such as `final`) or push a new tag `docker-<name>`
-  (each tag name works once). Runs queue; two builds never run at the same time.
+- Pull requests that change the image (Dockerfile, `docker/`, `configs/shipped.json` or the presets it uses, requirements,
+  `docker_entry.py`, `infer.py`, the Docker scripts) get a build + smoke test without upload; new experiment presets
+  alone do not trigger it (`scripts/shipped_fingerprint.py`).
+- Start an upload from the Actions tab (*Run workflow*, optional label such as `final`) or push a new tag `docker-<name>`
+  (each tag name works once). Upload runs queue; a new push to a PR cancels that PR's older check.
 - Every upload gets its own Drive folder, `zaic2026/<UTC date-time>-<commit>-r<run id>.<attempt>[-<label>]/`, holding
   `zac2026_TripleTrouble.tar.gz` (the name the guide asks for) and `info.txt` (MD5, size, link, commit, run). Earlier
   links and MD5s never change, and an existing folder is never overwritten (`scripts/drive_upload.sh` refuses).

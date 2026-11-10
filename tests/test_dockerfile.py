@@ -35,10 +35,31 @@ def test_build_script_writes_the_md5():
 
 def test_workflow_never_reuses_a_drive_folder_and_queues_runs():
     wf = (REPO_ROOT / ".github" / "workflows" / "docker-image.yml").read_text(encoding="utf-8")
-    assert "cancel-in-progress: false" in wf  # a second run waits instead of killing an upload
+    # an upload run waits for the previous one instead of killing it; only PR checks cancel their older run
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in wf
     assert "${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}" in wf  # one folder per run and attempt
     upload = (REPO_ROOT / "scripts" / "drive_upload.sh").read_text(encoding="utf-8")
     assert "refusing to upload" in upload and "rclone md5sum" in upload
+
+
+def test_shipped_fingerprint_holds_the_shipped_presets():
+    import json
+    import subprocess
+    import sys
+
+    r = subprocess.run([sys.executable, str(REPO_ROOT / "scripts" / "shipped_fingerprint.py"), "HEAD"], cwd=REPO_ROOT,
+                       capture_output=True, text=True, encoding="utf-8", check=True)
+    fp = json.loads(r.stdout)
+    shipped = json.loads((REPO_ROOT / "configs" / "shipped.json").read_text(encoding="utf-8"))
+    presets = json.loads((REPO_ROOT / "configs" / "presets.json").read_text(encoding="utf-8"))
+    assert fp["presets"]["agent"] == presets["agent"][shipped["agent_preset"]]
+    assert fp["presets"]["asr"] == presets["asr"][shipped["asr_preset"]]
+
+
+def test_pull_requests_build_without_uploading():
+    wf = (REPO_ROOT / ".github" / "workflows" / "docker-image.yml").read_text(encoding="utf-8")
+    assert "pull_request:" in wf and "configs/shipped.json" in wf
+    assert "UPLOAD: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.upload) }}" in wf
 
 
 def test_dockerignore_keeps_the_data_package_out():

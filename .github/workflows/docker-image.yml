@@ -4,7 +4,11 @@
 # docker-<name> from any commit (a tag name can be used once). Secrets: HF_TOKEN (read access to the TripleTrouble
 # repos), HF_DATASET (team data repo), RCLONE_CONFIG (rclone.conf with a Google Drive remote named gdrive).
 #
-# Several runs: runs queue (never two builds at once); each upload goes to its own Drive folder
+# Pull requests that touch the image (Dockerfile, docker/, the shipped config or the presets it uses, requirements,
+# docker_entry/infer, these scripts) get a build + smoke test without upload, so a model or library change is
+# checked before it reaches main.
+#
+# Several runs: uploads queue (never two at once); each upload goes to its own Drive folder
 # zaic2026/<UTC date-time>-<commit>-r<run id>.<attempt>[-<label>]/ holding zac2026_TripleTrouble.tar.gz and info.txt,
 # so earlier links and MD5s stay valid. Nothing is deleted automatically, because one of the uploads is the submitted
 # one; delete old folders by hand (README, "Docker (final solution)"). Drive access and free space are checked before
@@ -28,22 +32,66 @@ on:
         default: ""
   push:
     tags: ["docker-*"]
+  # PRs that can change the image: build + smoke test only, never upload. configs/presets.json is listed because a
+  # preset edit can change the shipped model; the `changes` job skips the build when the shipped presets are the same.
+  pull_request:
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - docker/**
+      - configs/shipped.json
+      - configs/presets.json
+      - requirements.txt
+      - src/lifemate/docker_entry.py
+      - src/lifemate/infer.py
+      - scripts/docker_build.sh
+      - scripts/docker_smoke.sh
+      - scripts/drive_upload.sh
+      - scripts/shipped_fingerprint.py
+      - .github/workflows/docker-image.yml
 
 permissions:
   contents: read
 
 concurrency:
-  group: docker-image
-  cancel-in-progress: false
+  # uploads queue behind each other; a new push to a PR cancels that PR's previous check
+  group: docker-image-${{ github.event_name == 'pull_request' && github.event.pull_request.number || 'upload' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: decide
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != "pull_request" ]; then echo "build=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          changed="$(git diff --name-only "$BASE"...HEAD)"
+          echo "$changed"
+          other="$(echo "$changed" | grep -E '^(Dockerfile|\.dockerignore|docker/|configs/shipped\.json|requirements\.txt|src/lifemate/(docker_entry|infer)\.py|scripts/(docker_build|docker_smoke|drive_upload)\.sh|scripts/shipped_fingerprint\.py|\.github/workflows/docker-image\.yml)' || true)"
+          if [ -n "$other" ]; then
+            echo "image files changed"; echo "build=true" >> "$GITHUB_OUTPUT"
+          elif [ "$(python3 scripts/shipped_fingerprint.py "$BASE")" != "$(python3 scripts/shipped_fingerprint.py HEAD)" ]; then
+            echo "the shipped presets changed"; echo "build=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "only presets the image does not use changed: no build"; echo "build=false" >> "$GITHUB_OUTPUT"
+          fi
+
   image:
+    needs: changes
+    if: needs.changes.outputs.build == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
       OUT_DIR: /home/runner/out   # small files only: MD5, size, link, info
       ARCHIVE: zac2026_TripleTrouble.tar.gz
-      UPLOAD: ${{ github.event_name == 'push' || inputs.upload }}
+      UPLOAD: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.upload) }}
       MIN_FREE_GIB: "20"           # the archive is about 14.5 GiB
     steps:
       - name: Check Google Drive access and free space
