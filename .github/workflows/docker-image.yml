@@ -1,8 +1,12 @@
-# Build the solution image, smoke-test it on CPU (offline, /data read-only) and upload zac2026_TripleTrouble.tar.gz to
-# Google Drive (anyone with the link) for the portal's Test Solution. The link and MD5 go to the run summary.
+# Build the solution image, smoke-test it on CPU (offline, /data read-only) and stream zac2026_TripleTrouble.tar.gz
+# to Google Drive (anyone with the link) for the portal's Test Solution. The link and MD5 go to the run summary.
 # Run it from the Actions tab (Docker image -> Run workflow) on main, or push a tag docker-<name> from any commit.
 # Secrets: HF_TOKEN (read access to the TripleTrouble repos), HF_DATASET (team data repo), RCLONE_CONFIG (rclone.conf
 # with a Google Drive remote named gdrive).
+#
+# Disk: the runner has one ~72 GB disk (/mnt is the same filesystem), about 52 GB free after clean-up. Docker's
+# containerd image store keeps every layer twice (unpacked + compressed), which does not fit with 14 GB of weights,
+# so the classic overlay2 store is used, and the archive is streamed to Drive instead of being written to disk.
 name: Docker image
 
 on:
@@ -23,7 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
-      OUT_DIR: /home/runner/out   # the archive on the root disk; Docker's own storage moves to /mnt below
+      OUT_DIR: /home/runner/out   # small files only: MD5, size, link
+      ARCHIVE: zac2026_TripleTrouble.tar.gz
     steps:
       - name: Free disk space
         uses: jlumbroso/free-disk-space@v1.3.1
@@ -36,16 +41,16 @@ jobs:
           docker-images: true
           swap-storage: true
 
-      - name: Move Docker storage to /mnt
+      - name: Use the classic overlay2 image store
         run: |
           sudo systemctl stop docker docker.socket
           conf=/etc/docker/daemon.json
           [ -s "$conf" ] || echo '{}' | sudo tee "$conf" >/dev/null
-          sudo jq '. + {"data-root": "/mnt/docker"}' "$conf" | sudo tee "$conf.new" >/dev/null && sudo mv "$conf.new" "$conf"
-          sudo mkdir -p /mnt/docker
+          sudo jq '. + {"features": ((.features // {}) + {"containerd-snapshotter": false})}' "$conf" \
+            | sudo tee "$conf.new" >/dev/null && sudo mv "$conf.new" "$conf"
           sudo systemctl start docker
-          docker info --format 'Docker root: {{.DockerRootDir}}'
-          df -h / /mnt
+          docker info --format 'storage driver: {{.Driver}}, root: {{.DockerRootDir}}'
+          df -h /
 
       - uses: actions/checkout@v4
 
@@ -62,30 +67,37 @@ jobs:
           PYTHONPATH=src python -m lifemate.fetch_data --hf-repo "$HF_DATASET"
           ls data
 
-      - name: Build and save the image
+      - name: Build the image
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
-          sudo apt-get install -y --no-install-recommends pigz
           mkdir -p "$OUT_DIR"
-          df -h / /mnt
-          bash scripts/docker_build.sh
-          df -h / /mnt
+          SAVE=0 bash scripts/docker_build.sh
+          docker builder prune -af >/dev/null
+          docker system df
+          df -h /
 
       - name: Smoke test (CPU, offline)
         run: bash scripts/docker_smoke.sh "zac2026-tripletrouble:$(git rev-parse --short HEAD)" data/public_test
 
-      - name: Upload to Google Drive
+      - name: Stream the archive to Google Drive
         if: github.event_name == 'push' || inputs.upload
         env:
           RCLONE_CONF_TEXT: ${{ secrets.RCLONE_CONFIG }}
         run: |
-          curl -fsSL https://rclone.org/install.sh | sudo bash
+          set -o pipefail
+          sudo apt-get install -y --no-install-recommends pigz >/dev/null
+          curl -fsSL https://rclone.org/install.sh | sudo bash >/dev/null
           mkdir -p ~/.config/rclone
           printf '%s\n' "$RCLONE_CONF_TEXT" > ~/.config/rclone/rclone.conf
+          tag="zac2026-tripletrouble:$(git rev-parse --short HEAD)"
           dest="gdrive:zaic2026/$(date -u +%Y%m%d-%H%M)-$(git rev-parse --short HEAD)"
-          rclone copy "$OUT_DIR/zac2026_TripleTrouble.tar.gz" "$dest" --drive-chunk-size 256M --stats 60s --stats-one-line
-          rclone link "$dest/zac2026_TripleTrouble.tar.gz" > "$OUT_DIR/link.txt"
+          docker save "$tag" | pigz | rclone rcat "$dest/$ARCHIVE" --streaming-upload-cutoff 0 \
+            --drive-chunk-size 256M --stats 60s --stats-one-line -v
+          # the MD5 Drive computed on the stored file: exactly what the organisers download
+          rclone md5sum "$dest/$ARCHIVE" | tee "$OUT_DIR/$ARCHIVE.md5"
+          rclone size --json "$dest/$ARCHIVE" | jq -r '.bytes' > "$OUT_DIR/bytes.txt"
+          rclone link "$dest/$ARCHIVE" > "$OUT_DIR/link.txt"
           echo "Drive folder: $dest"
 
       - name: Summary
@@ -94,9 +106,9 @@ jobs:
           {
             echo "## Docker image $(git rev-parse --short HEAD)"
             echo
-            [ -f "$OUT_DIR/zac2026_TripleTrouble.tar.gz" ] && echo "- size: $(du -h "$OUT_DIR/zac2026_TripleTrouble.tar.gz" | cut -f1)"
-            [ -f "$OUT_DIR/zac2026_TripleTrouble.tar.gz.md5" ] && echo "- MD5: \`$(cut -d' ' -f1 "$OUT_DIR/zac2026_TripleTrouble.tar.gz.md5")\`"
-            [ -f "$OUT_DIR/link.txt" ] && echo "- Google Drive link: $(cat "$OUT_DIR/link.txt")"
+            if [ -f "$OUT_DIR/bytes.txt" ]; then echo "- size: $(numfmt --to=iec "$(cat "$OUT_DIR/bytes.txt")")"; fi
+            if [ -f "$OUT_DIR/$ARCHIVE.md5" ]; then echo "- MD5: \`$(cut -d' ' -f1 "$OUT_DIR/$ARCHIVE.md5")\`"; fi
+            if [ -f "$OUT_DIR/link.txt" ]; then echo "- Google Drive link: $(cat "$OUT_DIR/link.txt")"; fi
             echo
             echo "Portal: Test Solution -> paste the link and the MD5 -> Submit Test (1 run per day, until 15 Nov 23:59 GMT+7)."
           } >> "$GITHUB_STEP_SUMMARY"
