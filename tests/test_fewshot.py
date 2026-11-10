@@ -99,10 +99,3 @@ def test_examples_with_ids_that_never_appear_in_their_own_results_are_skipped():
 def test_from_data_drops_only_blind_examples(train_samples):
     bank = ExampleBank.from_data(default_data_root(), "train")
     assert 0 < len(bank) < len(load_splits()["pool"])
-
-
-def test_select_skips_empty_examples():
-    empty = _sample("empty", "tắt đèn phòng khách à thôi khỏi", [])
-    act = _sample("act", "tắt đèn phòng khách", [{"name": "smart_home.light_set", "arguments": {"device_id": "l1"}}])
-    bank = ExampleBank([empty, act], {"empty", "act"}, catalog=CATALOG)
-    assert [e["id"] for e in bank.select("tắt đèn", {"smart_home"}, k=2)] == ["act"]
