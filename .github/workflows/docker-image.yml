@@ -1,0 +1,95 @@
+# Build the solution image, smoke-test it on CPU (offline, /data read-only) and upload zac2026_TripleTrouble.tar.gz to
+# Google Drive (anyone with the link) for the portal's Test Solution. The link and MD5 go to the run summary.
+# Run it from the Actions tab (Docker image -> Run workflow) on main, or push a tag docker-<name> from any commit.
+# Secrets: HF_TOKEN (read access to the TripleTrouble repos), HF_DATASET (team data repo), RCLONE_CONFIG (rclone.conf
+# with a Google Drive remote named gdrive).
+name: Docker image
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: Upload the archive to Google Drive
+        type: boolean
+        default: true
+  push:
+    tags: ["docker-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      OUT_DIR: /mnt/out
+    steps:
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Fetch the data (team's private HF dataset)
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET: ${{ secrets.HF_DATASET }}
+        run: |
+          pip install --quiet huggingface_hub
+          PYTHONPATH=src python -m lifemate.fetch_data --hf-repo "$HF_DATASET"
+          ls data
+
+      - name: Build and save the image
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          sudo apt-get install -y --no-install-recommends pigz
+          sudo mkdir -p "$OUT_DIR" && sudo chown "$USER" "$OUT_DIR"
+          df -h / /mnt
+          bash scripts/docker_build.sh
+          df -h / /mnt
+
+      - name: Smoke test (CPU, offline)
+        run: bash scripts/docker_smoke.sh "zac2026-tripletrouble:$(git rev-parse --short HEAD)" data/public_test
+
+      - name: Upload to Google Drive
+        if: github.event_name == 'push' || inputs.upload
+        env:
+          RCLONE_CONF_TEXT: ${{ secrets.RCLONE_CONFIG }}
+        run: |
+          curl -fsSL https://rclone.org/install.sh | sudo bash
+          mkdir -p ~/.config/rclone
+          printf '%s\n' "$RCLONE_CONF_TEXT" > ~/.config/rclone/rclone.conf
+          dest="gdrive:zaic2026/$(date -u +%Y%m%d-%H%M)-$(git rev-parse --short HEAD)"
+          rclone copy "$OUT_DIR/zac2026_TripleTrouble.tar.gz" "$dest" --drive-chunk-size 256M --stats 60s --stats-one-line
+          rclone link "$dest/zac2026_TripleTrouble.tar.gz" > "$OUT_DIR/link.txt"
+          echo "Drive folder: $dest"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Docker image $(git rev-parse --short HEAD)"
+            echo
+            [ -f "$OUT_DIR/zac2026_TripleTrouble.tar.gz" ] && echo "- size: $(du -h "$OUT_DIR/zac2026_TripleTrouble.tar.gz" | cut -f1)"
+            [ -f "$OUT_DIR/zac2026_TripleTrouble.tar.gz.md5" ] && echo "- MD5: \`$(cut -d' ' -f1 "$OUT_DIR/zac2026_TripleTrouble.tar.gz.md5")\`"
+            [ -f "$OUT_DIR/link.txt" ] && echo "- Google Drive link: $(cat "$OUT_DIR/link.txt")"
+            echo
+            echo "Portal: Test Solution -> paste the link and the MD5 -> Submit Test (1 run per day, until 15 Nov 23:59 GMT+7)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the data
+        if: always()
+        run: rm -rf data/train data/public_test
