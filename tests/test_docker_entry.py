@@ -7,8 +7,8 @@ from lifemate import docker_entry
 
 
 def _split_dir(tmp_path, n_samples=1, name="private_test"):
-    d = tmp_path / "mounted"
-    d.mkdir()
+    d = tmp_path / "mounted" / name  # the organisers mount the folder that holds the split folder at /data
+    d.mkdir(parents=True)
     (d / f"{name}_tools_catalog.json").write_text("{}", encoding="utf-8")
     (d / f"{name}.jsonl").write_text("".join(json.dumps({"id": f"p{i}"}) + "\n" for i in range(n_samples)),
                                      encoding="utf-8")
@@ -49,7 +49,7 @@ def _run(tmp_path, monkeypatch, lines, n_samples=1):
     record = {}
     monkeypatch.setattr(lifemate.infer, "main", _fake_infer(tmp_path, lines, record))
     out = tmp_path / "result" / "submission.jsonl"
-    argv = ["--data", str(_split_dir(tmp_path, n_samples)), "--out", str(out), "--config", str(_config(tmp_path)),
+    argv = ["--data", str(_split_dir(tmp_path, n_samples).parent), "--out", str(out), "--config", str(_config(tmp_path)),
             "--work", str(tmp_path / "work"), "--train-dir", str(_train_dir(tmp_path))]
     try:
         docker_entry.main(argv)
@@ -140,3 +140,57 @@ def test_committed_shipped_config_names_known_presets():
     env = {"HF_MODEL_OWNER": cfg["hf_model_owner"]}
     resolve("agent", cfg["agent_preset"], env)
     resolve("asr", cfg["asr_preset"], env)
+
+
+def test_locate_split_accepts_the_parent_folder(tmp_path):
+    d = _split_dir(tmp_path)
+    assert docker_entry.locate_split(d.parent) == (d.parent / "private_test", "private_test")
+
+
+def test_locate_split_accepts_the_split_folder_itself(tmp_path):
+    d = _split_dir(tmp_path)
+    assert docker_entry.locate_split(d) == (d, "private_test")
+
+
+def test_locate_split_refuses_two_splits(tmp_path):
+    d = _split_dir(tmp_path)
+    other = d.parent / "public_test"
+    other.mkdir()
+    (other / "public_test_tools_catalog.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(SystemExit) as e:
+        docker_entry.locate_split(d.parent)
+    assert "private_test" in str(e.value) and "public_test" in str(e.value)
+
+
+def test_fetch_models_skips_checkpoints(monkeypatch):
+    import huggingface_hub
+
+    seen = []
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", lambda repo_id, **kw: seen.append(kw))
+    docker_entry.fetch_models({"agent_preset": "sft-final", "asr_preset": "none", "agent_kw": {}, "asr_kw": {},
+                               "hf_model_owner": "team"})
+    assert seen and "checkpoints/*" in seen[0]["ignore_patterns"]
+
+
+def test_check_models_fails_when_a_model_is_not_cached(monkeypatch):
+    import huggingface_hub
+    from huggingface_hub.errors import LocalEntryNotFoundError
+
+    def missing(repo_id, **kw):
+        assert kw["local_files_only"] is True
+        raise LocalEntryNotFoundError("not cached")
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", missing)
+    with pytest.raises(SystemExit) as e:
+        docker_entry.check_models({"agent_preset": "sft-final", "asr_preset": "none", "agent_kw": {}, "asr_kw": {},
+                                   "hf_model_owner": "team"})
+    assert e.value.code not in (0, None)
+
+
+def test_smoke_config_names_known_presets():
+    from lifemate.presets import resolve
+
+    cfg = docker_entry.load_config(docker_entry.REPO_ROOT / "configs" / "smoke.json")
+    env = {"HF_MODEL_OWNER": cfg["hf_model_owner"]}
+    assert resolve("agent", cfg["agent_preset"], env)[0] == "empty"
+    assert resolve("asr", cfg["asr_preset"], env)[0] == "none"
