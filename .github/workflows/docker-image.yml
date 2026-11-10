@@ -141,6 +141,8 @@ jobs:
           df -h /
 
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # docker_build.sh exports the training code at configs/shipped.json's records_commit
 
       - uses: actions/setup-python@v5
         with:

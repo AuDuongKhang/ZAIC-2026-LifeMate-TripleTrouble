@@ -28,6 +28,20 @@ def test_image_uses_the_code_layout():
     assert "HF_HUB_OFFLINE=1" in DOCKERFILE
 
 
+def test_training_code_holds_the_code_that_trained_the_shipped_models():
+    """Guide 6.2: the organisers reproduce training from training_code/."""
+    import json
+
+    shipped = json.loads((REPO_ROOT / "configs" / "shipped.json").read_text(encoding="utf-8"))
+    assert re.fullmatch(r"[0-9a-f]{40}", shipped["records_commit"])
+    script = (REPO_ROOT / "scripts" / "docker_build.sh").read_text(encoding="utf-8")
+    assert "git archive" in script and "records_commit" in script
+    for line in ("COPY src ./training_code/src", "COPY docker/training_code ./training_code"):
+        assert line in DOCKERFILE
+    readme = (REPO_ROOT / "docker" / "training_code" / "README.md").read_text(encoding="utf-8")
+    assert f"code_at_{shipped['records_commit'][:7]}" in readme
+
+
 def test_build_script_writes_the_md5():
     script = (REPO_ROOT / "scripts" / "docker_build.sh").read_text(encoding="utf-8")
     assert "zac2026_TripleTrouble.tar.gz" in script and "md5sum" in script

@@ -40,7 +40,16 @@ COPY scripts ./scripts
 COPY tests ./tests
 COPY docs/shipped-model.md ./docs/shipped-model.md
 COPY README.md RESULTS.md CLAUDE.md requirements-train.txt requirements-dev.txt ./
+# training_code/ (guide 6.2): README, this code (ASR fine-tune, SFT train/merge) and, from scripts/docker_build.sh, the
+# code at configs/shipped.json's records_commit that rendered the shipped model's SFT records.
 COPY docker/training_code ./training_code
+COPY src ./training_code/src
+COPY configs ./training_code/configs
+COPY notebooks ./training_code/notebooks
+COPY scripts ./training_code/scripts
+COPY pyproject.toml requirements.txt requirements-train.txt ./training_code/
+COPY docker/constraints.txt ./training_code/docker/constraints.txt
+RUN ls -d training_code/code_at_*/src || { echo "training_code/code_at_<commit> missing: build with scripts/docker_build.sh"; exit 1; }
 COPY docker/predict.sh docker/start_jupyter.sh docker/predict_notebook.ipynb ./
 RUN chmod +x predict.sh start_jupyter.sh
 

@@ -34,3 +34,6 @@ __MACOSX/
 # Docker submission archive and its checksum (built by scripts/docker_build.sh)
 zac2026_*.tar.gz
 zac2026_*.tar.gz.md5
+
+# Code snapshot exported by scripts/docker_build.sh into the image's training_code/
+docker/training_code/code_at_*/

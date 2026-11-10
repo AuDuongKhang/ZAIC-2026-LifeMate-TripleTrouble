@@ -38,36 +38,69 @@ No external or paid data, no LLM API. The SFT records are rendered from it:
 - **Hidden gold apps** for half of the samples: their few-shot examples use none of the sample's gold apps, as for
   an app never seen in training.
 
+## What is in this folder
+
+| Path | Content |
+|---|---|
+| `code_at_0c7152b/` | **The code that trained the shipped models** (repo commit `0c7152bd`, 6 Nov 2026): `src/lifemate` (ASR fine-tune `train_asr`, `transcribe`, SFT `sft.records` / `sft.train` / `sft.merge`), `configs/`, `notebooks/` (the molab notebooks that ran it), `requirements*.txt`. Use it to reproduce the models below. |
+| `src/`, `configs/`, `notebooks/`, `scripts/`, `pyproject.toml`, `requirements*.txt` | The code of this image (same as `/code/src`): inference, plus the training modules as they are now. Later changes are opt-in flags; the SFT records flag `--hide-gold-apps` was replaced by `--leave-app-out`. |
+
+## Data
+
+Only the organisers' train split is used: put it at `data/train/` (`train.jsonl`, `train_tools_catalog.json`,
+`audio/`, `train_environment/`), next to `src/`, or point `LIFEMATE_DATA_ROOT` to the folder that holds `train/`. No
+external or paid data and no LLM API. Everything else is generated from it by the code (steps 2 and 3 below), so no
+other data file has to be downloaded:
+
+- **Gold replay**: each train sample is run through the same ReAct prompt as inference with its gold tool calls and
+  results replayed (`lifemate.sft.records`, `lifemate.sft.replay`), so training text equals inference text.
+- **Function-masked copy** (1 per sample): apps, tools and parameters renamed and tools shuffled
+  (`lifemate.sft.mask`), so the model reads the schemas instead of memorising app names.
+- **ASR-noisy copy** (1 per sample): user turns replaced by off-the-shelf PhoWhisper-large transcripts
+  (`lifemate.transcribe`, cache `pho-large-fp16`).
+- **Hidden gold apps** for half of the samples (`--hide-gold-apps 0.5`): all copies of a picked sample get few-shot
+  examples that use none of its gold apps, as for an app never seen in training.
+
+## Models
+
+| | Download |
+|---|---|
+| Base ASR | https://huggingface.co/vinai/PhoWhisper-large |
+| Base LLM | https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507 |
+| Fine-tuned ASR (output of step 1) | in this image under `/models` (HF cache of `TripleTrouble/pho-large-ft-all` @ `73bb56a`) |
+| Fine-tuned LLM (output of step 4) | in this image under `/models` (HF cache of `TripleTrouble/lifemate-sft-final-h` @ `e3a659c`) |
+
 ## Reproduce
 
-Python ≥ 3.10, one large GPU for the LLM SFT (a 96 GB RTX Pro 6000 on molab was used), `pip install -r requirements.txt`
-and `pip install --no-deps -r requirements-train.txt`, the train data under `data/train/`. Seeds are fixed (0) in
-every step (`lifemate.utils.seed_everything`, `--seed 0`).
+Run from `code_at_0c7152b/` with Python ≥ 3.10 and one large GPU (a 96 GB RTX Pro 6000 on molab was used):
+`pip install -r requirements.txt` and `pip install --no-deps -r requirements-train.txt`. Seeds are fixed (0) in every
+step (`lifemate.utils.seed_everything`, `--seed 0`), decoding is greedy (beam 5 for the ASR).
 
 ```bash
-# 1. ASR fine-tune on all train clips (about 1.5 h), then upload <out>/final
+cd code_at_0c7152b && export PYTHONPATH=src
+# 1. ASR fine-tune on all train clips (about 1.5 h on molab); the model is <out>/final
 python -m lifemate.train_asr --model vinai/PhoWhisper-large --out asr_runs/pho-large-ft-all \
     --epochs 3 --lr 1e-5 --batch 8 --grad-accum 2 --eval-steps 100 --subset all
 
-# 2. ASR-noisy text for the records (off-the-shelf PhoWhisper-large)
-python -m lifemate.transcribe --split train --asr whisper --asr-kw model=vinai/PhoWhisper-large \
-    --name pho-large-fp16                                  # no --subset: every train clip
+# 2. ASR-noisy text for the records (off-the-shelf PhoWhisper-large, every train clip)
+python -m lifemate.transcribe --split train --asr whisper --asr-kw model=vinai/PhoWhisper-large --name pho-large-fp16
 
-# 3. SFT records: 4,629 records (see the note below on hiding gold apps)
-python -m lifemate.sft.records --name gold-all-m1-lao50-asr-pho-large-fp16 --subset all \
-    --text gold --text cache:pho-large-fp16 --mask 1 --leave-app-out 0.5
+# 3. SFT records: 4,629 records
+python -m lifemate.sft.records --name gold-all-m1-h50-asr-pho-large-fp16 --subset all \
+    --text gold --text cache:pho-large-fp16 --mask 1 --hide-gold-apps 0.5
 
 # 4. LoRA SFT (r 16, alpha 32, dropout 0.05, lr 1e-4, warmup 3%, micro batch 1, grad accum 16, 2 epochs = 579 steps,
-#    max length 12,288; about 3 h), then merge the adapter into the base model
-python -m lifemate.sft.train --records gold-all-m1-lao50-asr-pho-large-fp16 --out checkpoints/sft-final-h2
+#    max length 12,288; about 3 h on molab), then merge the adapter into the base model
+python -m lifemate.sft.train --records gold-all-m1-h50-asr-pho-large-fp16 --out checkpoints/sft-final-h2
 python -m lifemate.sft.merge --adapter checkpoints/sft-final-h2/last --out merged/sft-final-h
 ```
 
-**Hiding gold apps.** The shipped model's records (`gold-all-m1-h50-asr-pho-large-fp16`) were rendered at repo commit
-`0c7152b` with `--hide-gold-apps 0.5`, which picks half of the *samples* and hides their gold apps from the few-shot
-examples in every copy of the sample. The code in this image replaced that flag with `--leave-app-out 0.5`, which draws
-each *record* separately. Step 3 above uses the flag this code has; for the exact records, run step 3 from commit
-`0c7152b` with `--hide-gold-apps 0.5` instead of `--leave-app-out 0.5`.
+`notebooks/molab_asr.py` and `notebooks/molab_train.py` in `code_at_0c7152b/` are the notebooks that ran steps 1 and
+2–4 on molab with these values. The ASR settings were not logged; they are the notebook defaults of 1–4 Nov
+(`/code/docs/shipped-model.md` gives the sources).
 
-Inference: `bash /code/predict.sh` (input under `/data`, output `/result/submission.jsonl`) or
-`/code/predict_notebook.ipynb` (output `/result/jupyter_submission.jsonl`).
+## Inference
+
+`bash /code/predict.sh` (input: the split folder under `/data`; output: `/result/submission.jsonl`) or
+`/code/predict_notebook.ipynb` (output: `/result/jupyter_submission.jsonl`). Both run `configs/shipped.json` offline
+with the models above.

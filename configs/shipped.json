@@ -3,5 +3,6 @@
   "asr_preset": "pho-large-ft-all-beam5",
   "agent_kw": {"revision": "e3a659cb166907460f564c31a01e613786a835b6"},
   "asr_kw": {"revision": "73bb56a73e1e1470bbda0fad99353b6f1ed6c338"},
-  "hf_model_owner": "TripleTrouble"
+  "hf_model_owner": "TripleTrouble",
+  "records_commit": "0c7152bd009c80a5269b3db65efa12e224801e13"
 }

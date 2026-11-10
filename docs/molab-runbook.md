@@ -233,7 +233,28 @@ which model. The owner then applies the thresholds, adds the rows to `RESULTS.md
 - **9 Nov: `sft-final2`**: the winning recipe on all train (*Train records* = `all train (final retrain only)`), about 4.5 hours,
   then one `public_test` run (split `public_test`, ASR preset `pho-large-ft-all-beam5`), check `over_time_limit` is 0 and keep it
   only if it beats 57.5 (sft-final-h, `docs/shipped-model.md`). The owner sends the exact fields.
-- Docker work starts on 11 Nov whatever the score; deadline 16 Nov 23:59 GMT+7.
+- Docker: the image of sft-final-h passed the portal's *Test Solution* on 10 Nov (`docs/shipped-model.md`, "Docker image").
+  Deadline 16 Nov 23:59 GMT+7; Test Solution is open until 15 Nov 23:59, one run per day. A model that beats 57.5 is
+  shipped by changing `configs/shipped.json` in a PR (the PR builds and smoke-tests the image), then one upload run.
+
+### C1. Image check on GPU (score and time with the image's libraries)
+
+`requirements.txt` applies `docker/constraints.txt`, so a molab run installs the image's transformers and
+huggingface_hub (torch stays molab's). Branch `main` once the Docker PR is merged, split `public_test`, agent preset
+`sft-final-h`, ASR preset `pho-large-ft-all-beam5`, HF model owner `TripleTrouble`, extra infer args:
+
+```
+--agent-kw revision="e3a659cb166907460f564c31a01e613786a835b6" --asr-kw revision="73bb56a73e1e1470bbda0fad99353b6f1ed6c338" --time-field
+```
+
+Send `meta.json` (`max_seconds`, `over_time_limit` must be 0) and `submission.jsonl` (compared with the 7 Nov
+submission, or submitted to the public leaderboard against 57.5).
+
+### C2. `sft-q1b` gate
+
+Preset `sft-q1b-refs` (PR #77; before it is merged, branch `feat/preset-sft-q1b`), split `train`, subset `holdout`, ASR
+preset `pho-large-ft-b`. Compare with the sft-v2 + check_refs baseline rescored with the current scorer: **42.77**
+(41.37 under the old scorer), gate +0.5 with the CI above 0 (`python -m lifemate.compare`).
 
 ## D. Closed, nothing to run
 

@@ -5,6 +5,30 @@ messaging, …). For each sample it acts (calls the right tools), asks for missi
 (`sys.ask_missing_info`), or does nothing when no installed app can help. The organiser specs are in
 [`context/`](context/): task, data, metric, rules and deadlines.
 
+## Solution (submitted Docker image)
+
+Public leaderboard 57.5. Configuration in `configs/shipped.json`; training details and the code that trained the models
+in `docker/training_code/README.md` (`/code/training_code/` in the image) and `docs/shipped-model.md`.
+
+| Part | Model | Parameters | Details |
+|---|---|---|---|
+| ASR | `TripleTrouble/pho-large-ft-all` | 1.55 B | `vinai/PhoWhisper-large` fine-tuned on all train clips (3 epochs, lr 1e-5); fp16, beam search 5 |
+| LLM | `TripleTrouble/lifemate-sft-final-h` | 4.02 B | `Qwen/Qwen3-4B-Instruct-2507` + merged LoRA (r 16) SFT; bf16, greedy; context ≤ 16,384 tokens (training records ≤ 12,288) |
+
+Total 5.57 B parameters, all open models, fully offline.
+
+- **Inference, per sample** (`lifemate.infer.run_sample`): one `ToolEnv`; the ASR transcribes the final request and
+  every history user turn; a ReAct loop (`lifemate.agents.react`) prompts the LLM with the tool schemas of the
+  installed apps, the history with its tool calls and results, the user profile and current time, and 4 few-shot
+  examples picked by BM25 from the train requests. Each step the model writes one `<tool_call>`; the runner checks it
+  with `env.validate` (free), rejects IDs never seen in the history or earlier results (`check_refs`), sends it with
+  `env.call` and appends the result. The loop stops when the model answers without a call, calls
+  `sys.ask_missing_info`, or reaches 8 steps or the 20 s budget (ASR included).
+- **Training data**: the organisers' train split only. SFT records replay each sample's gold calls through the same
+  prompt (training text = inference text), plus a function-masked copy (apps, tools and parameters renamed, tools
+  shuffled) and an ASR-noisy copy (off-the-shelf PhoWhisper-large transcripts); half of the samples get few-shot
+  examples without their own apps, as for an unseen app. 4,629 records, 2 epochs. No external data, no LLM API.
+
 ## Setup
 
 Python ≥ 3.10 (3.11 recommended). The setup scripts create `.venv/`, install the project in editable mode and tell
@@ -118,7 +142,9 @@ stronger than the scoring A30 (24 GB) while its CPU is weaker (4 vs 16 cores), s
 ## Docker (final solution)
 
 The image follows the organiser Docker guide (`context/Docker_Guide_ZAC2026_LifeMate.pdf`, not in git): code in
-`/code` with `predict.sh`, `start_jupyter.sh`, `predict_notebook.ipynb` and `training_code/README.md`; the organisers
+`/code` with `predict.sh`, `start_jupyter.sh`, `predict_notebook.ipynb`, this README and `training_code/` (its README,
+this code, and the code at `records_commit` of `configs/shipped.json` that trained the shipped models, exported by
+`scripts/docker_build.sh` from git, so builds need that commit in the history: tag `sft-final-h-code`); the organisers
 mount the folder that holds the split folder at `/data` (`/data/private_test/`) and read `/result/submission.jsonl`
 (the notebook writes `/result/jupyter_submission.jsonl`). Each line has `id`, `tool_calls`, `state_hash` and `time`
 (ms). `configs/shipped.json` names the agent and ASR presets, extra kwargs and the pinned model revisions; the build

@@ -74,6 +74,31 @@ The epochs, lr, batch and grad accum of the two runs were not logged. They are t
 recipe the plan names. A run that changed them would have needed someone to edit the fields by hand. The ASR
 augmentation flags added later (PR #67) are off by default and were not used for either model.
 
+## Docker image
+
+Built by `.github/workflows/docker-image.yml` (`scripts/docker_build.sh`), layout as in the organiser Docker guide:
+`/code` holds `predict.sh`, `start_jupyter.sh`, `predict_notebook.ipynb`, `README.md`, `requirements.txt` and
+`training_code/` (README, this code, and the code at `records_commit` that trained the models); the weights are in the
+HF cache under `/models`; input is the split folder under `/data`, output `/result/submission.jsonl` (and
+`/result/jupyter_submission.jsonl` from the notebook), one line per sample with `time` in ms.
+
+| | |
+|---|---|
+| Base image | `pytorch/pytorch:2.15.0-cuda13.2-cudnn9-runtime` (torch 2.15.0+cu132, kernels sm_75 to sm_120: A30 and RTX 5090) |
+| Libraries | `docker/constraints.txt` (transformers 5.21.0, huggingface_hub 2.3.0, tokenizers 0.23.3) |
+| Size | image 20.78 GB, `zac2026_TripleTrouble.tar.gz` 14.44 GiB |
+| CPU smoke test | every build: models load offline, `predict.sh` and the notebook give the same 634 lines on public_test, `zaic_tools --validate` 0 errors |
+
+Portal *Test Solution* runs:
+
+| Date | Commit | MD5 | Result |
+|---|---|---|---|
+| 2026-11-10 | `28e209e` (tag `docker-test4`) | `51fe14c8721c93178f03ad42af613e7b` | "Test passed. Your solution runs correctly." |
+
+The Drive links are not kept in the repo (the image carries `train.jsonl`, licensed data); `rclone cat
+gdrive:zaic2026/<folder>/info.txt` gives the link of each upload. Still to check on GPU: score and time per sample
+with the image's library versions (molab run of `sft-final-h` on public_test from this branch).
+
 ## Total size
 
 PhoWhisper-large 1.55 B + Qwen3-4B 4.02 B = 5.57 B parameters, under the 6 B limit; the LLM is under 5 B.

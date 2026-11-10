@@ -60,7 +60,8 @@ All repo files (code, comments, docs, notebook UI, commits) are in English; Viet
 - **Every `env.call` is logged and scored.** Schema-rejected calls count as unmatched (they lower precision) and do not change state. `env.validate()` is free and not logged, so check arguments with it first. Non-schema problems (unknown ID, empty search) are not errors: they return `{"ok": true, "done": false, ...}` or an empty list.
 - Score per sample: 0 if the state hash differs, otherwise F1 over calls. Free-text keys (`utils.FREE_TEXT_KEYS`, `x-match: fuzzy` params) are dropped from the hash and scored by token-F1 > 0.6. Strings in the hash are lowercased. Gold `[]` (out of scope) scores only with an empty submission.
 - Limits: whole system < 6B params, LLM < 5B with ≤ 16,384-token context; ≤ 30 s per sample including ASR on 1× A30 24 GB (molab's RTX Pro 6000 is faster, so treat molab timings as optimistic); fully offline Docker; fixed seeds (`utils.seed_everything`, called after the models are built) and greedy decoding.
-- Deadlines: Docker solution 16 Nov 2026 23:59 GMT+7; private test 20–23 Nov.
+- Deadlines: Docker solution 16 Nov 2026 23:59 GMT+7; private test 20–23 Nov. The portal's *Test Solution* (Drive link + MD5, one run per day, until 15 Nov 23:59) runs the image on the organisers' GPU; the sft-final-h image passed it on 10 Nov.
+- Docker guide (`context/Docker_Guide_ZAC2026_LifeMate.pdf`, untracked): `/data` holds the split folder, output `/result/submission.jsonl` + `jupyter_submission.jsonl` with `time` (ms), `/code` with `predict.sh`, `start_jupyter.sh`, `predict_notebook.ipynb`, `README.md` (solution idea) and `training_code/` (code + data or URLs the organisers use to reproduce training, same result as the shipped models); base CUDA ≤ 13.2; the guide names an RTX 5090, `RULE.md` an A30. Never commit the Drive link of an image (it carries `train.jsonl`).
 
 ## Data facts that shape the design
 
