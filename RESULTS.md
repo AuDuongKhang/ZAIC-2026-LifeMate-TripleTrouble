@@ -82,6 +82,7 @@ Timing is per sample on the machine that ran it; the scoring A30 is slower than 
 | 2026-11-10 07:45 | 0430b93 | train       | 297 | react | whisper | 44.11    | 56.37      | 42.13 | 52.43 | 71.43 | 4.612  | 12.743 | prompt v1; WER 0.1331; sft-q1b + check_refs (preset sft-q1b-refs, PR #77: TripleTrouble/lifemate-sft-q1b, Qwen3.5-4B text-only student retrained on pool after the end-of-turn fix, 356 steps), subset holdout, pho-large-ft-b; vs sft-v2 + check_refs rescored with the current scorer (42.77): +1.33 [95% CI -3.70, +6.13], better 55 / worse 49 / same 193 (no clear difference); act -1.07, ask +18.02; 2.29 calls per sample (sft-v2 2.26), none over 15 s; dev run below |
 | 2026-11-10 08:33 | bd8428a | public_test | 634 | react | whisper | 57.5     | -          | -     | -     | -     | 3.894  | 12.421 | prompt v1; Docker image check (molab runbook C1): sft-final-h at e3a659c + pho-large-ft-all beam 5 at 73bb56a, branch feat/docker-submission, libraries pinned by docker/constraints.txt (transformers 5.21.0; torch is molab's), --time-field; not submitted: identical to the 7 Nov submission (0c7152b, 57.5) on 634/634 samples (tool_calls, state_hash and ASR text), so it scores 57.5; 0 errors, over_time_limit 0, model load 67.8 s |
 | 2026-11-10 09:18 | 0430b93 | train       | 300 | react | whisper | 75.04    | 81.92      | 71.53 | 88.33 | 84.0  | 4.502  | 11.594 | prompt v1; WER 0.0832; sft-q1b + check_refs, subset dev, pho-large-ft-b; vs sft-v2 + check_refs dev rescored (68.22): +6.82 [95% CI +2.51, +11.37], better 43 / worse 18 / same 239 (WIN); act +6.73, ask +11.13; holdout + dev pooled (597): +4.09 [95% CI +1.03, +7.29]; mean 4.50 s vs 3.15 s for sft-v2 (+43%) |
+| 2026-11-10 10:24 | 0430b93 | public_test | 634 | react | whisper | 61.05    | -          | -     | -     | -     | 4.967  | 13.158 | prompt v1; sft-q1b + check_refs (preset sft-q1b-refs, Qwen3.5-4B student trained on pool, end-of-turn fix), pho-large-ft-all beam 5; leaderboard 61.05 vs 57.5 for the shipped sft-final-h (+3.55) and 57.37 for sft-v2 + check_refs (pool, +3.68); same calls as sft-final-h on 266 / 634 samples; samples with an ask 107 vs 81, empty 33 vs 42, calls 1516 vs 1499; load 11.0 s, 0 errors, 0 over the time limit, 21 samples over 10 s |
 
 ## Offline simulations
 
@@ -142,6 +143,13 @@ Status 10 Nov 2026, evening:
   [+2.51, +11.37]); pooled +4.09 [+1.03, +7.29]. It is the first retrain with a clear gain, mostly on ask (+18 holdout,
   +11 dev). Holdout holds the unseen apps, so the gain is less sure where private_test differs most. It is 43% slower
   (mean 4.5 s on molab) and a full-train retrain takes about 10 h.
+- `sft-q1b` on public_test (leaderboard): **61.05**, +3.55 over the shipped sft-final-h (57.5) and +3.68 over sft-v2 + check_refs
+  (57.37), with the same ASR. It is the best public score so far, from a pool model (dev and holdout never trained on), while
+  sft-final-h was trained on all train. Public shares only 25 of its 36 apps with train, so the gain seems to carry over to unseen
+  apps better than the holdout gate suggested. It asks more often (107 vs 81 samples) and returns fewer empty answers (33 vs
+  42). Max 13.16 s per sample on molab (sft-final-h 12.42 s); the A30 is slower, so check the time on the Test Solution run.
+  Shipping it needs `configs/shipped.json` pointed at `sft-q1b-refs` with a pinned revision, the records commit and recipe
+  of sft-q1b in `training_code/`, and a check that the image's transformers 5.21.0 loads Qwen3.5 with the end-of-turn fix.
 
 Added 10 Nov 2026 (offline, no GPU):
 
