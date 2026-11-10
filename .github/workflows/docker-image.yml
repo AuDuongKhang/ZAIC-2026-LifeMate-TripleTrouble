@@ -1,8 +1,14 @@
 # Build the solution image, smoke-test it on CPU (offline, /data read-only) and stream zac2026_TripleTrouble.tar.gz
 # to Google Drive (anyone with the link) for the portal's Test Solution. The link and MD5 go to the run summary.
-# Run it from the Actions tab (Docker image -> Run workflow) on main, or push a tag docker-<name> from any commit.
-# Secrets: HF_TOKEN (read access to the TripleTrouble repos), HF_DATASET (team data repo), RCLONE_CONFIG (rclone.conf
-# with a Google Drive remote named gdrive).
+# Run it from the Actions tab (Docker image -> Run workflow, optional label such as "final"), or push a new tag
+# docker-<name> from any commit (a tag name can be used once). Secrets: HF_TOKEN (read access to the TripleTrouble
+# repos), HF_DATASET (team data repo), RCLONE_CONFIG (rclone.conf with a Google Drive remote named gdrive).
+#
+# Several runs: runs queue (never two builds at once); each upload goes to its own Drive folder
+# zaic2026/<UTC date-time>-<commit>-r<run id>.<attempt>[-<label>]/ holding zac2026_TripleTrouble.tar.gz and info.txt,
+# so earlier links and MD5s stay valid. Nothing is deleted automatically, because one of the uploads is the submitted
+# one; delete old folders by hand (README, "Docker (final solution)"). Drive access and free space are checked before
+# the build, so an expired token or a full Drive fails in a minute instead of after the build.
 #
 # Disk: the runner has one ~72 GB disk (/mnt is the same filesystem), about 52 GB free after clean-up. Docker's
 # containerd image store keeps every layer twice (unpacked + compressed), which does not fit with 14 GB of weights,
@@ -16,20 +22,54 @@ on:
         description: Upload the archive to Google Drive
         type: boolean
         default: true
+      label:
+        description: Optional label for the Drive folder (letters, digits, . _ -), e.g. final
+        type: string
+        default: ""
   push:
     tags: ["docker-*"]
 
 permissions:
   contents: read
 
+concurrency:
+  group: docker-image
+  cancel-in-progress: false
+
 jobs:
   image:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
-      OUT_DIR: /home/runner/out   # small files only: MD5, size, link
+      OUT_DIR: /home/runner/out   # small files only: MD5, size, link, info
       ARCHIVE: zac2026_TripleTrouble.tar.gz
+      UPLOAD: ${{ github.event_name == 'push' || inputs.upload }}
+      MIN_FREE_GIB: "20"           # the archive is about 14.5 GiB
     steps:
+      - name: Check Google Drive access and free space
+        if: env.UPLOAD == 'true'
+        env:
+          RCLONE_CONF_TEXT: ${{ secrets.RCLONE_CONFIG }}
+          LABEL: ${{ inputs.label || github.ref_name }}
+        run: |
+          curl -fsSL https://rclone.org/install.sh | sudo bash >/dev/null
+          mkdir -p ~/.config/rclone
+          # a secret set from Windows PowerShell can carry a UTF-8 BOM and CRLF line ends; rclone rejects both
+          printf '%s\n' "$RCLONE_CONF_TEXT" | sed '1s/^\xEF\xBB\xBF//' | tr -d '\r' > ~/.config/rclone/rclone.conf
+          rclone listremotes | grep -qx 'gdrive:' || { echo "RCLONE_CONFIG has no remote named gdrive"; exit 1; }
+          rclone mkdir gdrive:zaic2026 || { echo "Drive refused access: rerun 'rclone config reconnect gdrive:' and update the RCLONE_CONFIG secret"; exit 1; }
+          about="$(rclone about gdrive: --json 2>/dev/null || echo '{}')"
+          echo "Drive: $about"
+          free="$(echo "$about" | jq -r '.free // empty')"
+          if [ -n "$free" ] && [ "$free" -lt $((MIN_FREE_GIB * 1024 * 1024 * 1024)) ]; then
+            echo "Drive has $(numfmt --to=iec "$free") free, below ${MIN_FREE_GIB} GiB: delete old uploads (rclone lsf gdrive:zaic2026)"
+            exit 1
+          fi
+          label="$(printf '%s' "$LABEL" | tr -c 'A-Za-z0-9._-' '-' | cut -c1-40)"
+          folder="gdrive:zaic2026/$(date -u +%Y%m%d-%H%M)-${GITHUB_SHA::7}-r${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}${label:+-$label}"
+          echo "DRIVE_FOLDER=$folder" >> "$GITHUB_ENV"
+          echo "upload folder: $folder"
+
       - name: Free disk space
         uses: jlumbroso/free-disk-space@v1.3.1
         with:
@@ -81,36 +121,22 @@ jobs:
         run: bash scripts/docker_smoke.sh "zac2026-tripletrouble:$(git rev-parse --short HEAD)" data/public_test
 
       - name: Stream the archive to Google Drive
-        if: github.event_name == 'push' || inputs.upload
-        env:
-          RCLONE_CONF_TEXT: ${{ secrets.RCLONE_CONFIG }}
+        if: env.UPLOAD == 'true'
         run: |
-          set -o pipefail
           sudo apt-get install -y --no-install-recommends pigz >/dev/null
-          curl -fsSL https://rclone.org/install.sh | sudo bash >/dev/null
-          mkdir -p ~/.config/rclone
-          # a secret set from Windows PowerShell can carry a UTF-8 BOM and CRLF line ends; rclone rejects both
-          printf '%s\n' "$RCLONE_CONF_TEXT" | sed '1s/^\xEF\xBB\xBF//' | tr -d '\r' > ~/.config/rclone/rclone.conf
-          rclone listremotes
-          tag="zac2026-tripletrouble:$(git rev-parse --short HEAD)"
-          dest="gdrive:zaic2026/$(date -u +%Y%m%d-%H%M)-$(git rev-parse --short HEAD)"
-          docker save "$tag" | pigz | rclone rcat "$dest/$ARCHIVE" --streaming-upload-cutoff 0 \
-            --drive-chunk-size 256M --stats 60s --stats-one-line -v
-          # the MD5 Drive computed on the stored file: exactly what the organisers download
-          rclone md5sum "$dest/$ARCHIVE" | tee "$OUT_DIR/$ARCHIVE.md5"
-          rclone size --json "$dest/$ARCHIVE" | jq -r '.bytes' > "$OUT_DIR/bytes.txt"
-          rclone link "$dest/$ARCHIVE" > "$OUT_DIR/link.txt"
-          echo "Drive folder: $dest"
+          bash scripts/drive_upload.sh "zac2026-tripletrouble:$(git rev-parse --short HEAD)" "$DRIVE_FOLDER"
 
       - name: Summary
         if: always()
         run: |
           {
-            echo "## Docker image $(git rev-parse --short HEAD)"
+            echo "## Docker image $(git rev-parse --short HEAD 2>/dev/null || echo "${GITHUB_SHA::7}")"
             echo
+            if [ -f "$OUT_DIR/folder.txt" ]; then echo "- Drive folder: \`$(cat "$OUT_DIR/folder.txt")\`"; fi
             if [ -f "$OUT_DIR/bytes.txt" ]; then echo "- size: $(numfmt --to=iec "$(cat "$OUT_DIR/bytes.txt")")"; fi
             if [ -f "$OUT_DIR/$ARCHIVE.md5" ]; then echo "- MD5: \`$(cut -d' ' -f1 "$OUT_DIR/$ARCHIVE.md5")\`"; fi
             if [ -f "$OUT_DIR/link.txt" ]; then echo "- Google Drive link: $(cat "$OUT_DIR/link.txt")"; fi
+            if [ "$UPLOAD" != "true" ]; then echo "- not uploaded (upload = false)"; fi
             echo
             echo "Portal: Test Solution -> paste the link and the MD5 -> Submit Test (1 run per day, until 15 Nov 23:59 GMT+7)."
           } >> "$GITHUB_STEP_SUMMARY"

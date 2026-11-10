@@ -33,6 +33,14 @@ def test_build_script_writes_the_md5():
     assert "zac2026_TripleTrouble.tar.gz" in script and "md5sum" in script
 
 
+def test_workflow_never_reuses_a_drive_folder_and_queues_runs():
+    wf = (REPO_ROOT / ".github" / "workflows" / "docker-image.yml").read_text(encoding="utf-8")
+    assert "cancel-in-progress: false" in wf  # a second run waits instead of killing an upload
+    assert "${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}" in wf  # one folder per run and attempt
+    upload = (REPO_ROOT / "scripts" / "drive_upload.sh").read_text(encoding="utf-8")
+    assert "refusing to upload" in upload and "rclone md5sum" in upload
+
+
 def test_dockerignore_keeps_the_data_package_out():
     ignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
     assert "data/*" in ignore and "!data/train/train.jsonl" in ignore and "context" in ignore

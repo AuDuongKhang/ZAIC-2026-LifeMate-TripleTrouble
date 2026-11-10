@@ -136,6 +136,24 @@ build fails unless torch has kernels for both the A30 (sm_80) and the RTX 5090 (
 workflow *Docker image* builds it, runs the smoke check and uploads the archive to Google Drive for the portal's *Test
 Solution* (secrets `HF_TOKEN`, `HF_DATASET`, `RCLONE_CONFIG`).
 
+Running the workflow several times:
+
+- Start it from the Actions tab (*Run workflow*, optional label such as `final`) or push a new tag `docker-<name>`
+  (each tag name works once). Runs queue; two builds never run at the same time.
+- Every upload gets its own Drive folder, `zaic2026/<UTC date-time>-<commit>-r<run id>.<attempt>[-<label>]/`, holding
+  `zac2026_TripleTrouble.tar.gz` (the name the guide asks for) and `info.txt` (MD5, size, link, commit, run). Earlier
+  links and MD5s never change, and an existing folder is never overwritten (`scripts/drive_upload.sh` refuses).
+- Drive access and free space (20 GiB minimum) are checked before the build. A run fails in about a minute when the
+  rclone token has expired: run `rclone config reconnect gdrive:` and set the `RCLONE_CONFIG` secret again.
+- Nothing is deleted automatically: the organisers download the **submitted** link after the deadline, so that folder
+  must stay. Clean up by hand, keeping the submitted folder, then empty the Drive trash (deleted files still count):
+
+```bash
+rclone lsf gdrive:zaic2026                                  # one folder per upload
+rclone cat gdrive:zaic2026/<folder>/info.txt                # which commit, MD5 and link it is
+rclone purge gdrive:zaic2026/<old folder> && rclone cleanup gdrive:
+```
+
 ## Contributing
 
 Never commit to `main` directly: molab runs it, so it must always work. Branch off `main` (`feat/…`, `fix/…`,
