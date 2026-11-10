@@ -1,0 +1,38 @@
+"""Text checks of the image recipe against the organiser Docker guide."""
+import re
+
+from lifemate.data import REPO_ROOT
+
+DOCKERFILE = (REPO_ROOT / "Dockerfile").read_text(encoding="utf-8")
+
+
+def _version(text: str) -> tuple[int, ...]:
+    return tuple(int(x) for x in text.split("."))
+
+
+def test_base_image_has_cuda_at_most_13_2_and_torch_for_the_rtx_5090():
+    m = re.search(r"^ARG BASE=pytorch/pytorch:(\d+\.\d+\.\d+)-cuda(\d+\.\d+)-", DOCKERFILE, re.M)
+    assert m, "ARG BASE must name a pytorch/pytorch:<torch>-cuda<x.y>-... image"
+    torch_v, cuda_v = _version(m.group(1)), _version(m.group(2))
+    assert torch_v >= (2, 7, 0)  # first release with sm_120 (RTX 5090) kernels
+    assert (12, 8) <= cuda_v <= (13, 2)  # organiser driver 595.58.03 runs CUDA <= 13.2
+    assert "'sm_80' in a and 'sm_120' in a" in DOCKERFILE  # build fails without A30 and RTX 5090 kernels
+
+
+def test_image_uses_the_code_layout():
+    assert re.search(r"^WORKDIR /code$", DOCKERFILE, re.M)
+    for name in ("docker/predict.sh", "docker/start_jupyter.sh", "docker/predict_notebook.ipynb",
+                 "docker/training_code"):
+        assert name in DOCKERFILE
+    assert "jupyterlab" in DOCKERFILE and "nbconvert" in DOCKERFILE
+    assert "HF_HUB_OFFLINE=1" in DOCKERFILE
+
+
+def test_build_script_writes_the_md5():
+    script = (REPO_ROOT / "scripts" / "docker_build.sh").read_text(encoding="utf-8")
+    assert "zac2026_TripleTrouble.tar.gz" in script and "md5sum" in script
+
+
+def test_dockerignore_keeps_the_data_package_out():
+    ignore = (REPO_ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    assert "data/*" in ignore and "!data/train/train.jsonl" in ignore and "context" in ignore

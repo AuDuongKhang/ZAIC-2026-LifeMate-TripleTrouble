@@ -117,20 +117,24 @@ stronger than the scoring A30 (24 GB) while its CPU is weaker (4 vs 16 cores), s
 
 ## Docker (final solution)
 
-The image runs the shipped system offline on one split. `configs/shipped.json` names the agent and ASR presets,
-extra kwargs and the pinned model revisions; the build downloads exactly those weights and the entry
-(`lifemate.docker_entry`) loads them with the Hugging Face offline flags set.
+The image follows the organiser Docker guide (`context/Docker_Guide_ZAC2026_LifeMate.pdf`, not in git): code in
+`/code` with `predict.sh`, `start_jupyter.sh`, `predict_notebook.ipynb` and `training_code/README.md`; the organisers
+mount the folder that holds the split folder at `/data` (`/data/private_test/`) and read `/result/submission.jsonl`
+(the notebook writes `/result/jupyter_submission.jsonl`). Each line has `id`, `tool_calls`, `state_hash` and `time`
+(ms). `configs/shipped.json` names the agent and ASR presets, extra kwargs and the pinned model revisions; the build
+downloads exactly those weights and `lifemate.docker_entry` loads them with the Hugging Face offline flags set.
 
 ```bash
-HF_TOKEN=... bash scripts/docker_build.sh            # BuildKit secret; writes lifemate_<sha>.tar.gz + .sha256
-docker run --rm --gpus all --network none \
-    -v $PWD/data/public_test:/data:ro -v $PWD/out:/app/result lifemate:<sha>   # -> out/submission.jsonl, out/meta.json
+HF_TOKEN=... bash scripts/docker_build.sh     # BuildKit secret; writes zac2026_TripleTrouble.tar.gz + .md5
+docker run --rm --gpus '"device=0"' --network none -v $PWD/<folder holding public_test/>:/data:ro     -v $PWD/out:/result zac2026-tripletrouble:<sha> /bin/bash /code/predict.sh    # -> out/submission.jsonl
+bash scripts/docker_smoke.sh zac2026-tripletrouble:<sha> data      # CPU check: offline models, predict.sh, notebook
 ```
 
-`/data` is the split folder itself; the split name comes from its `<split>_tools_catalog.json`. The image carries
-`data/train/train.jsonl` and the train catalog for the few-shot bank, never audio or environments. The entry exits
-with an error if the submission does not have one line per sample. Pass `--build-arg BASE=pytorch/pytorch:<tag>` to
-match molab's torch version (CUDA 12.x).
+The base image (`pytorch/pytorch:2.15.0-cuda13.2-cudnn9-runtime`) keeps CUDA at 13.2, the organisers' limit, and the
+build fails unless torch has kernels for both the A30 (sm_80) and the RTX 5090 (sm_120). The image carries
+`data/train/train.jsonl` and the train catalog for the few-shot bank, never audio or environments. The GitHub Actions
+workflow *Docker image* builds it, runs the smoke check and uploads the archive to Google Drive for the portal's *Test
+Solution* (secrets `HF_TOKEN`, `HF_DATASET`, `RCLONE_CONFIG`).
 
 ## Contributing
 
@@ -148,7 +152,7 @@ Fill in the leaderboard score by hand for public_test submissions, and say what 
 ```text
 src/lifemate/
   infer.py        runner: per sample ASR -> Task -> agent.run(task, env); writes the run folder
-  docker_entry.py Docker entry: offline run of configs/shipped.json on the split mounted at /data
+  docker_entry.py Docker entry: offline run of configs/shipped.json on the split mounted under /data
   evaluate.py     local metric on train, per-group breakdown, RESULTS.md row
   scoring.py      re-implementation of the official metric (assumptions in its docstring)
   task.py         Task: what an agent sees (request, history, context, tool specs)
