@@ -136,6 +136,9 @@ def main(argv: list[str] | None = None) -> Path:
     p = load_pipeline(args.split, args.data_root, args.agent_name, agent_kw, args.asr_name, asr_kw)
     agent = p.agent
     load_s = time.perf_counter() - t_load
+    # the run record keeps split= but not data_root= (a machine path, needed only to build the agent)
+    agent_kw = {k: v for k, v in with_split(AGENTS[args.agent_name], agent_kw, args.split, args.data_root).items()
+                if k != "data_root"}
     seed_everything(args.seed)
 
     out = args.out or REPO_ROOT / "runs" / (

@@ -28,8 +28,9 @@ RUN pip install --no-deps -e .
 
 # Fine-tuned weights at the pinned revisions (no base model); the token is a build secret, never stored in a layer.
 RUN --mount=type=secret,id=hf_token \
-    HF_TOKEN="$(cat /run/secrets/hf_token 2>/dev/null)" \
-    python -c "from lifemate.docker_entry import fetch_models, load_config; fetch_models(load_config())"
+    HF_TOKEN="$(cat /run/secrets/hf_token 2>/dev/null)" HF_XET_CHUNK_CACHE_SIZE_BYTES=0 \
+    python -c "from lifemate.docker_entry import fetch_models, load_config; fetch_models(load_config())" \
+    && rm -rf /models/xet && du -sh /models/*
 
 # Few-shot bank: train requests and gold calls (not audio, not environments). Training code and docs ship too.
 COPY data/train/train.jsonl data/train/train_tools_catalog.json ./data/train/

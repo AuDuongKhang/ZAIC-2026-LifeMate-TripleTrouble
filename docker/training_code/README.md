@@ -53,15 +53,21 @@ python -m lifemate.train_asr --model vinai/PhoWhisper-large --out asr_runs/pho-l
 python -m lifemate.transcribe --split train --asr whisper --asr-kw model=vinai/PhoWhisper-large \
     --name pho-large-fp16                                  # no --subset: every train clip
 
-# 3. SFT records (branch feat/fewshot-unseen, which has --hide-gold-apps): 4,629 records
-python -m lifemate.sft.records --name gold-all-m1-h50-asr-pho-large-fp16 --subset all \
-    --text gold --text cache:pho-large-fp16 --mask 1 --hide-gold-apps 0.5
+# 3. SFT records: 4,629 records (see the note below on hiding gold apps)
+python -m lifemate.sft.records --name gold-all-m1-lao50-asr-pho-large-fp16 --subset all \
+    --text gold --text cache:pho-large-fp16 --mask 1 --leave-app-out 0.5
 
 # 4. LoRA SFT (r 16, alpha 32, dropout 0.05, lr 1e-4, warmup 3%, micro batch 1, grad accum 16, 2 epochs = 579 steps,
 #    max length 12,288; about 3 h), then merge the adapter into the base model
-python -m lifemate.sft.train --records gold-all-m1-h50-asr-pho-large-fp16 --out checkpoints/sft-final-h2
+python -m lifemate.sft.train --records gold-all-m1-lao50-asr-pho-large-fp16 --out checkpoints/sft-final-h2
 python -m lifemate.sft.merge --adapter checkpoints/sft-final-h2/last --out merged/sft-final-h
 ```
+
+**Hiding gold apps.** The shipped model's records (`gold-all-m1-h50-asr-pho-large-fp16`) were rendered at repo commit
+`0c7152b` with `--hide-gold-apps 0.5`, which picks half of the *samples* and hides their gold apps from the few-shot
+examples in every copy of the sample. The code in this image replaced that flag with `--leave-app-out 0.5`, which draws
+each *record* separately. Step 3 above uses the flag this code has; for the exact records, run step 3 from commit
+`0c7152b` with `--hide-gold-apps 0.5` instead of `--leave-app-out 0.5`.
 
 Inference: `bash /code/predict.sh` (input under `/data`, output `/result/submission.jsonl`) or
 `/code/predict_notebook.ipynb` (output `/result/jupyter_submission.jsonl`).

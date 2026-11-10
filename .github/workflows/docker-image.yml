@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
-      OUT_DIR: /mnt/out
+      OUT_DIR: /home/runner/out   # the archive on the root disk; Docker's own storage moves to /mnt below
     steps:
       - name: Free disk space
         uses: jlumbroso/free-disk-space@v1.3.1
@@ -35,6 +35,17 @@ jobs:
           large-packages: true
           docker-images: true
           swap-storage: true
+
+      - name: Move Docker storage to /mnt
+        run: |
+          sudo systemctl stop docker docker.socket
+          conf=/etc/docker/daemon.json
+          [ -s "$conf" ] || echo '{}' | sudo tee "$conf" >/dev/null
+          sudo jq '. + {"data-root": "/mnt/docker"}' "$conf" | sudo tee "$conf.new" >/dev/null && sudo mv "$conf.new" "$conf"
+          sudo mkdir -p /mnt/docker
+          sudo systemctl start docker
+          docker info --format 'Docker root: {{.DockerRootDir}}'
+          df -h / /mnt
 
       - uses: actions/checkout@v4
 
@@ -56,7 +67,7 @@ jobs:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
           sudo apt-get install -y --no-install-recommends pigz
-          sudo mkdir -p "$OUT_DIR" && sudo chown "$USER" "$OUT_DIR"
+          mkdir -p "$OUT_DIR"
           df -h / /mnt
           bash scripts/docker_build.sh
           df -h / /mnt

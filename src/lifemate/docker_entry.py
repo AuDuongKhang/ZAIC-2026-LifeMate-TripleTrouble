@@ -119,8 +119,10 @@ def fetch_models(config: dict) -> None:
             huggingface_hub.snapshot_download(repo_id=model, revision=revision, ignore_patterns=SKIP_FILES)
 
 
-def check_models(config: dict) -> None:
-    """Exit non-zero unless every shipped model is in the HF cache (meant to run with the network off)."""
+def check_models(config: dict, load: bool = True) -> None:
+    """Exit non-zero unless every shipped model is in the HF cache (meant to run with the network off). With `load`,
+    also read each model's config and tokenizer (agent) or processor (ASR) by repo id and revision, as inference
+    does, so a library or offline-cache problem shows up without a GPU."""
     import huggingface_hub
     from huggingface_hub.errors import LocalEntryNotFoundError
 
@@ -134,6 +136,17 @@ def check_models(config: dict) -> None:
         except LocalEntryNotFoundError as e:
             raise SystemExit(f"{kind} model {model}@{revision} is not in the cache: {e}")
         print(f"{kind}: {model}@{revision} -> {path}", flush=True)
+        # snapshot_download(local_files_only=True) also returns a snapshot folder that holds only part of the repo
+        if not (Path(path) / "config.json").is_file() or not any(Path(path).glob("*.safetensors")):
+            raise SystemExit(f"{kind} model {model}@{revision}: incomplete snapshot in {path} "
+                             "(no config.json or *.safetensors)")
+        if load:
+            from transformers import AutoConfig, AutoProcessor, AutoTokenizer
+
+            cfg = AutoConfig.from_pretrained(model, revision=revision)
+            (AutoTokenizer if kind == "agent" else AutoProcessor).from_pretrained(model, revision=revision)
+            print(f"  loaded config ({cfg.model_type}) and {'tokenizer' if kind == 'agent' else 'processor'}",
+                  flush=True)
 
 
 def _kw_flags(flag: str, kw: dict) -> list[str]:

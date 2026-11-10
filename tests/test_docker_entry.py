@@ -187,6 +187,16 @@ def test_check_models_fails_when_a_model_is_not_cached(monkeypatch):
     assert e.value.code not in (0, None)
 
 
+def test_check_models_fails_on_a_partial_snapshot(tmp_path, monkeypatch):
+    import huggingface_hub
+
+    (tmp_path / "run_config.json").write_text("{}", encoding="utf-8")  # cached, but no config.json or weights
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", lambda repo_id, **kw: str(tmp_path))
+    with pytest.raises(SystemExit, match="incomplete snapshot"):
+        docker_entry.check_models({"agent_preset": "sft-final", "asr_preset": "none", "agent_kw": {}, "asr_kw": {},
+                                   "hf_model_owner": "team"}, load=False)
+
+
 def test_smoke_config_names_known_presets():
     from lifemate.presets import resolve
 
