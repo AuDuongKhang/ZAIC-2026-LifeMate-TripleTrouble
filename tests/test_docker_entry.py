@@ -92,6 +92,11 @@ def test_entry_lays_out_the_split_and_the_train_bank(tmp_path, monkeypatch):
     assert argv[argv.index("--agent-preset") + 1] == "empty" and argv[argv.index("--asr-preset") + 1] == "none"
 
 
+def test_entry_asks_infer_for_the_time_field(tmp_path, monkeypatch):
+    record, _ = _run(tmp_path, monkeypatch, ['{"id": "p0", "tool_calls": [], "state_hash": "h", "time": 3}\n'])
+    assert "--time-field" in record["argv"]
+
+
 def test_entry_passes_config_kwargs_as_json(tmp_path, monkeypatch):
     """A revision such as "1e5" must stay a string: infer parses KEY=VALUE values as JSON."""
     record, _ = _run(tmp_path, monkeypatch, ['{"id": "p0", "tool_calls": [], "state_hash": "h"}\n'])

@@ -110,6 +110,9 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--subset", choices=SUBSETS, default=None, help="train only: a part of configs/splits.json")
     ap.add_argument("--out", type=Path, default=None, help="run folder (default runs/<time>_<split>_<agent>_<asr>)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--time-field", action="store_true",
+                    help="keep each sample's `time` (ms) in submission.jsonl, as the Docker guide asks; off by default "
+                         "so that two identical runs give byte-identical files")
     ap.add_argument("--agent-kw", action="append", metavar="KEY=VALUE", help="agent constructor option (repeatable)")
     ap.add_argument("--asr-kw", action="append", metavar="KEY=VALUE", help="ASR constructor option (repeatable)")
     args = ap.parse_args(argv)
@@ -152,6 +155,8 @@ def main(argv: list[str] | None = None) -> Path:
             elapsed, error = trace["seconds"], trace["error"]
             errors += bool(error)
             times.append(elapsed)
+            if not args.time_field:
+                line.pop("time")
             fsub.write(json.dumps(line, ensure_ascii=False) + "\n")
             ftr.write(json.dumps(trace, ensure_ascii=False) + "\n")
             if error or elapsed > TIME_LIMIT_S or i % 10 == 0 or i == len(samples):

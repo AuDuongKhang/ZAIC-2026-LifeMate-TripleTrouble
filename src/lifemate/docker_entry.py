@@ -178,7 +178,7 @@ def main(argv: list[str] | None = None) -> Path | None:
 
     from . import infer
 
-    run = infer.main(["--split", split, "--data-root", str(root), "--out", str(args.work / "run"),
+    run = infer.main(["--split", split, "--data-root", str(root), "--out", str(args.work / "run"), "--time-field",
                       "--agent-preset", config["agent_preset"], "--asr-preset", config["asr_preset"],
                       *_kw_flags("--agent-kw", config.get("agent_kw", {})),
                       *_kw_flags("--asr-kw", config.get("asr_kw", {}))])

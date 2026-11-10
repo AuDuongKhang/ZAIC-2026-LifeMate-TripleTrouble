@@ -59,6 +59,20 @@ def test_run_sample_keeps_going_when_the_agent_raises():
     assert "boom" in trace["error"]
 
 
+@pytest.mark.parametrize("flag, has_time", [([], False), (["--time-field"], True)])
+def test_infer_writes_time_only_when_asked(tmp_path, flag, has_time):
+    from lifemate.data import default_data_root
+
+    if not (default_data_root() / "train" / "train.jsonl").is_file():
+        pytest.skip("needs data/train")
+    import json
+
+    out = infer.main(["--split", "train", "--agent", "oracle", "--asr", "gold", "--limit", "2",
+                      "--out", str(tmp_path / "r"), *flag])
+    lines = [json.loads(x) for x in (out / "submission.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert all(("time" in x) == has_time for x in lines)
+
+
 def test_seed_everything_sets_cudnn_flags():
     torch = pytest.importorskip("torch")
     from lifemate.utils import seed_everything
