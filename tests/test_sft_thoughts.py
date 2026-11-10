@@ -153,3 +153,8 @@ def test_out_of_scope_writes_one_step_and_calls_nothing():
     env = FakeEnv()
     row, _ = write_sample(EMPTY_SAMPLE, CATALOG, env, FakeLLM(["Người dùng tự huỷ yêu cầu."]), "t", "r", Counter())
     assert row["steps"] == [{"call": None, "thought": "Người dùng tự huỷ yêu cầu."}] and env.calls == 0
+
+
+def test_clean_completion_cuts_at_the_end_of_turn():
+    from lifemate.sft.thoughts import clean_completion
+    assert clean_completion("Tìm danh bạ trước.<|im_end|>\n<|im_start|>user\nlượt bịa", {"<|im_end|>"}) == "Tìm danh bạ trước."

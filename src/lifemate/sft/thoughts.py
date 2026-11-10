@@ -202,9 +202,10 @@ def write_sample(sample: dict, catalog: dict, env, llm, teacher: str, revision: 
 
 
 def clean_completion(text: str, stop_strings: set[str]) -> str:
-    """The teacher's reply without end-of-turn markers and without any <think> block."""
+    """The teacher's reply up to the first end-of-turn marker (what follows is a made-up next turn) and without any
+    <think> block."""
     for s in stop_strings:
-        text = text.replace(s, "")
+        text = text.split(s, 1)[0]
     text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     return text.split("</think>")[-1].strip()
 
@@ -238,6 +239,9 @@ class Teacher:
             self.model = getattr(transformers, other).from_pretrained(model, **kwargs)
         self.model = self.model.to("cuda").eval()
         self.stop_strings = {t for t in (self.tokenizer.eos_token, self.tokenizer.pad_token, "<|im_end|>", "<|endoftext|>") if t}
+        from ..agents.llm import stop_token_ids
+
+        self.eos_token_id = stop_token_ids(self.tokenizer, self.model.generation_config)
         seed_everything(0)
 
     def generate(self, messages: list[dict]) -> str:
@@ -245,7 +249,7 @@ class Teacher:
                                                     return_tensors="pt", return_dict=True).to(self.model.device)
         with self.torch.inference_mode():
             out = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens, do_sample=False, num_beams=1,
-                                      temperature=None, top_p=None, top_k=None)
+                                      temperature=None, top_p=None, top_k=None, eos_token_id=self.eos_token_id)
         text = self.tokenizer.decode(out[0, inputs["input_ids"].shape[1]:], skip_special_tokens=False)
         return clean_completion(text, self.stop_strings)
 

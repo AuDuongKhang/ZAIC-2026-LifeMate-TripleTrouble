@@ -267,6 +267,10 @@ def test_hf_llm_loads_tokenizer_and_weights_at_the_revision(monkeypatch):
 
     class Loaded:
         eos_token, pad_token = "<|im_end|>", None
+        generation_config = types.SimpleNamespace(eos_token_id=None)
+
+        def get_vocab(self):
+            return {"<|im_end|>": 3}
 
         def to(self, device):
             return self
@@ -283,7 +287,8 @@ def test_hf_llm_loads_tokenizer_and_weights_at_the_revision(monkeypatch):
     monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(bfloat16="bf16"))
     monkeypatch.setitem(sys.modules, "transformers", types.SimpleNamespace(
         AutoTokenizer=loader("tok"), AutoModelForCausalLM=loader("model")))
-    HFChatLLM("team/m", revision="abc123")
+    llm = HFChatLLM("team/m", revision="abc123")
+    assert llm.eos_token_id == [3]
     assert [(k, n, kw.get("revision")) for k, n, kw in calls] == [("tok", "team/m", "abc123"),
                                                                    ("model", "team/m", "abc123")]
 
