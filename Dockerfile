@@ -11,6 +11,7 @@ FROM ${BASE}
 ENV PYTHONUTF8=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
     DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Ho_Chi_Minh \
     HF_HOME=/models
