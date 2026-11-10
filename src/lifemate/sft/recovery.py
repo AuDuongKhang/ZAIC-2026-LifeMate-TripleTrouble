@@ -61,10 +61,12 @@ def main(argv: list[str] | None = None) -> Path:
     from ..asr.base import GoldTranscriptASR
     from ..splits import load_splits
     from .replay import replay
+    from .synth import uses_holdout_app
 
     samples = {s["id"]: s for s in load_samples(args.data_root, "train")}
     catalog = load_catalog(args.data_root, "train")
-    pool = set(load_splits()["pool"])
+    splits = load_splits()
+    pool, held_out = set(splits["pool"]), set(splits["holdout_apps"])
     traces = [json.loads(line) for line in open(args.run / "trace.jsonl", encoding="utf-8") if line.strip()]
     outside = sorted(t["id"] for t in traces if t["id"] not in pool)
     if outside:
@@ -80,6 +82,9 @@ def main(argv: list[str] | None = None) -> Path:
             why["on path or no leading read"] += 1
             continue
         candidates += 1
+        if uses_holdout_app(sample["prefix_calls"], held_out):  # pool samples have holdout apps installed too
+            why["prefix calls a holdout app"] += 1
+            continue
         task = build_task(sample, asr, catalog, args.data_root, "train")
         env = zaic_tools.ToolEnv("train", base["id"], root=args.data_root)
         record = replay(sample, task, env, fresh_env=lambda base=base: zaic_tools.ToolEnv("train", base["id"], root=args.data_root))

@@ -204,3 +204,82 @@ def test_eval_loss_ignores_the_weights(tiny, tmp_path):
                 "--model", str(tiny / "model"), "--epochs", "1", "--grad-accum", "2", "--eval-every", "1",
                 "--lr", "0", "--max-steps", "1"])
     assert _log(a)[0]["eval_loss"] == _log(b)[0]["eval_loss"]  # lr 0: same model, so the same unweighted eval loss
+
+
+def _teacher(tiny):
+    return str(tiny / "model")
+
+
+def test_kd_run_logs_both_terms_and_keeps_the_eval_loss_plain(tiny, tmp_path):
+    out = tmp_path / "kd"
+    _train(tiny, out, "--kd-teachers", _teacher(tiny))
+    rows = _log(out)
+    assert all("kd" in r for r in rows)
+    assert rows[-1]["eval_loss"] > 0
+    assert (out / "kd_report.json").exists()
+    assert json.loads((out / "kd_report.json").read_text(encoding="utf-8"))["positions"] > 0
+
+
+def test_no_teachers_keeps_the_log_free_of_kd(tiny, tmp_path):
+    out = tmp_path / "plain"
+    _train(tiny, out, "--max-steps", "1")
+    assert "kd" not in _log(out)[0]
+    assert not (out / "kd_report.json").exists()
+
+
+def test_alpha_zero_gives_the_loss_of_a_plain_run(tiny, tmp_path):
+    plain, zero = tmp_path / "plain", tmp_path / "zero"
+    _train(tiny, plain)
+    _train(tiny, zero, "--kd-teachers", _teacher(tiny), "--kd-alpha", "0")
+    assert [r["loss"] for r in _log(plain)] == pytest.approx([r["loss"] for r in _log(zero)], rel=1e-4)
+
+
+def test_kd_resume_matches_an_uninterrupted_run(tiny, tmp_path):
+    full, part = tmp_path / "full", tmp_path / "part"
+    kd = ("--kd-teachers", _teacher(tiny))
+    _train(tiny, full, *kd)
+    _train(tiny, part, *kd, "--max-steps", "2")
+    _train(tiny, part, *kd, "--resume")
+    assert [r["loss"] for r in _log(full)] == pytest.approx([r["loss"] for r in _log(part)], rel=1e-4)
+    assert [r["kd"] for r in _log(full)] == pytest.approx([r["kd"] for r in _log(part)], rel=1e-3, abs=1e-5)
+
+
+def test_report_only_stops_before_training(tiny, tmp_path):
+    out = tmp_path / "report"
+    _train(tiny, out, "--kd-teachers", _teacher(tiny), "--kd-report-only")
+    assert (out / "kd_report.json").exists()
+    assert not (out / "last").exists() and not (out / "train_log.jsonl").exists()
+
+
+def test_resume_refuses_changed_kd_args(tiny, tmp_path):
+    out = tmp_path / "kd"
+    _train(tiny, out, "--kd-teachers", _teacher(tiny), "--max-steps", "1")
+    with pytest.raises(SystemExit, match="kd-alpha"):
+        _train(tiny, out, "--kd-teachers", _teacher(tiny), "--kd-alpha", "0.2", "--resume")
+
+
+def test_teacher_with_another_vocabulary_is_refused(tiny, tmp_path):
+    other = tmp_path / "other"
+    tok = transformers.AutoTokenizer.from_pretrained(tiny / "model")
+    tok.add_tokens(["<not_in_the_student>"])
+    tok.save_pretrained(other)
+    with pytest.raises(SystemExit, match="vocabulary"):
+        _train(tiny, tmp_path / "kd", "--kd-teachers", str(other))
+
+
+def test_lora_targets_option_limits_the_adapter(tiny, tmp_path):
+    out = tmp_path / "attn"
+    _train(tiny, out, "--max-steps", "1", "--lora-targets", "q_proj,v_proj")
+    config = json.loads((out / "last" / "adapter_config.json").read_text(encoding="utf-8"))
+    assert set(config["target_modules"]) == {"q_proj", "v_proj"}
+
+
+def test_distillation_and_decision_weight_work_together(tiny, tmp_path):
+    """Both options change the training loss; the logged loss and the eval loss stay plain, and kd is logged."""
+    both, kd_only = tmp_path / "both", tmp_path / "kd"
+    _train(tiny, both, "--max-steps", "2", "--kd-teachers", _teacher(tiny), "--decision-weight", "3")
+    _train(tiny, kd_only, "--max-steps", "2", "--kd-teachers", _teacher(tiny))
+    a, b = _log(both), _log(kd_only)
+    assert all("kd" in r for r in a) and "eval_loss" in a[1]
+    assert a[0]["loss"] == pytest.approx(b[0]["loss"], rel=1e-6)  # same start, the logged loss is the plain one
+    assert a[0]["grad_norm"] != pytest.approx(b[0]["grad_norm"], rel=1e-3)  # but the gradient weights the tokens

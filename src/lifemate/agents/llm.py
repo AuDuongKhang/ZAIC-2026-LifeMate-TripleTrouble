@@ -16,17 +16,30 @@ class ChatLLM(Protocol):
 
 
 def finish_text(text: str, stop_strings: set[str], open_think: bool) -> str:
-    """The completion as the agent should read it: the stop strings removed; when it holds `</think>`, only what follows
+    """The completion as the agent should read it: cut at the first stop string (everything after the end of the turn is
+    a made-up next turn, written when generate() did not stop there); when it holds `</think>`, only what follows
     the last one (a call written inside the thinking is a draft and must never reach env.call); and nothing at all when
     a thinking block was never closed, because the token limit cut it off: one the prompt opened (open_think) or one the
     model opened itself (the completion starts with <think>)."""
     for stop in stop_strings:
-        text = text.replace(stop, "")
+        text = text.split(stop, 1)[0]
     if "</think>" in text:
         text = text.rsplit("</think>", 1)[1]
     elif open_think or text.lstrip().startswith("<think>"):  # a model that opens the block itself and is cut off too
         return ""
     return text.strip()
+
+
+def stop_token_ids(tokenizer, generation_config) -> list[int]:
+    """Token ids that end a completion: those of the model's generation config plus <|im_end|> and the tokenizer's eos
+    token when the vocabulary has them. A converted or merged checkpoint can carry a config that stops only at
+    <|endoftext|> (or nowhere), and then generate() writes made-up turns after the end of the turn until max_new_tokens.
+    For a model that already stops at both, the list is the one it had."""
+    configured = getattr(generation_config, "eos_token_id", None)
+    ids = set([configured] if isinstance(configured, int) else configured or [])
+    vocab = tokenizer.get_vocab()
+    ids |= {vocab[t] for t in ("<|im_end|>", tokenizer.eos_token) if t and t in vocab}
+    return sorted(ids)
 
 
 def load_causal_lm(model: str, dtype, revision: str | None = None):
@@ -63,6 +76,7 @@ class HFChatLLM:
         self.model.eval()
         # Strings to cut from the completion: end-of-turn markers, not the <tool_call> markup.
         self.stop_strings = {t for t in (self.tokenizer.eos_token, self.tokenizer.pad_token, "<|im_end|>", "<|endoftext|>") if t}
+        self.eos_token_id = stop_token_ids(self.tokenizer, self.model.generation_config)
 
     def _encode(self, messages: list[dict], tools: list[dict]):
         return self.tokenizer.apply_chat_template(messages, tools=tools or None, add_generation_prompt=True,
@@ -76,7 +90,8 @@ class HFChatLLM:
         inputs = self._encode(messages, tools).to(self.model.device)
         with self.torch.inference_mode():
             out = self.model.generate(**inputs, max_new_tokens=self.max_new_tokens, do_sample=False, num_beams=self.num_beams,
-                                      temperature=None, top_p=None, top_k=None, max_time=max_time)
+                                      temperature=None, top_p=None, top_k=None, max_time=max_time,
+                                      eos_token_id=self.eos_token_id)
         prompt_len = inputs["input_ids"].shape[1]
         tail = self.tokenizer.decode(inputs["input_ids"][0, -8:], skip_special_tokens=False)
         open_think = tail.endswith("<think>\n")  # the prompt opened a thinking block the output has to close
