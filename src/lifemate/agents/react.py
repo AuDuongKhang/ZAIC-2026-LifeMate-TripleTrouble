@@ -2,6 +2,7 @@
 before env.call (rejected calls are fed back, never sent), results go back into the conversation."""
 from __future__ import annotations
 
+import dataclasses
 import json
 import time
 from collections import Counter
@@ -13,14 +14,15 @@ from ..task import Task
 from .ask_guard import fold
 from .base import Agent
 from .date_fix import fix_calls
-from .id_fix import entity_names, fix_calls_ids
 from .fewshot import ExampleBank, gold_apps, render_examples
+from .id_fix import entity_names, fix_calls_ids
 from .llm import ChatLLM, HFChatLLM
 from .parsing import BLOCK, parse_tool_calls
 from .prompting import build_messages, system_message, tool_schema
 from .prompts import DEFAULT_PROMPT, FINAL_TEXT, REFUSAL_TEXT
 from .refs import scalar_strings, unseen_refs
 from .refusal import matching_tools
+from .spoken import respell_emails
 
 EMPTY_HINT = ("\nNo results. Try once more with other values: another date (up to 7 days away), fewer optional filters "
               "or a shorter query. If that also finds nothing, reply in one short sentence without calling any tool.")
@@ -81,6 +83,13 @@ def is_empty_result(result) -> bool:
     return bool(lists) and not any(lists)
 
 
+def _respell_user_turn(turn: dict) -> dict:
+    """A user turn with its ASR text through respell_emails; any other turn as it is."""
+    if turn.get("role") != "user" or not isinstance(turn.get("text"), str):
+        return turn
+    return {**turn, "text": respell_emails(turn["text"])}
+
+
 class ReActAgent(Agent):
     name = "react"
 
@@ -93,7 +102,8 @@ class ReActAgent(Agent):
                  refusal_check: bool = False, refusal_min_hits: int = 1,
                  leak_guard: bool = False, vote_prompts: int = 0, vote_apply: bool = True,
                  date_fix: bool = False, analog_weight: float = 0.0, max_new_tokens: int = 384, num_beams: int = 1,
-                 leave_gold_apps_out: bool = False, group_examples: int = 0, id_fix: bool = False):
+                 leave_gold_apps_out: bool = False, group_examples: int = 0, id_fix: bool = False,
+                 spoken_email: bool = False):
         """time_budget_s counts from task.started_at (sample start, ASR included) when the runner sets it.
         A step only starts with at least min_step_s left, and its generation is capped at the time remaining.
         check_refs holds back calls whose x-ref ids were never seen in a tool result (off by default: with it the
@@ -126,7 +136,10 @@ class ReActAgent(Agent):
         leave_gold_apps_out (SFT rendering and the train-only diagnostic, never a real run) leaves the apps of the
         task's gold calls out of the examples; it reads Task.label and raises ValueError without one.
         id_fix replaces, in a write call, a string argument naming exactly one entity seen in a tool result (its name,
-        title or label) by that entity's id (agents/id_fix.py), after date_fix and before the call is validated."""
+        title or label) by that entity's id (agents/id_fix.py), after date_fix and before the call is validated.
+        spoken_email respells the misheard parts of a spoken email address ("Account Example chấm tết") in the request
+        and the history's user turns back to the spoken form the model was trained on (agents/spoken.py); the respelled
+        text is what the examples, the prompt and every later check see."""
         if vote_prompts and not examples:
             raise ValueError("vote_prompts needs examples (the variants differ only in their examples)")
         llm_kw = {"revision": revision, **({"max_new_tokens": max_new_tokens} if max_new_tokens != 384 else {}),
@@ -142,7 +155,7 @@ class ReActAgent(Agent):
         self.analog_weight = analog_weight
         self.leave_gold_apps_out = leave_gold_apps_out
         self.group_examples = group_examples
-        self.id_fix = id_fix
+        self.id_fix, self.spoken_email = id_fix, spoken_email
         self.app_groups = load_app_groups(data_root or default_data_root(), split) if group_examples and examples else None
         if self.bank is None and examples:
             self.bank = ExampleBank.from_data(data_root or default_data_root(), split)
@@ -153,11 +166,15 @@ class ReActAgent(Agent):
                      "date_hints": date_hints, "empty_hint": empty_hint, "refusal_check": refusal_check, "refusal_min_hits": refusal_min_hits,
                      "leak_guard": leak_guard, "vote_prompts": vote_prompts, "vote_apply": vote_apply, "date_fix": date_fix,
                      "analog_weight": analog_weight, "max_new_tokens": max_new_tokens, "num_beams": num_beams,
-                     "leave_gold_apps_out": leave_gold_apps_out, "group_examples": group_examples, "id_fix": id_fix}
+                     "leave_gold_apps_out": leave_gold_apps_out, "group_examples": group_examples, "id_fix": id_fix,
+                     "spoken_email": spoken_email}
 
     def run(self, task: Task, env) -> None:
         trace = self.last_trace = {"steps": [], "stop": None}  # None: a step raised
         start = task.started_at if task.started_at is not None else self.clock()
+        if self.spoken_email:
+            task = dataclasses.replace(task, request=respell_emails(task.request),
+                                       history=[_respell_user_turn(turn) for turn in task.history])
         if self.leave_gold_apps_out and task.label is None:
             raise ValueError("leave_gold_apps_out reads the gold label, but this task has no label")
         left_out = {"exclude_apps": gold_apps(task.label)} if self.leave_gold_apps_out else {}

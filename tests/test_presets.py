@@ -191,6 +191,7 @@ def test_id_fix_preset_is_sft_q1b_refs_plus_the_flag():
     env = {"HF_MODEL_OWNER": "team"}
     name, kw = resolve("agent", "sft-q1b-refs", env)
     assert resolve("agent", "sft-q1b-refs-idfix", env) == (name, {**kw, "id_fix": True})
+    assert resolve("agent", "sft-q1b-refs-fixes", env) == (name, {**kw, "id_fix": True, "spoken_email": True})
 
 
 def test_beam_preset_passes_num_beams():

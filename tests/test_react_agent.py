@@ -737,3 +737,26 @@ def test_id_fix_is_off_by_default():
     agent.run(ID_TASK, env)
     assert env.called[-1] == ("loyalty.redeem", {"program": "Cao Nguyên Rewards", "reward_id": "rw_02_1"})
     assert agent.info["id_fix"] is False and "id_fixes" not in agent.last_trace
+
+
+HEARD = "soạn thư nháp gửi Family Account Example chấm tết nhé"
+SAID = "soạn thư nháp gửi Family a còng example chấm test nhé"
+
+
+def test_spoken_email_respells_the_request_history_and_example_query():
+    task = dataclasses.replace(TASK, request=HEARD, context={**TASK.context, "installed_apps": {"email": {}}},
+                               history=[{"role": "user", "text": "gửi vendor acong example.step"},
+                                        {"role": "assistant", "text": "Dạ", "tool_calls": [], "tool_results": []}])
+    bank, llm = StubBank("EX"), FakeLLM(["Xong."])
+    agent = ReActAgent(llm=llm, examples=2, bank=bank, spoken_email=True)
+    agent.run(task, FakeEnv())
+    text = json.dumps(llm.seen[0], ensure_ascii=False)
+    assert SAID in text and "vendor a còng example chấm test" in text and "Account Example" not in text
+    assert bank.asked[0][0] == SAID and agent.info["spoken_email"] is True
+
+
+def test_spoken_email_is_off_by_default():
+    llm = FakeLLM(["Xong."])
+    agent = ReActAgent(llm=llm)
+    agent.run(dataclasses.replace(TASK, request=HEARD), FakeEnv())
+    assert HEARD in json.dumps(llm.seen[0], ensure_ascii=False) and agent.info["spoken_email"] is False
