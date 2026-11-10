@@ -1,4 +1,4 @@
-from lifemate.scoring import count_matches, score_sample, token_f1
+from lifemate.scoring import call_matches, count_matches, score_sample, token_f1
 
 FUZZY = {"sms.send": {"content"}}
 
@@ -42,3 +42,20 @@ def test_hash_mismatch_scores_zero_but_keeps_f1():
 def test_out_of_scope_needs_empty_submission():
     assert score_sample([], "h", [], "h", {})["score"] == 1.0
     assert score_sample([call("weather.get_current")], "h", [], "h", {})["score"] == 0.0
+
+
+def test_extra_optional_argument_still_matches_but_a_missing_one_does_not():
+    gold = {"name": "appliances.list", "arguments": {}}
+    assert call_matches({"name": "appliances.list", "arguments": {"type": "dishwasher"}}, gold, set())
+    gold = {"name": "bike_rental.find_bikes", "arguments": {"near": "Lê Văn Sỹ"}}
+    assert not call_matches({"name": "bike_rental.find_bikes", "arguments": {}}, gold, set())
+
+
+def test_ask_params_compare_as_a_set():
+    gold = {"name": "sys.ask_missing_info", "arguments": {"tool_name": "banking.transfer", "params": ["amount", "beneficiary_id"]}}
+    swapped = {"name": "sys.ask_missing_info", "arguments": {"tool_name": "banking.transfer", "params": ["beneficiary_id", "amount"]}}
+    extra = {"name": "sys.ask_missing_info", "arguments": {"tool_name": "banking.transfer", "params": ["amount", "beneficiary_id", "note"]}}
+    fewer = {"name": "sys.ask_missing_info", "arguments": {"tool_name": "banking.transfer", "params": ["amount"]}}
+    assert call_matches(swapped, gold, set())
+    assert not call_matches(extra, gold, set())
+    assert not call_matches(fewer, gold, set())

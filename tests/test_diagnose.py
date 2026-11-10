@@ -31,7 +31,8 @@ def _with_extra_optional(samples, catalog):
     raise AssertionError("no sample with an omitted optional param")
 
 
-def test_diagnose_counts_matches_and_extra_keys(tmp_path):
+def test_diagnose_counts_a_call_with_an_extra_optional_key_as_matched(tmp_path):
+    # organiser FAQ: only the gold call's arguments are compared, so an extra optional argument still matches
     samples, catalog = load_samples(ROOT, "train"), load_catalog(ROOT, "train")
     exact = next(s for s in samples if label_kind(s["label"]["tool_calls"]) == "act" and s["id"])
     extra, i, param = _with_extra_optional([s for s in samples if s["id"] != exact["id"]], catalog)
@@ -42,9 +43,8 @@ def test_diagnose_counts_matches_and_extra_keys(tmp_path):
     r = diagnose(tmp_path / "run", ROOT)
     n_exact, n_extra = len(exact["label"]["tool_calls"]), len(extra["label"]["tool_calls"])
     assert r["gold_calls"] == n_exact + n_extra
-    assert r["matched"] == n_exact + n_extra - 1
-    assert r["extra_key"] == {f"{extra['label']['tool_calls'][i]['name']}.{param}": 1}
-    assert r["calls_with_extra_key"] == 1
+    assert r["matched"] == n_exact + n_extra
+    assert r["calls_with_extra_key"] == 0
 
 
 def test_diagnose_missing_calls_and_call_counts(tmp_path):

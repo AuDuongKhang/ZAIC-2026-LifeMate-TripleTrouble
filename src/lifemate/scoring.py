@@ -4,7 +4,10 @@ Per sample: gold [] -> 1 iff submitted []. Otherwise 0 if state_hash differs or 
 (P = M / (M + U), R = M / |G|). A call matches a gold call when the name is equal, every non-fuzzy argument is
 identical and every fuzzy (x-match) argument has token-F1 > 0.6 after lowercasing + NFC; one-to-one, order ignored.
 
-Our assumptions where the spec is silent: argument key sets must be equal, "identical" is plain == (no case folding),
+Organiser answers (FAQ, Nov 2026): only the arguments of the gold call are compared, so a submitted call with extra valid
+optional arguments still matches (on a write, an extra argument that changes the state fails the hash instead); read calls
+and failed calls count in the F1; the `params` of sys.ask_missing_info are compared as a set (order ignored, an extra or a
+missing parameter fails). Our assumptions where the spec is still silent: "identical" is plain == (no case folding),
 tokens are whitespace-split, and the one-to-one matching is a maximum bipartite matching.
 """
 from __future__ import annotations
@@ -13,6 +16,7 @@ import unicodedata
 from collections import Counter
 
 FUZZY_THRESHOLD = 0.6
+ASK = "sys.ask_missing_info"
 
 
 def _tokens(s) -> list[str]:
@@ -34,10 +38,13 @@ def call_matches(pred: dict, gold: dict, fuzzy: set[str]) -> bool:
     if pred.get("name") != gold.get("name"):
         return False
     pa, ga = pred.get("arguments") or {}, gold.get("arguments") or {}
-    if set(pa) != set(ga):
+    if not set(ga) <= set(pa):  # every gold argument must be there; extra submitted arguments are not compared
         return False
     for key, gv in ga.items():
-        if key in fuzzy:
+        if gold.get("name") == ASK and key == "params" and isinstance(gv, list) and isinstance(pa[key], list):
+            if sorted(map(str, pa[key])) != sorted(map(str, gv)) or len(set(map(str, pa[key]))) != len(pa[key]):
+                return False
+        elif key in fuzzy:
             if token_f1(pa[key], gv) <= FUZZY_THRESHOLD:
                 return False
         elif pa[key] != gv:
