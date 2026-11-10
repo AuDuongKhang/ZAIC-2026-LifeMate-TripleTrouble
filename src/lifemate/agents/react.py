@@ -208,7 +208,8 @@ class ReActAgent(Agent):
                     continue
                 result = env.call(call["name"], call["arguments"])
                 scalar_strings(result, seen)
-                done.add(key)
+                if "voucher" not in result:
+                    done.add(key)
                 if call["name"] == SYS_TOOL:
                     trace["stop"] = "asked"
                     return  # asking the user ends the turn; later calls in the batch are dropped

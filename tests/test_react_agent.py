@@ -86,6 +86,22 @@ def test_identical_call_is_not_repeated():
     assert [c[0] for c in env.called] == ["alarm.list"]
 
 
+def test_voucher_redemption_can_repeat_until_done_is_false():
+    redeem = CALL("loyalty.redeem", {"program": "prog_1", "reward_id": "rw_1"})
+    results = [{"ok": True, "voucher": {"id": "v1"}, "points": 400},
+               {"ok": True, "voucher": {"id": "v2"}, "points": 0},
+               {"ok": True, "done": False, "message": "không đủ điểm"}]
+
+    class RedeemEnv(FakeEnv):
+        def call(self, name, args):
+            self.called.append((name, args))
+            return results.pop(0)
+
+    env = RedeemEnv()
+    ReActAgent(llm=FakeLLM([redeem, redeem, "Xong."])).run(TASK, env)
+    assert len(env.called) == 2
+
+
 def test_max_steps_bounds_generations():
     llm = FakeLLM([CALL("alarm.get", {"i": i}) for i in range(20)])
     ReActAgent(llm=llm, max_steps=3).run(TASK, FakeEnv())

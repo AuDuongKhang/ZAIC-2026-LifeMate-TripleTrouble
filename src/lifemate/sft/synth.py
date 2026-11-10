@@ -67,6 +67,7 @@ def verify(sample: dict, calls: list[dict], kind: str, catalog: dict[str, dict],
     installed = set(installed_tool_names(sample))
     env = _new_env(zaic_tools, sample, data_root)
     seen = scalar_strings([turn.get("tool_results") for turn in sample["history"]], set())
+    seen_calls: set[str] = set()
     for call in calls:
         name, args = call["name"], call["arguments"]
         if name not in installed:
@@ -81,11 +82,13 @@ def verify(sample: dict, calls: list[dict], kind: str, catalog: dict[str, dict],
         scalar_strings(result, seen)
         if result.get("ok") and result.get("done") is False:
             return f"no effect: {name}"
+        key = json.dumps([name, args], sort_keys=True, ensure_ascii=False)
+        if key in seen_calls:
+            return "repeat"
+        if "voucher" not in result:
+            seen_calls.add(key)
     if any(c["name"] == SYS_TOOL for c in calls[:-1]):
         return "ask not last"
-    keys = [(c["name"], repr(sorted(c["arguments"].items()))) for c in calls]
-    if len(set(keys)) != len(keys):
-        return "repeat"
     return None
 
 

@@ -65,12 +65,12 @@ class ExampleBank:
 
     def select(self, request: str, installed_apps: set[str], k: int, exclude_id: str | None = None,
                offset: int = 0) -> list[dict]:
-        """Up to k pool samples whose gold-call apps are all installed (out-of-scope ones always qualify), best
-        BM25 match to the request first, ties by id. exclude_id is never returned. offset skips that many of the
-        best matches (the prompt vote shows each variant the next k)."""
+        """Up to k pool samples with worked tool calls whose gold-call apps are all installed, best BM25 match to the
+        request first, ties by id. exclude_id is never returned. offset skips that many of the best matches (the prompt
+        vote shows each variant the next k)."""
         query = set(normalize(request))
         ranked = sorted((-self._bm25(i, query), doc["id"], i) for i, doc in enumerate(self.docs)
-                        if doc["id"] != exclude_id and self.apps[i] <= installed_apps)
+                        if doc["id"] != exclude_id and self.apps[i] and self.apps[i] <= installed_apps)
         return [self.docs[i] for _, _, i in ranked[offset:offset + k]]
 
 
