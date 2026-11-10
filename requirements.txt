@@ -1,6 +1,8 @@
 # Runtime deps of the pipeline. zaic_tools itself is stdlib-only and ships with the data.
 # torch is not listed, nor anything depending on it (accelerate, peft, ...): molab and the Docker base image ship
 # torch + torchvision built together, and a second torch in the venv breaks torchvision (tests/test_requirements.py).
+# The versions are pinned by docker/constraints.txt, the ones the Docker image installs, so molab runs match the image.
+-c docker/constraints.txt
 numpy
 huggingface_hub    # fetching the team's data copy (lifemate.fetch_data / hf_upload); later also model weights
 transformers>=4.56  # Qwen3 + Whisper, `dtype=` kwarg; torch itself comes preinstalled on molab (and in the Docker base image)
