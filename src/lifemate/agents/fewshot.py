@@ -122,7 +122,8 @@ class ExampleBank:
     def select(self, request: str, installed_apps: set[str], k: int, exclude_id: str | None = None,
                offset: int = 0, tools: list[dict] | None = None, analog_weight: float = 0.0,
                exclude_apps: "frozenset[str] | set[str]" = frozenset(), group_slots: int = 0,
-               app_groups: dict[str, str] | None = None) -> list[dict]:
+               app_groups: dict[str, str] | None = None, no_call_history: bool = True,
+               max_no_call: int | None = None) -> list[dict]:
         """Up to k pool samples whose gold-call apps are all installed (out-of-scope ones always qualify), best
         BM25 match to the request first, ties by id. exclude_id is never returned. offset skips that many of the
         best matches (the prompt vote shows each variant the next k). Docs whose gold apps intersect exclude_apps are
@@ -131,7 +132,14 @@ class ExampleBank:
         analog_weight > 0 adds analog_weight x the mean, over the example's gold tools, of the best Jaccard of
         tool_tokens against the NEAR_TOOLS installed tools of apps the bank has no example of (`tools` are the
         installed specs). It finds a tool of the same shape on another app, such as end_ride for end_session. With
-        no such tool the score is plain BM25, so a sample whose apps are all in the bank keeps its examples."""
+        no such tool the score is plain BM25, so a sample whose apps are all in the bank keeps its examples.
+
+        Out-of-scope docs (no gold call, shown as "(no tool call)") pass the app filter for any request, so a request
+        on an app the bank has few examples of draws many of them, and some mislead: a request refused only because its
+        own sample lacked the app, or a conditional whose read already sits in the history the example cannot show.
+        no_call_history=False skips out-of-scope docs that have a history; max_no_call caps how many out-of-scope docs
+        the returned window holds (after offset), filling the rest with the next best docs. The defaults keep the old
+        selection."""
         query = set(normalize(request))
         near = []
         if analog_weight and tools:
@@ -147,17 +155,36 @@ class ExampleBank:
                                               for t in self.example_tools[i]) / len(self.example_tools[i])
 
         ranked = sorted((-score(i), doc["id"], i) for i, doc in enumerate(self.docs)
-                        if doc["id"] != exclude_id and self.apps[i] <= installed_apps and not self.apps[i] & exclude_apps)
+                        if doc["id"] != exclude_id and self.apps[i] <= installed_apps and not self.apps[i] & exclude_apps
+                        and (no_call_history or doc["label"]["tool_calls"] or not doc.get("history")))
+        order = [i for _, _, i in ranked]
+
+        def window(pool: list[int], skip: int, n: int) -> list[int]:
+            """n docs of pool after the first skip, holding at most max_no_call out-of-scope docs."""
+            if max_no_call is None:
+                return pool[skip:skip + n]
+            picked, no_call = [], 0
+            for i in pool[skip:]:
+                if len(picked) == n:
+                    break
+                if not self.docs[i]["label"]["tool_calls"]:
+                    if no_call >= max_no_call:
+                        continue
+                    no_call += 1
+                picked.append(i)
+            return picked
+
         if not (group_slots and tools and app_groups):
-            return [self.docs[i] for _, _, i in ranked[offset:offset + k]]
+            return [self.docs[i] for i in window(order, offset, k)]
         # group_slots: up to that many of the k examples come from the catalog group of the unseen app the request is
         # most likely about (an app the bank has no example of), so a new app is shown an app of the same kind.
+        # Out-of-scope docs have no app, so they are never group examples and max_no_call only bites on the rest.
         target = self.unseen_target(query, tools)
         group = app_groups.get(target or "", "")
-        same = [i for _, _, i in ranked if group and any(app_groups.get(a) == group for a in self.apps[i])]
+        same = [i for i in order if group and any(app_groups.get(a) == group for a in self.apps[i])]
         chosen = same[offset * group_slots:(offset + 1) * group_slots][:k]
-        rest = [i for _, _, i in ranked if i not in chosen][offset * (k - len(chosen)):]
-        return [self.docs[i] for i in rest[:k - len(chosen)] + chosen]  # the group examples last, nearest the request
+        rest = window([i for i in order if i not in chosen], offset * (k - len(chosen)), k - len(chosen))
+        return [self.docs[i] for i in rest + chosen]  # the group examples last, nearest the request
 
 
 def render_examples(examples: list[dict], max_result_chars: int = 300) -> str:

@@ -207,14 +207,15 @@ def test_invalid_json_is_listed_as_rejected():
 
 class StubBank:
     def __init__(self, text):
-        self.text, self.asked, self.offsets = text, [], []
+        self.text, self.asked, self.offsets, self.kw = text, [], [], []
 
     def __len__(self):
         return 1
 
-    def select(self, request, installed_apps, k, exclude_id, offset=0):
+    def select(self, request, installed_apps, k, exclude_id, offset=0, **kw):
         self.asked.append((request, installed_apps, k, exclude_id))
         self.offsets.append(offset)
+        self.kw.append(kw)
         return [{"id": "e", "audio_text": f"{self.text} @{offset}", "label": {"tool_calls": [], "tool_results": []}}]
 
 
@@ -224,6 +225,17 @@ def test_examples_are_added_to_the_system_message():
     ReActAgent(llm=llm, examples=2, bank=bank).run(task, FakeEnv())
     assert "EXAMPLE BLOCK" in llm.seen[0][0]["content"]
     assert bank.asked == [("xoá báo thức sớm nhất", {"alarm"}, 2, "t")]
+
+
+def test_clean_no_call_reaches_every_example_selection():
+    agent, llm, env, bank = vote_run([DEL("a1"), DEL("a2"), DEL("a2"), "Xong."], clean_no_call=True)
+    assert len(bank.kw) == 3 and all(kw == {"no_call_history": False, "max_no_call": 1} for kw in bank.kw)
+    assert agent.info["clean_no_call"] is True
+
+
+def test_clean_no_call_is_off_by_default():
+    agent, llm, env, bank = vote_run([DEL("a1"), DEL("a2"), DEL("a2"), "Xong."])
+    assert bank.kw == [{}, {}, {}] and agent.info["clean_no_call"] is False
 
 
 def test_default_has_no_examples_and_builds_no_bank():

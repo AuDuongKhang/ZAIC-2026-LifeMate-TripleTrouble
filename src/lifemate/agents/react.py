@@ -92,7 +92,7 @@ class ReActAgent(Agent):
                  refusal_check: bool = False, refusal_min_hits: int = 1,
                  leak_guard: bool = False, vote_prompts: int = 0, vote_apply: bool = True,
                  date_fix: bool = False, analog_weight: float = 0.0, max_new_tokens: int = 384, num_beams: int = 1,
-                 leave_gold_apps_out: bool = False, group_examples: int = 0):
+                 leave_gold_apps_out: bool = False, group_examples: int = 0, clean_no_call: bool = False):
         """time_budget_s counts from task.started_at (sample start, ASR included) when the runner sets it.
         A step only starts with at least min_step_s left, and its generation is capped at the time remaining.
         check_refs holds back calls whose x-ref ids were never seen in a tool result (off by default: with it the
@@ -123,7 +123,10 @@ class ReActAgent(Agent):
         the installed app the bank has no example of that the request matches best (ExampleBank.select), so an unseen
         app is shown examples of apps of the same kind; the other examples stay plain BM25.
         leave_gold_apps_out (SFT rendering and the train-only diagnostic, never a real run) leaves the apps of the
-        task's gold calls out of the examples; it reads Task.label and raises ValueError without one."""
+        task's gold calls out of the examples; it reads Task.label and raises ValueError without one.
+        clean_no_call shows at most one out-of-scope ("(no tool call)") example per prompt and none that has a history
+        (ExampleBank.select no_call_history / max_no_call): on apps the bank has few examples of, such examples used to
+        fill the prompt and taught the model to refuse valid requests or skip the read of a conditional."""
         if vote_prompts and not examples:
             raise ValueError("vote_prompts needs examples (the variants differ only in their examples)")
         llm_kw = {"revision": revision, **({"max_new_tokens": max_new_tokens} if max_new_tokens != 384 else {}),
@@ -140,6 +143,7 @@ class ReActAgent(Agent):
         self.leave_gold_apps_out = leave_gold_apps_out
         self.group_examples = group_examples
         self.app_groups = load_app_groups(data_root or default_data_root(), split) if group_examples and examples else None
+        self.no_call_kw = {"no_call_history": False, "max_no_call": 1} if clean_no_call else {}
         if self.bank is None and examples:
             self.bank = ExampleBank.from_data(data_root or default_data_root(), split)
         # Recorded in meta.json, so every RESULTS.md row traces back to its prompt and settings.
@@ -149,7 +153,8 @@ class ReActAgent(Agent):
                      "date_hints": date_hints, "empty_hint": empty_hint, "refusal_check": refusal_check, "refusal_min_hits": refusal_min_hits,
                      "leak_guard": leak_guard, "vote_prompts": vote_prompts, "vote_apply": vote_apply, "date_fix": date_fix,
                      "analog_weight": analog_weight, "max_new_tokens": max_new_tokens, "num_beams": num_beams,
-                     "leave_gold_apps_out": leave_gold_apps_out, "group_examples": group_examples}
+                     "leave_gold_apps_out": leave_gold_apps_out, "group_examples": group_examples,
+                     "clean_no_call": clean_no_call}
 
     def run(self, task: Task, env) -> None:
         trace = self.last_trace = {"steps": [], "stop": None}  # None: a step raised
@@ -167,7 +172,7 @@ class ReActAgent(Agent):
             if self.group_examples:
                 analog.update(tools=task.tools, group_slots=self.group_examples, app_groups=self.app_groups)
             picked = self.bank.select(task.request, set(task.context["installed_apps"]), self.examples, exclude_id=task.id,
-                                      **analog, **left_out)
+                                      **analog, **left_out, **self.no_call_kw)
             examples_text = render_examples(picked)
         messages = build_messages(task, lambda m: self.llm.count_tokens(m, tools), budget, self.prompt_version,
                                   examples_text, self.date_hints)
@@ -270,7 +275,8 @@ class ReActAgent(Agent):
         texts: list[str | None] = [text]
         for i in range(1, self.vote_prompts):
             picked = self.bank.select(task.request, apps, self.examples, exclude_id=task.id, offset=i * self.examples,
-                                      **({"exclude_apps": gold_apps(task.label)} if self.leave_gold_apps_out else {}))
+                                      **({"exclude_apps": gold_apps(task.label)} if self.leave_gold_apps_out else {}),
+                                      **self.no_call_kw)
             variant = [system_message(task.context, self.prompt_version, render_examples(picked), self.date_hints), *messages[1:]]
             fits = self.llm.count_tokens(variant, tools) <= budget  # a variant that does not fit gets no vote
             texts.append(self.llm.generate(variant, tools, max_time=self.time_budget_s - (self.clock() - start))

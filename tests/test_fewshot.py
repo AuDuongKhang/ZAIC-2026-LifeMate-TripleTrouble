@@ -242,3 +242,66 @@ def test_group_slot_changes_nothing_without_an_unseen_app_or_a_group_example():
     no_mobility = {"calendar": "planning", "ride_hailing": "transport", "parking": "mobility"}
     assert bank.select("đặt lịch giữ chỗ đỗ xe", {"ride_hailing", "calendar", "parking"}, 2, tools=TOOLS, group_slots=1,
                        app_groups=no_mobility) == bank.select("đặt lịch giữ chỗ đỗ xe", {"ride_hailing", "calendar", "parking"}, 2)
+
+
+def _doc(id_, text, calls=(), history=()):
+    return {"id": id_, "audio_text": text, "history": list(history), "context": {"installed_apps": {}},
+            "label": {"tool_calls": [{"name": n, "arguments": {}} for n in calls], "tool_results": [{} for _ in calls]}}
+
+
+NO_CALL_DOCS = [
+    _doc("a", "nhắc tôi mua vàng sáng mai nhé", history=[{"role": "user", "text": "giá vàng?"}]),
+    _doc("b", "nhắc tôi mua vàng sáng mai đi"),
+    _doc("c", "nhắc tôi mua vàng chiều mai"),
+    _doc("d", "nhắc tôi đi chợ sáng mai", calls=["reminders.create"]),
+    _doc("e", "nhắc mua sữa", calls=["reminders.create"]),
+]
+
+
+def test_no_call_examples_keep_their_old_selection_by_default():
+    bank = ExampleBank(NO_CALL_DOCS, {d["id"] for d in NO_CALL_DOCS})
+    picked = bank.select("nhắc tôi mua vàng sáng mai nhé", {"reminders"}, k=3)
+    assert [p["id"] for p in picked] == ["a", "b", "c"]
+
+
+def test_no_call_examples_with_history_can_be_left_out():
+    bank = ExampleBank(NO_CALL_DOCS, {d["id"] for d in NO_CALL_DOCS})
+    picked = bank.select("nhắc tôi mua vàng sáng mai nhé", {"reminders"}, k=5, no_call_history=False)
+    assert "a" not in [p["id"] for p in picked] and len(picked) == 4
+
+
+def test_history_rule_keeps_examples_with_calls():
+    docs = [_doc("x", "nhắc tôi mua vàng", calls=["reminders.create"], history=[{"role": "user", "text": "hi"}])]
+    bank = ExampleBank(docs, {"x"})
+    assert [p["id"] for p in bank.select("nhắc tôi mua vàng", {"reminders"}, k=1, no_call_history=False)] == ["x"]
+
+
+def test_max_no_call_caps_out_of_scope_examples_and_fills_with_the_next_best():
+    bank = ExampleBank(NO_CALL_DOCS, {d["id"] for d in NO_CALL_DOCS})
+    picked = bank.select("nhắc tôi mua vàng sáng mai nhé", {"reminders"}, k=3, max_no_call=1)
+    assert [p["id"] for p in picked] == ["a", "d", "e"]
+
+
+def test_max_no_call_zero_and_both_rules_together():
+    bank = ExampleBank(NO_CALL_DOCS, {d["id"] for d in NO_CALL_DOCS})
+    assert {p["id"] for p in bank.select("nhắc tôi mua vàng", {"reminders"}, k=3, max_no_call=0)} == {"d", "e"}
+    picked = bank.select("nhắc tôi mua vàng sáng mai nhé", {"reminders"}, k=3, no_call_history=False, max_no_call=1)
+    assert [p["id"] for p in picked] == ["b", "d", "e"]
+
+
+def test_max_no_call_applies_within_the_offset_window():
+    bank = ExampleBank(NO_CALL_DOCS, {d["id"] for d in NO_CALL_DOCS})
+    ranked = bank.select("nhắc tôi mua vàng sáng mai nhé", {"reminders"}, k=5)
+    window = bank.select("nhắc tôi mua vàng sáng mai nhé", {"reminders"}, k=2, offset=1, max_no_call=1)
+    assert window == [ranked[1], ranked[3]]
+
+
+def test_max_no_call_caps_the_bm25_part_next_to_the_group_slot():
+    docs = [_sample("d1", "gọi taxi ra ga", [{"name": "ride_hailing.book", "arguments": {}}]),
+            _doc("n1", "đặt lịch giữ chỗ đỗ xe sân bay nhé"), _doc("n2", "đặt lịch giữ chỗ đỗ xe sân bay đi"),
+            _sample("d2", "đặt lịch họp sân bay chiều nay", [{"name": "calendar.create_event", "arguments": {}}])]
+    bank = ExampleBank(docs, {d["id"] for d in docs})
+    installed, kw = {"ride_hailing", "calendar", "parking"}, {"tools": TOOLS, "group_slots": 1, "app_groups": GROUPS}
+    assert [d["id"] for d in bank.select("đặt lịch giữ chỗ đỗ xe sân bay", installed, 3, **kw)] == ["n1", "n2", "d1"]
+    capped = bank.select("đặt lịch giữ chỗ đỗ xe sân bay", installed, 3, max_no_call=1, **kw)
+    assert [d["id"] for d in capped] == ["n1", "d2", "d1"]
