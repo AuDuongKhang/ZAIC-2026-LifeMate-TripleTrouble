@@ -703,3 +703,37 @@ def test_leave_gold_apps_out_reaches_the_prompt_vote_selects_too():
                        vote_prompts=3, leave_gold_apps_out=True)
     agent.run(task, FakeEnv())
     assert len(seen) == 3 and all(s == {"alarm"} for s in seen)
+
+
+REDEEM_SPEC = {"name": "loyalty.redeem", "kind": "write", "description": "Đổi điểm",
+               "parameters": {"type": "object", "properties": {"program": {"type": "string"}, "reward_id": {"type": "string"}}}}
+POINTS_SPEC = {"name": "loyalty.get_points", "kind": "read", "description": "Điểm thành viên",
+               "parameters": {"type": "object", "properties": {"program": {"type": "string"}}}}
+PROGRAMS = {"ok": True, "programs": [{"id": "prog_815", "name": "Cao Nguyên Rewards", "rewards": [{"id": "rw_02_1", "name": "Ly phin"}]}]}
+ID_TASK = dataclasses.replace(TASK, request="đổi điểm Cao Nguyên lấy ly phin", tools=[POINTS_SPEC, REDEEM_SPEC])
+BY_NAME = CALL("loyalty.redeem", {"program": "Cao Nguyên Rewards", "reward_id": "rw_02_1"})
+
+
+def test_id_fix_sends_the_id_of_a_named_entity():
+    env = FakeEnv(results={"loyalty.get_points": PROGRAMS})
+    agent = ReActAgent(llm=FakeLLM([CALL("loyalty.get_points", {}), BY_NAME, "Xong."]), id_fix=True)
+    agent.run(ID_TASK, env)
+    assert env.called[-1] == ("loyalty.redeem", {"program": "prog_815", "reward_id": "rw_02_1"})
+    assert agent.last_trace["id_fixes"] == [{"from": {"program": "Cao Nguyên Rewards", "reward_id": "rw_02_1"},
+                                             "to": {"program": "prog_815", "reward_id": "rw_02_1"}}]
+    assert agent.info["id_fix"] is True
+
+
+def test_id_fix_uses_entities_from_the_history():
+    task = dataclasses.replace(ID_TASK, history=[{"role": "assistant", "text": "", "tool_calls": [], "tool_results": [PROGRAMS]}])
+    env = FakeEnv()
+    ReActAgent(llm=FakeLLM([BY_NAME, "Xong."]), id_fix=True).run(task, env)
+    assert env.called == [("loyalty.redeem", {"program": "prog_815", "reward_id": "rw_02_1"})]
+
+
+def test_id_fix_is_off_by_default():
+    env = FakeEnv(results={"loyalty.get_points": PROGRAMS})
+    agent = ReActAgent(llm=FakeLLM([CALL("loyalty.get_points", {}), BY_NAME, "Xong."]))
+    agent.run(ID_TASK, env)
+    assert env.called[-1] == ("loyalty.redeem", {"program": "Cao Nguyên Rewards", "reward_id": "rw_02_1"})
+    assert agent.info["id_fix"] is False and "id_fixes" not in agent.last_trace

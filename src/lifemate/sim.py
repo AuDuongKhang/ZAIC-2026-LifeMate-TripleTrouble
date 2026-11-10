@@ -20,6 +20,7 @@ from typing import Callable
 
 from .agents.date_fix import fix_calls
 from .agents.freetext import freetext_rewrite
+from .agents.id_fix import entity_names, fix_calls_ids
 from .agents.minimal_reads import minimal_reads_rewrite
 from .agents.react import decides, vote_key
 from .compare import compare, load_scores, verdict
@@ -76,9 +77,28 @@ def date_fix(times: dict[str, str] | None = None, data_root: Path | None = None)
     return rewrite
 
 
+def id_fix(histories: dict[str, list] | None = None, data_root: Path | None = None) -> Rewrite:
+    """Pass an entity's id where a write call names it (agents/id_fix.py), with the entities of the history and of each
+    recorded result before the call. The trace has no history, so it comes from the train samples (`histories`
+    {id: history} overrides, for tests)."""
+    if histories is None:
+        histories = {s["id"]: s["history"] for s in load_samples(data_root or default_data_root(), "train")}
+
+    def rewrite(trace: dict, catalog: dict[str, dict]) -> list[dict] | None:
+        names = entity_names([turn.get("tool_results") for turn in histories.get(trace["id"]) or []], {})
+        calls, changed = [], False
+        for call in trace["calls"]:
+            fixed = fix_calls_ids([call], catalog, names)[0]
+            changed |= fixed is not call
+            calls.append({"name": fixed["name"], "arguments": fixed["arguments"]})
+            entity_names(call.get("result"), names)
+        return calls if changed else None
+    return rewrite
+
+
 REWRITES: dict[str, Callable[..., Rewrite]] = {"freetext": freetext_rewrite, "minimal_reads": minimal_reads_rewrite,
                                                "run_vote": run_vote,
-                                               "date_fix": date_fix}
+                                               "date_fix": date_fix, "id_fix": id_fix}
 
 
 def rewrite_run(run: Path, data_root: Path, name: str, rewrite: Rewrite, out_dir: Path | None = None) -> dict:
