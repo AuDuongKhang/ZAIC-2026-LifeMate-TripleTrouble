@@ -207,3 +207,38 @@ def test_out_of_scope_examples_survive_any_exclusion(train_samples):
     installed = set(train_samples[0]["context"]["installed_apps"])
     picked = bank.select("kể chuyện cười", installed, k=20, exclude_apps=installed)
     assert picked and all(not p["label"]["tool_calls"] for p in picked)
+
+
+def _group_bank():
+    docs = [
+        _sample("d1", "gọi taxi ra ga", [{"name": "ride_hailing.book", "arguments": {}}]),
+        _sample("d2", "đặt lịch họp sân bay chiều nay", [{"name": "calendar.create_event", "arguments": {}}]),
+        _sample("d3", "đặt lịch khám sân bay", [{"name": "calendar.create_event", "arguments": {}}]),
+    ]
+    return ExampleBank(docs, {"d1", "d2", "d3"})
+
+
+GROUPS = {"ride_hailing": "mobility", "calendar": "planning", "parking": "mobility"}
+TOOLS = [{"name": "parking.reserve", "description": "Giữ chỗ đỗ xe tại bãi", "parameters": {}},
+         {"name": "calendar.create_event", "description": "Tạo sự kiện", "parameters": {}}]
+
+
+def test_group_slot_brings_an_example_of_the_unseen_apps_group():
+    bank = _group_bank()
+    installed = {"ride_hailing", "calendar", "parking"}
+    plain = bank.select("đặt lịch giữ chỗ đỗ xe sân bay", installed, 2)
+    assert {d["id"] for d in plain} == {"d2", "d3"}  # BM25 alone: no mobility example
+    picked = bank.select("đặt lịch giữ chỗ đỗ xe sân bay", installed, 2, tools=TOOLS, group_slots=1, app_groups=GROUPS)
+    assert [d["id"] for d in picked] == [plain[0]["id"], "d1"]  # d1 (ride_hailing, mobility like parking) takes the last slot
+
+
+def test_group_slot_changes_nothing_without_an_unseen_app_or_a_group_example():
+    bank = _group_bank()
+    tools = [t for t in TOOLS if not t["name"].startswith("parking.")]
+    kw = {"tools": tools, "group_slots": 1, "app_groups": GROUPS}
+    assert bank.select("đặt lịch sân bay", {"ride_hailing", "calendar"}, 2, **kw) == \
+        bank.select("đặt lịch sân bay", {"ride_hailing", "calendar"}, 2)
+    assert bank.unseen_target({"đỗ", "xe"}, TOOLS) == "parking"
+    no_mobility = {"calendar": "planning", "ride_hailing": "transport", "parking": "mobility"}
+    assert bank.select("đặt lịch giữ chỗ đỗ xe", {"ride_hailing", "calendar", "parking"}, 2, tools=TOOLS, group_slots=1,
+                       app_groups=no_mobility) == bank.select("đặt lịch giữ chỗ đỗ xe", {"ride_hailing", "calendar", "parking"}, 2)

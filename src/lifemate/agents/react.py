@@ -8,7 +8,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Callable
 
-from ..data import SYS_TOOL, default_data_root
+from ..data import SYS_TOOL, default_data_root, load_app_groups
 from ..task import Task
 from .ask_guard import fold
 from .base import Agent
@@ -92,7 +92,7 @@ class ReActAgent(Agent):
                  refusal_check: bool = False, refusal_min_hits: int = 1,
                  leak_guard: bool = False, vote_prompts: int = 0, vote_apply: bool = True,
                  date_fix: bool = False, analog_weight: float = 0.0, max_new_tokens: int = 384, num_beams: int = 1,
-                 leave_gold_apps_out: bool = False):
+                 leave_gold_apps_out: bool = False, group_examples: int = 0):
         """time_budget_s counts from task.started_at (sample start, ASR included) when the runner sets it.
         A step only starts with at least min_step_s left, and its generation is capped at the time remaining.
         check_refs holds back calls whose x-ref ids were never seen in a tool result (off by default: with it the
@@ -119,6 +119,9 @@ class ReActAgent(Agent):
         tool of an app the bank has no example of (ExampleBank.select); 0 is plain BM25.
         max_new_tokens and num_beams go to the LLM the agent builds (an `llm` passed in keeps its own); beam search
         stays deterministic but costs time.
+        group_examples=g (0 = off) takes up to g of the k examples from the catalog group (finance, mobility, ...) of
+        the installed app the bank has no example of that the request matches best (ExampleBank.select), so an unseen
+        app is shown examples of apps of the same kind; the other examples stay plain BM25.
         leave_gold_apps_out (SFT rendering and the train-only diagnostic, never a real run) leaves the apps of the
         task's gold calls out of the examples; it reads Task.label and raises ValueError without one."""
         if vote_prompts and not examples:
@@ -135,6 +138,8 @@ class ReActAgent(Agent):
         self.vote_prompts, self.vote_apply = vote_prompts, vote_apply
         self.analog_weight = analog_weight
         self.leave_gold_apps_out = leave_gold_apps_out
+        self.group_examples = group_examples
+        self.app_groups = load_app_groups(data_root or default_data_root(), split) if group_examples and examples else None
         if self.bank is None and examples:
             self.bank = ExampleBank.from_data(data_root or default_data_root(), split)
         # Recorded in meta.json, so every RESULTS.md row traces back to its prompt and settings.
@@ -144,7 +149,7 @@ class ReActAgent(Agent):
                      "date_hints": date_hints, "empty_hint": empty_hint, "refusal_check": refusal_check, "refusal_min_hits": refusal_min_hits,
                      "leak_guard": leak_guard, "vote_prompts": vote_prompts, "vote_apply": vote_apply, "date_fix": date_fix,
                      "analog_weight": analog_weight, "max_new_tokens": max_new_tokens, "num_beams": num_beams,
-                     "leave_gold_apps_out": leave_gold_apps_out}
+                     "leave_gold_apps_out": leave_gold_apps_out, "group_examples": group_examples}
 
     def run(self, task: Task, env) -> None:
         trace = self.last_trace = {"steps": [], "stop": None}  # None: a step raised
@@ -159,6 +164,8 @@ class ReActAgent(Agent):
         examples_text = ""
         if self.bank is not None:
             analog = {"tools": task.tools, "analog_weight": self.analog_weight} if self.analog_weight else {}
+            if self.group_examples:
+                analog.update(tools=task.tools, group_slots=self.group_examples, app_groups=self.app_groups)
             picked = self.bank.select(task.request, set(task.context["installed_apps"]), self.examples, exclude_id=task.id,
                                       **analog, **left_out)
             examples_text = render_examples(picked)
