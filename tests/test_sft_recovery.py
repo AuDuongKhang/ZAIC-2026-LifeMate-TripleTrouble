@@ -119,3 +119,23 @@ def test_cli_uploads_the_file_and_report_to_the_private_dataset(train_samples, t
     recovery.main(["--run", str(run), "--name", "t", "--max", "2", "--out-dir", str(tmp_path / "synth"), "--hf-repo", "o/d"])
     assert [(u["path_in_repo"], u["repo_id"], u["repo_type"]) for u in uploads] == [
         ("synth/recovery-t.jsonl", "o/d", "dataset"), ("synth/recovery-t.report.json", "o/d", "dataset")]
+
+
+def test_cli_skips_a_prefix_that_calls_a_holdout_app(train_samples, tmp_path):
+    """Pool samples have holdout apps installed, so the untrained model may read one; records refuse such a sample."""
+    catalog = load_catalog(default_data_root(), "train")
+    splits = load_splits()
+    pool, held_out = set(splits["pool"]), set(splits["holdout_apps"])
+    s = next(x for x in train_samples if x["id"] in pool and x["label"]["tool_calls"]
+             and any(a in held_out for a in x["context"]["installed_apps"]))
+    app = next(a for a in s["context"]["installed_apps"] if a in held_out)
+    read = next(t for t in s["context"]["installed_apps"][app]["tools"] if catalog[t].get("kind") == "read")
+    run = tmp_path / "run"
+    run.mkdir()
+    line = {"id": s["id"], "request": s["audio_text"],
+            "calls": [{"name": read, "arguments": {}, "result": {"ok": True}}] + [dict(c, result={}) for c in s["label"]["tool_calls"]]}
+    (run / "trace.jsonl").write_text(json.dumps(line, ensure_ascii=False) + "\n", encoding="utf-8")
+    out = recovery.main(["--run", str(run), "--name", "t", "--out-dir", str(tmp_path / "synth")])
+    assert out.read_text(encoding="utf-8") == ""
+    report = json.loads((tmp_path / "synth" / "recovery-t.report.json").read_text(encoding="utf-8"))
+    assert report["not_usable_by_reason"] == {"prefix calls a holdout app": 1} and report["usable"] == 0
