@@ -106,9 +106,23 @@ class ExampleBank:
                 scored.append((-len(query & words), spec["name"], spec))
         return [tool_tokens(spec) for _, _, spec in sorted(scored, key=lambda t: t[:2])[:NEAR_TOOLS]]
 
+    def unseen_target(self, query: set[str], tools: list[dict]) -> str | None:
+        """The installed app absent from the bank whose tool names and descriptions share the most words with the
+        request (ties by app id), or None when every installed app has examples or none shares a word."""
+        words: dict[str, set[str]] = {}
+        for spec in tools:
+            app = spec["name"].split(".", 1)[0]
+            if app == "sys" or app in self.bank_apps:
+                continue
+            words.setdefault(app, set(normalize(app.replace("_", " "))))
+            words[app] |= set(normalize(spec.get("description", "") + " " + spec["name"].split(".", 1)[-1].replace("_", " ")))
+        scored = sorted((-len(query & w), app) for app, w in words.items() if query & w)
+        return scored[0][1] if scored else None
+
     def select(self, request: str, installed_apps: set[str], k: int, exclude_id: str | None = None,
                offset: int = 0, tools: list[dict] | None = None, analog_weight: float = 0.0,
-               exclude_apps: "frozenset[str] | set[str]" = frozenset()) -> list[dict]:
+               exclude_apps: "frozenset[str] | set[str]" = frozenset(), group_slots: int = 0,
+               app_groups: dict[str, str] | None = None) -> list[dict]:
         """Up to k pool samples whose gold-call apps are all installed (out-of-scope ones always qualify), best
         BM25 match to the request first, ties by id. exclude_id is never returned. offset skips that many of the
         best matches (the prompt vote shows each variant the next k). Docs whose gold apps intersect exclude_apps are
@@ -134,7 +148,16 @@ class ExampleBank:
 
         ranked = sorted((-score(i), doc["id"], i) for i, doc in enumerate(self.docs)
                         if doc["id"] != exclude_id and self.apps[i] <= installed_apps and not self.apps[i] & exclude_apps)
-        return [self.docs[i] for _, _, i in ranked[offset:offset + k]]
+        if not (group_slots and tools and app_groups):
+            return [self.docs[i] for _, _, i in ranked[offset:offset + k]]
+        # group_slots: up to that many of the k examples come from the catalog group of the unseen app the request is
+        # most likely about (an app the bank has no example of), so a new app is shown an app of the same kind.
+        target = self.unseen_target(query, tools)
+        group = app_groups.get(target or "", "")
+        same = [i for _, _, i in ranked if group and any(app_groups.get(a) == group for a in self.apps[i])]
+        chosen = same[offset * group_slots:(offset + 1) * group_slots][:k]
+        rest = [i for _, _, i in ranked if i not in chosen][offset * (k - len(chosen)):]
+        return [self.docs[i] for i in rest[:k - len(chosen)] + chosen]  # the group examples last, nearest the request
 
 
 def render_examples(examples: list[dict], max_result_chars: int = 300) -> str:
