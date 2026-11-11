@@ -14,6 +14,7 @@ run_vote takes the other runs as --kw others='["runs/a","runs/b"]'.
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 from pathlib import Path
 from typing import Callable
@@ -119,6 +120,14 @@ REWRITES: dict[str, Callable[..., Rewrite]] = {"freetext": freetext_rewrite, "mi
                                                "date_fix": date_fix, "weekday_fix": weekday_fix, "id_fix": id_fix}
 
 
+def build_rewrite(factory: Callable[..., Rewrite], kw: dict, data_root: Path) -> Rewrite:
+    """factory(**kw), with data_root=data_root added when the factory takes a data_root and kw does not set one, so
+    rewrites that load train samples (date_fix, weekday_fix, id_fix) read the same data the replay uses."""
+    if "data_root" in inspect.signature(factory).parameters and "data_root" not in kw:
+        kw = {**kw, "data_root": data_root}
+    return factory(**kw)
+
+
 def rewrite_run(run: Path, data_root: Path, name: str, rewrite: Rewrite, out_dir: Path | None = None) -> dict:
     """Apply `rewrite` to every trace line of `run`, score the result, and compare it with the run.
 
@@ -164,7 +173,7 @@ def main(argv: list[str] | None = None) -> dict:
         raise SystemExit(f"unknown rewrite {args.rewrite!r}; known: {', '.join(sorted(REWRITES)) or 'none'}")
     kw = parse_kw(args.kw)
     label = "_".join([args.rewrite] + [f"{k}{len(v) if isinstance(v, (list, dict)) else v}" for k, v in kw.items()])
-    r = rewrite_run(args.run, args.data_root, label, REWRITES[args.rewrite](**kw))
+    r = rewrite_run(args.run, args.data_root, label, build_rewrite(REWRITES[args.rewrite], kw, args.data_root))
     print(f"{label}: {format_result(r)}", flush=True)
     return r
 

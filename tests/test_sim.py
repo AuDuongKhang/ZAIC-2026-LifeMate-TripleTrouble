@@ -165,3 +165,24 @@ def test_id_fix_rewrite_uses_earlier_results_and_the_history():
 def test_id_fix_rewrite_returns_none_when_nothing_changes():
     rewrite = id_fix(histories={"s1": []})
     assert rewrite({"id": "s1", "calls": [REDEEM_BY_NAME]}, ID_CATALOG) is None  # no entity named MinhPoint seen
+
+
+def test_main_passes_the_selected_data_root_to_factories_that_take_one(tmp_path):
+    from lifemate.sim import build_rewrite
+
+    seen = {}
+
+    def with_root(data_root=None, **kw):
+        seen.update(data_root=data_root, **kw)
+        return lambda trace, catalog: None
+
+    def without_root(flag=0):
+        seen.update(flag=flag)
+        return lambda trace, catalog: None
+
+    build_rewrite(with_root, {"x": 1}, tmp_path)
+    assert seen == {"data_root": tmp_path, "x": 1}
+    build_rewrite(without_root, {"flag": 2}, tmp_path)
+    assert seen["flag"] == 2
+    build_rewrite(with_root, {"data_root": "explicit"}, tmp_path)  # an explicit --kw wins
+    assert seen["data_root"] == "explicit"
