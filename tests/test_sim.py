@@ -127,6 +127,26 @@ def test_date_fix_rewrite_changes_only_the_date(tmp_path):
     assert rewrite(dict(trace, id="unknown"), catalog) is None
 
 
+
+def test_weekday_fix_rewrite_puts_the_weekday_date_into_each_call():
+    from lifemate.sim import REWRITES
+    catalog = {"tasks.add": {"parameters": {"properties": {"due": {"type": "string"}}}}}
+    rewrite = REWRITES["weekday_fix"](times={"s1": "2026-10-01T09:00:00+07:00"})
+    trace = {"id": "s1", "request": "tạo lịch Bàn giao lúc mười giờ sáng thứ tư tuần sau",
+             "calls": [{"name": "contacts.search", "arguments": {}, "result": {}},
+                       {"name": "tasks.add", "arguments": {"due": "2026-10-08T10:00:00+07:00"}, "result": {}}]}
+    assert rewrite(trace, catalog) == [{"name": "contacts.search", "arguments": {}},
+                                       {"name": "tasks.add", "arguments": {"due": "2026-10-07T10:00:00+07:00"}}]
+
+
+def test_weekday_fix_rewrite_returns_none_without_a_weekday_phrase():
+    from lifemate.sim import REWRITES
+    rewrite = REWRITES["weekday_fix"](times={"s1": "2026-10-01T09:00:00+07:00"})
+    trace = {"id": "s1", "request": "họp chiều mai",
+             "calls": [{"name": "calendar.create_event", "arguments": {"start": "2026-09-30T15:00:00+07:00"}, "result": {}}]}
+    assert rewrite(trace, {}) is None
+    assert rewrite(dict(trace, id="unknown", request="họp thứ tư tuần sau"), {}) is None
+
 ID_CATALOG = {"loyalty.redeem": {"name": "loyalty.redeem", "kind": "write",
                                  "parameters": {"properties": {"program": {"type": "string"}, "reward_id": {"type": "string"}}}}}
 REDEEM_BY_NAME = {"name": "loyalty.redeem", "arguments": {"program": "MinhPoint", "reward_id": "rw_1"}, "result": {"ok": True}}

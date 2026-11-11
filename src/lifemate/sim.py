@@ -77,6 +77,24 @@ def date_fix(times: dict[str, str] | None = None, data_root: Path | None = None)
     return rewrite
 
 
+def weekday_fix(times: dict[str, str] | None = None, data_root: Path | None = None) -> Rewrite:
+    """date_fix with weekdays_only (agents/date_fix.py): the date of the request's only "thứ X" phrase, applied to each
+    recorded call on its own, since the agent fixes one model turn at a time and a trace does not keep turn boundaries.
+    current_time comes from the train samples (`times` {id: current_time} overrides, for tests)."""
+    if times is None:
+        times = {s["id"]: s["context"]["current_time"] for s in load_samples(data_root or default_data_root(), "train")}
+
+    def rewrite(trace: dict, catalog: dict[str, dict]) -> list[dict] | None:
+        now = times.get(trace["id"])
+        if now is None:
+            return None
+        fixed = [fix_calls([c], catalog, trace.get("request", ""), now, weekdays_only=True)[0] for c in trace["calls"]]
+        if all(f is c for f, c in zip(fixed, trace["calls"])):
+            return None
+        return [{"name": c["name"], "arguments": c["arguments"]} for c in fixed]
+    return rewrite
+
+
 def id_fix(histories: dict[str, list] | None = None, data_root: Path | None = None) -> Rewrite:
     """Pass an entity's id where a write call names it (agents/id_fix.py), with the entities of the history and of each
     recorded result before the call. The trace has no history, so it comes from the train samples (`histories`
@@ -98,7 +116,7 @@ def id_fix(histories: dict[str, list] | None = None, data_root: Path | None = No
 
 REWRITES: dict[str, Callable[..., Rewrite]] = {"freetext": freetext_rewrite, "minimal_reads": minimal_reads_rewrite,
                                                "run_vote": run_vote,
-                                               "date_fix": date_fix, "id_fix": id_fix}
+                                               "date_fix": date_fix, "weekday_fix": weekday_fix, "id_fix": id_fix}
 
 
 def rewrite_run(run: Path, data_root: Path, name: str, rewrite: Rewrite, out_dir: Path | None = None) -> dict:

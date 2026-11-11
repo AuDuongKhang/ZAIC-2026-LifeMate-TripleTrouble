@@ -153,6 +153,7 @@ def test_ref_check_is_off_by_default():
 def test_agent_info_records_prompt_and_options():
     agent = ReActAgent(llm=FakeLLM([]), prompt_version="v1", check_refs=False)
     assert agent.info["prompt"] == "v1" and agent.info["check_refs"] is False
+    assert agent.info["weekday_fix"] is False
 
 
 def test_date_hints_reach_the_system_prompt_and_info():
@@ -611,6 +612,39 @@ def test_date_fix_leaves_a_turn_with_two_dated_calls_alone():
     two = CALL("calendar.create_event", {"start": "2026-09-30T15:00:00+07:00"}) + CALL("tasks.add", {"due": "2026-09-30T18:00:00+07:00"})
     ReActAgent(llm=FakeLLM([two, "Xong."]), date_fix=True).run(DATE_TASK, env)
     assert [a for _, a in env.called] == [{"start": "2026-09-30T15:00:00+07:00"}, {"due": "2026-09-30T18:00:00+07:00"}]
+
+
+# --- weekday_fix -------------------------------------------------------------------------------------------------------
+
+WEEKDAY_TASK = Task(id="w", request="tạo lịch Bàn giao lúc mười giờ sáng thứ tư tuần sau", history=[], tools=[],
+                    context={"current_time": "2026-10-01T09:00:00+07:00", "timezone": "Asia/Ho_Chi_Minh"})
+WRONG_DUE = CALL("tasks.add", {"title": "Bàn giao", "due": "2026-10-08T10:00:00+07:00"})
+
+
+def test_weekday_fix_corrects_the_date_before_validation():
+    env, llm = FakeEnv(), FakeLLM([WRONG_DUE, "Xong."])
+    agent = ReActAgent(llm=llm, weekday_fix=True)
+    agent.run(WEEKDAY_TASK, env)
+    assert env.called == [("tasks.add", {"title": "Bàn giao", "due": "2026-10-07T10:00:00+07:00"})]
+    assert llm.seen[1][-2]["tool_calls"][0]["function"]["arguments"]["due"] == "2026-10-07T10:00:00+07:00"
+    assert agent.last_trace["weekday_fixes"] == [{"from": {"title": "Bàn giao", "due": "2026-10-08T10:00:00+07:00"},
+                                                  "to": {"title": "Bàn giao", "due": "2026-10-07T10:00:00+07:00"}}]
+    assert agent.info["weekday_fix"] is True
+
+
+def test_weekday_fix_is_off_by_default():
+    env = FakeEnv()
+    agent = ReActAgent(llm=FakeLLM([WRONG_DUE, "Xong."]))
+    agent.run(WEEKDAY_TASK, env)
+    assert env.called == [("tasks.add", {"title": "Bàn giao", "due": "2026-10-08T10:00:00+07:00"})]
+    assert "weekday_fixes" not in agent.last_trace
+
+
+def test_weekday_fix_leaves_day_phrases_alone():
+    env = FakeEnv()
+    task = dataclasses.replace(WEEKDAY_TASK, request="nhắc tôi sáng mai")
+    ReActAgent(llm=FakeLLM([CALL("tasks.add", {"due": "2026-10-05T08:00:00+07:00"}), "Xong."]), weekday_fix=True).run(task, env)
+    assert env.called == [("tasks.add", {"due": "2026-10-05T08:00:00+07:00"})]
 
 
 # --- analog_weight -----------------------------------------------------------------------------------------------------

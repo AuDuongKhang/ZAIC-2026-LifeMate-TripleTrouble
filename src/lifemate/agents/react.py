@@ -103,7 +103,7 @@ class ReActAgent(Agent):
                  leak_guard: bool = False, vote_prompts: int = 0, vote_apply: bool = True,
                  date_fix: bool = False, analog_weight: float = 0.0, max_new_tokens: int = 384, num_beams: int = 1,
                  leave_gold_apps_out: bool = False, group_examples: int = 0, id_fix: bool = False,
-                 spoken_email: bool = False):
+                 spoken_email: bool = False, weekday_fix: bool = False):
         """time_budget_s counts from task.started_at (sample start, ASR included) when the runner sets it.
         A step only starts with at least min_step_s left, and its generation is capped at the time remaining.
         check_refs holds back calls whose x-ref ids were never seen in a tool result (off by default: with it the
@@ -139,7 +139,10 @@ class ReActAgent(Agent):
         title or label) by that entity's id (agents/id_fix.py), after date_fix and before the call is validated.
         spoken_email respells the misheard parts of a spoken email address ("Account Example chấm tết") in the request
         and the history's user turns back to the spoken form the model was trained on (agents/spoken.py); the respelled
-        text is what the examples, the prompt and every later check see."""
+        text is what the examples, the prompt and every later check see.
+        weekday_fix is the narrower date_fix of agents/date_fix.py (weekdays_only): it puts the date of the request's
+        only "thứ X" phrase (thứ X tuần sau / tuần này / này, or bare) into the call's date arguments, after date_fix and
+        before id_fix and validation; day phrases (hôm nay, sáng mai) are left to the model. No extra call is ever sent."""
         if vote_prompts and not examples:
             raise ValueError("vote_prompts needs examples (the variants differ only in their examples)")
         llm_kw = {"revision": revision, **({"max_new_tokens": max_new_tokens} if max_new_tokens != 384 else {}),
@@ -156,6 +159,7 @@ class ReActAgent(Agent):
         self.leave_gold_apps_out = leave_gold_apps_out
         self.group_examples = group_examples
         self.id_fix, self.spoken_email = id_fix, spoken_email
+        self.weekday_fix = weekday_fix
         self.app_groups = load_app_groups(data_root or default_data_root(), split) if group_examples and examples else None
         if self.bank is None and examples:
             self.bank = ExampleBank.from_data(data_root or default_data_root(), split)
@@ -167,7 +171,7 @@ class ReActAgent(Agent):
                      "leak_guard": leak_guard, "vote_prompts": vote_prompts, "vote_apply": vote_apply, "date_fix": date_fix,
                      "analog_weight": analog_weight, "max_new_tokens": max_new_tokens, "num_beams": num_beams,
                      "leave_gold_apps_out": leave_gold_apps_out, "group_examples": group_examples, "id_fix": id_fix,
-                     "spoken_email": spoken_email}
+                     "spoken_email": spoken_email, "weekday_fix": weekday_fix}
 
     def run(self, task: Task, env) -> None:
         trace = self.last_trace = {"steps": [], "stop": None}  # None: a step raised
@@ -232,6 +236,12 @@ class ReActAgent(Agent):
                 if fixed is not calls:
                     trace.setdefault("date_fixes", []).extend({"from": a["arguments"], "to": b["arguments"]}
                                                               for a, b in zip(calls, fixed) if a is not b)
+                calls = fixed
+            if self.weekday_fix:  # same place as date_fix: the model reads back the call that was sent
+                fixed = fix_calls(calls, specs, task.request, task.context["current_time"], weekdays_only=True)
+                if fixed is not calls:
+                    trace.setdefault("weekday_fixes", []).extend({"from": a["arguments"], "to": b["arguments"]}
+                                                                 for a, b in zip(calls, fixed) if a is not b)
                 calls = fixed
             if self.id_fix:  # same place as date_fix: the model reads back the call that was sent
                 fixed = fix_calls_ids(calls, specs, names)
