@@ -703,3 +703,69 @@ def test_leave_gold_apps_out_reaches_the_prompt_vote_selects_too():
                        vote_prompts=3, leave_gold_apps_out=True)
     agent.run(task, FakeEnv())
     assert len(seen) == 3 and all(s == {"alarm"} for s in seen)
+
+
+REDEEM_SPEC = {"name": "loyalty.redeem", "kind": "write", "description": "Đổi điểm",
+               "parameters": {"type": "object", "properties": {"program": {"type": "string"}, "reward_id": {"type": "string"}}}}
+POINTS_SPEC = {"name": "loyalty.get_points", "kind": "read", "description": "Điểm thành viên",
+               "parameters": {"type": "object", "properties": {"program": {"type": "string"}}}}
+PROGRAMS = {"ok": True, "programs": [{"id": "prog_815", "name": "Cao Nguyên Rewards", "rewards": [{"id": "rw_02_1", "name": "Ly phin"}]}]}
+ID_TASK = dataclasses.replace(TASK, request="đổi điểm Cao Nguyên lấy ly phin", tools=[POINTS_SPEC, REDEEM_SPEC])
+BY_NAME = CALL("loyalty.redeem", {"program": "Cao Nguyên Rewards", "reward_id": "rw_02_1"})
+
+
+def test_id_fix_sends_the_id_of_a_named_entity():
+    env = FakeEnv(results={"loyalty.get_points": PROGRAMS})
+    agent = ReActAgent(llm=FakeLLM([CALL("loyalty.get_points", {}), BY_NAME, "Xong."]), id_fix=True)
+    agent.run(ID_TASK, env)
+    assert env.called[-1] == ("loyalty.redeem", {"program": "prog_815", "reward_id": "rw_02_1"})
+    assert agent.last_trace["id_fixes"] == [{"from": {"program": "Cao Nguyên Rewards", "reward_id": "rw_02_1"},
+                                             "to": {"program": "prog_815", "reward_id": "rw_02_1"}}]
+    assert agent.info["id_fix"] is True
+
+
+def test_id_fix_uses_entities_from_the_history():
+    task = dataclasses.replace(ID_TASK, history=[{"role": "assistant", "text": "", "tool_calls": [], "tool_results": [PROGRAMS]}])
+    env = FakeEnv()
+    ReActAgent(llm=FakeLLM([BY_NAME, "Xong."]), id_fix=True).run(task, env)
+    assert env.called == [("loyalty.redeem", {"program": "prog_815", "reward_id": "rw_02_1"})]
+
+
+def test_id_fix_after_a_refusal_check_keeps_the_entity_map():
+    task = dataclasses.replace(ID_TASK, history=[{"role": "assistant", "text": "", "tool_calls": [], "tool_results": [PROGRAMS]}])
+    env = FakeEnv()
+    agent = ReActAgent(llm=FakeLLM([REFUSE, BY_NAME, "Xong."]), id_fix=True, refusal_check=True, refusal_min_hits=1)
+    agent.run(task, env)
+    assert agent.last_trace["refusal_check"]
+    assert env.called == [("loyalty.redeem", {"program": "prog_815", "reward_id": "rw_02_1"})]
+
+
+def test_id_fix_is_off_by_default():
+    env = FakeEnv(results={"loyalty.get_points": PROGRAMS})
+    agent = ReActAgent(llm=FakeLLM([CALL("loyalty.get_points", {}), BY_NAME, "Xong."]))
+    agent.run(ID_TASK, env)
+    assert env.called[-1] == ("loyalty.redeem", {"program": "Cao Nguyên Rewards", "reward_id": "rw_02_1"})
+    assert agent.info["id_fix"] is False and "id_fixes" not in agent.last_trace
+
+
+HEARD = "soạn thư nháp gửi Family Account Example chấm tết nhé"
+SAID = "soạn thư nháp gửi Family a còng example chấm test nhé"
+
+
+def test_spoken_email_respells_the_request_history_and_example_query():
+    task = dataclasses.replace(TASK, request=HEARD, context={**TASK.context, "installed_apps": {"email": {}}},
+                               history=[{"role": "user", "text": "gửi vendor acong example.step"},
+                                        {"role": "assistant", "text": "Dạ", "tool_calls": [], "tool_results": []}])
+    bank, llm = StubBank("EX"), FakeLLM(["Xong."])
+    agent = ReActAgent(llm=llm, examples=2, bank=bank, spoken_email=True)
+    agent.run(task, FakeEnv())
+    text = json.dumps(llm.seen[0], ensure_ascii=False)
+    assert SAID in text and "vendor a còng example chấm test" in text and "Account Example" not in text
+    assert bank.asked[0][0] == SAID and agent.info["spoken_email"] is True
+
+
+def test_spoken_email_is_off_by_default():
+    llm = FakeLLM(["Xong."])
+    agent = ReActAgent(llm=llm)
+    agent.run(dataclasses.replace(TASK, request=HEARD), FakeEnv())
+    assert HEARD in json.dumps(llm.seen[0], ensure_ascii=False) and agent.info["spoken_email"] is False

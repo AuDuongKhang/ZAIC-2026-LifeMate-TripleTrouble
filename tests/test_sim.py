@@ -4,7 +4,7 @@ import pytest
 
 from lifemate.data import default_data_root, import_zaic_tools
 from lifemate.evaluate import evaluate
-from lifemate.sim import main, rewrite_run, run_vote
+from lifemate.sim import id_fix, main, rewrite_run, run_vote
 from lifemate.splits import load_splits
 
 
@@ -125,3 +125,23 @@ def test_date_fix_rewrite_changes_only_the_date(tmp_path):
     assert rewrite(trace, catalog) == [{"name": "calendar.create_event", "arguments": {"start": "2026-10-02T15:00:00+07:00"}}]
     assert rewrite(dict(trace, request="họp lúc ba giờ"), catalog) is None
     assert rewrite(dict(trace, id="unknown"), catalog) is None
+
+
+ID_CATALOG = {"loyalty.redeem": {"name": "loyalty.redeem", "kind": "write",
+                                 "parameters": {"properties": {"program": {"type": "string"}, "reward_id": {"type": "string"}}}}}
+REDEEM_BY_NAME = {"name": "loyalty.redeem", "arguments": {"program": "MinhPoint", "reward_id": "rw_1"}, "result": {"ok": True}}
+
+
+def test_id_fix_rewrite_uses_earlier_results_and_the_history():
+    read = {"name": "loyalty.get_points", "arguments": {}, "result": {"programs": [{"id": "prog_9", "name": "MinhPoint"}]}}
+    rewrite = id_fix(histories={"s1": [], "s2": [{"role": "assistant", "tool_results": [{"id": "prog_7", "name": "MinhPoint"}]}]})
+    assert rewrite({"id": "s1", "calls": [read, REDEEM_BY_NAME]}, ID_CATALOG) == [
+        {"name": "loyalty.get_points", "arguments": {}},
+        {"name": "loyalty.redeem", "arguments": {"program": "prog_9", "reward_id": "rw_1"}}]
+    assert rewrite({"id": "s2", "calls": [REDEEM_BY_NAME]}, ID_CATALOG) == [
+        {"name": "loyalty.redeem", "arguments": {"program": "prog_7", "reward_id": "rw_1"}}]
+
+
+def test_id_fix_rewrite_returns_none_when_nothing_changes():
+    rewrite = id_fix(histories={"s1": []})
+    assert rewrite({"id": "s1", "calls": [REDEEM_BY_NAME]}, ID_CATALOG) is None  # no entity named MinhPoint seen
