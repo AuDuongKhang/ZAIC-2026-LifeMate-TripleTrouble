@@ -207,3 +207,38 @@ def test_out_of_scope_examples_survive_any_exclusion(train_samples):
     installed = set(train_samples[0]["context"]["installed_apps"])
     picked = bank.select("kể chuyện cười", installed, k=20, exclude_apps=installed)
     assert picked and all(not p["label"]["tool_calls"] for p in picked)
+
+
+def test_extract_unseen_history_chains_same_app_read_and_write():
+    from lifemate.agents.fewshot import extract_unseen_history
+    cat = {
+        "parking.list_sessions": {"name": "parking.list_sessions", "kind": "read", "parameters": {"properties": {}}},
+        "parking.end_session": {"name": "parking.end_session", "kind": "write",
+                                "parameters": {"properties": {"session_id": {"type": "string", "x-ref": "parking.sessions"}}}},
+    }
+    sample = {
+        "id": "p1",
+        "history": [
+            {"role": "user", "audio": "u0.wav"},
+            {"role": "assistant", "text": "Xe đang gửi ở Bến Ninh Kiều.",
+             "tool_calls": [{"name": "parking.list_sessions", "arguments": {}}],
+             "tool_results": [{"sessions": [{"session_id": "park_1"}]}]},
+            {"role": "user", "audio": "u1.wav"},
+            {"role": "assistant", "text": "Đã kết thúc lượt gửi xe.",
+             "tool_calls": [{"name": "parking.end_session", "arguments": {"session_id": "park_1"}}],
+             "tool_results": [{"ok": True}]},
+        ],
+    }
+    docs = extract_unseen_history([sample], cat, known_apps={"alarm"})
+    assert len(docs) == 1
+    assert [c["name"] for c in docs[0]["label"]["tool_calls"]] == ["parking.list_sessions", "parking.end_session"]
+    assert docs[0]["id"] == "p1"
+    assert extract_unseen_history([sample], cat, known_apps={"parking"}) == []
+
+
+def test_from_data_with_history_examples_adds_unseen_apps(train_samples):
+    root = default_data_root()
+    plain = ExampleBank.from_data(root, "train", history_examples=False)
+    with_hist = ExampleBank.from_data(root, "train", history_examples=True)
+    assert len(with_hist) > len(plain)
+    assert "subscriptions" not in plain.bank_apps and "subscriptions" in with_hist.bank_apps

@@ -62,6 +62,51 @@ def gold_tool_names(sample: dict) -> list[str]:
     return names
 
 
+def extract_unseen_history(samples: list[dict], catalog: dict[str, dict], known_apps: set[str]) -> list[dict]:
+    """Worked examples mined from `samples`'s `history` turns for apps absent from `known_apps`.
+
+    Uses only assistant turn fields (`text`, `tool_calls`, `tool_results`), which exist in every split (including
+    `public_test` and `private_test`) without running ASR. When a write/ask turn has an earlier read-only turn on the
+    same app in the same history, they are combined so the example shows the full read -> write/ask sequence and
+    satisfies `_sees_its_ids`. Keeps every self-contained write/ask example plus read-only examples for tools not
+    already covered by a write/ask example. Each doc keeps its parent sample `id`, so `select(..., exclude_id=task.id)`
+    never shows a sample its own history."""
+    raw: list[tuple[tuple[str, int], dict, bool]] = []
+    for s in samples:
+        h = s.get("history") or []
+        asst = [h[i + 1] for i in range(len(h) - 1)
+                if h[i].get("role") == "user" and h[i + 1].get("role") == "assistant" and h[i + 1].get("tool_calls")]
+        used: set[tuple[str, int]] = set()
+        for idx, a in enumerate(asst):
+            calls, results = a["tool_calls"], a["tool_results"]
+            doc = {"id": s["id"], "audio_text": a.get("text", ""),
+                   "label": {"tool_calls": calls, "tool_results": results}}
+            apps = gold_apps(doc["label"])
+            if not apps or apps <= known_apps:
+                continue
+            is_wa = any(c["name"] == "sys.ask_missing_info" or (catalog.get(c["name"]) or {}).get("kind") == "write"
+                        for c in calls)
+            if is_wa:
+                for p_idx in range(idx - 1, -1, -1):
+                    pa = asst[p_idx]
+                    pcalls, presults = pa["tool_calls"], pa["tool_results"]
+                    pdoc = {"label": {"tool_calls": pcalls, "tool_results": presults}}
+                    p_ro = all(c["name"] != "sys.ask_missing_info"
+                               and (catalog.get(c["name"]) or {}).get("kind") == "read" for c in pcalls)
+                    if p_ro and gold_apps(pdoc["label"]) == apps and (p_idx == idx - 1 or not _sees_its_ids(doc, catalog)):
+                        comb = {"id": s["id"], "audio_text": (pa.get("text", "") + " " + a.get("text", "")).strip(),
+                                "label": {"tool_calls": pcalls + calls, "tool_results": presults + results}}
+                        if _sees_its_ids(comb, catalog):
+                            doc = comb
+                            used.add((s["id"], p_idx))
+                            break
+            if _sees_its_ids(doc, catalog):
+                raw.append(((s["id"], idx), doc, is_wa))
+        raw = [(k, d, is_wa) for k, d, is_wa in raw if k not in used]
+    wa_tools = {c["name"] for _, d, is_wa in raw if is_wa for c in d["label"]["tool_calls"]}
+    return [d for _, d, is_wa in raw if is_wa or any(c["name"] not in wa_tools for c in d["label"]["tool_calls"])]
+
+
 class ExampleBank:
     def __init__(self, samples: list[dict], pool_ids: set[str], catalog: dict[str, dict] | None = None):
         """With a tool catalog, samples whose ids come from their history rather than their own results are left out."""
@@ -83,11 +128,22 @@ class ExampleBank:
         return len(self.docs)
 
     @classmethod
-    def from_data(cls, data_root: Path, split: str = "train") -> "ExampleBank":
-        """The pool when evaluating on train (dev/holdout stay unseen); every train sample for any other split."""
+    def from_data(cls, data_root: Path, split: str = "train", history_examples: bool = False) -> "ExampleBank":
+        """The pool when evaluating on train (dev/holdout stay unseen); every train sample for any other split.
+        With `history_examples=True`, also mines self-contained history turns from `split` for apps absent from the
+        training bank (unseen apps on holdout, public_test, or private_test)."""
         samples = load_samples(data_root, "train")
+        train_cat = load_catalog(data_root, "train")
         pool = set(load_splits()["pool"]) if split == "train" else {s["id"] for s in samples}
-        return cls(samples, pool, load_catalog(data_root, "train"))
+        if not history_examples:
+            return cls(samples, pool, train_cat)
+        base_docs = [s for s in samples if s["id"] in pool and _sees_its_ids(s, train_cat)]
+        known_apps = set().union(*(gold_apps(s["label"]) for s in base_docs)) if base_docs else set()
+        split_samples = samples if split == "train" else load_samples(data_root, split)
+        split_cat = train_cat if split == "train" else load_catalog(data_root, split)
+        hdocs = extract_unseen_history(split_samples, split_cat, known_apps)
+        all_docs = base_docs + hdocs
+        return cls(all_docs, {d["id"] for d in all_docs}, {**train_cat, **split_cat})
 
     def _bm25(self, i: int, query: set[str]) -> float:
         tf, norm = self.tokens[i], 1 - B + B * self.lengths[i] / max(self.avg_len, 1e-9)

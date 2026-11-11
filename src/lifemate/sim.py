@@ -22,6 +22,7 @@ from .agents.date_fix import fix_calls
 from .agents.freetext import freetext_rewrite
 from .agents.minimal_reads import minimal_reads_rewrite
 from .agents.react import decides, vote_key
+from .agents.result_fixes import result_fixes_rewrite
 from .compare import compare, load_scores, verdict
 from .data import default_data_root, import_zaic_tools, load_catalog, load_samples
 from .evaluate import evaluate
@@ -78,7 +79,8 @@ def date_fix(times: dict[str, str] | None = None, data_root: Path | None = None)
 
 REWRITES: dict[str, Callable[..., Rewrite]] = {"freetext": freetext_rewrite, "minimal_reads": minimal_reads_rewrite,
                                                "run_vote": run_vote,
-                                               "date_fix": date_fix}
+                                               "date_fix": date_fix,
+                                               "result_fixes": result_fixes_rewrite}
 
 
 def rewrite_run(run: Path, data_root: Path, name: str, rewrite: Rewrite, out_dir: Path | None = None) -> dict:

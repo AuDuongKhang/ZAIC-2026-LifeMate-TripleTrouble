@@ -20,6 +20,7 @@ from .prompting import build_messages, system_message, tool_schema
 from .prompts import DEFAULT_PROMPT, FINAL_TEXT, REFUSAL_TEXT
 from .refs import scalar_strings, unseen_refs
 from .refusal import matching_tools
+from .result_fixes import fix_result_call, fix_result_calls
 
 EMPTY_HINT = ("\nNo results. Try once more with other values: another date (up to 7 days away), fewer optional filters "
               "or a shorter query. If that also finds nothing, reply in one short sentence without calling any tool.")
@@ -92,7 +93,7 @@ class ReActAgent(Agent):
                  refusal_check: bool = False, refusal_min_hits: int = 1,
                  leak_guard: bool = False, vote_prompts: int = 0, vote_apply: bool = True,
                  date_fix: bool = False, analog_weight: float = 0.0, max_new_tokens: int = 384, num_beams: int = 1,
-                 leave_gold_apps_out: bool = False):
+                 leave_gold_apps_out: bool = False, history_examples: bool = False, result_fixes: bool = False):
         """time_budget_s counts from task.started_at (sample start, ASR included) when the runner sets it.
         A step only starts with at least min_step_s left, and its generation is capped at the time remaining.
         check_refs holds back calls whose x-ref ids were never seen in a tool result (off by default: with it the
@@ -120,7 +121,10 @@ class ReActAgent(Agent):
         max_new_tokens and num_beams go to the LLM the agent builds (an `llm` passed in keeps its own); beam search
         stays deterministic but costs time.
         leave_gold_apps_out (SFT rendering and the train-only diagnostic, never a real run) leaves the apps of the
-        task's gold calls out of the examples; it reads Task.label and raises ValueError without one."""
+        task's gold calls out of the examples; it reads Task.label and raises ValueError without one.
+        history_examples mines self-contained history turns from the current split for apps absent from the training
+        bank (unseen apps on holdout, public_test, or private_test).
+        result_fixes corrects write-call arguments that misread an earlier read result (agents/result_fixes.py)."""
         if vote_prompts and not examples:
             raise ValueError("vote_prompts needs examples (the variants differ only in their examples)")
         llm_kw = {"revision": revision, **({"max_new_tokens": max_new_tokens} if max_new_tokens != 384 else {}),
@@ -135,8 +139,9 @@ class ReActAgent(Agent):
         self.vote_prompts, self.vote_apply = vote_prompts, vote_apply
         self.analog_weight = analog_weight
         self.leave_gold_apps_out = leave_gold_apps_out
+        self.history_examples, self.result_fixes = history_examples, result_fixes
         if self.bank is None and examples:
-            self.bank = ExampleBank.from_data(data_root or default_data_root(), split)
+            self.bank = ExampleBank.from_data(data_root or default_data_root(), split, history_examples=history_examples)
         # Recorded in meta.json, so every RESULTS.md row traces back to its prompt and settings.
         self.info = {"model": model if llm is None else type(llm).__name__, "revision": revision,
                      "prompt": prompt_version, "check_refs": check_refs, "max_steps": max_steps, "time_budget_s": time_budget_s,
@@ -144,7 +149,8 @@ class ReActAgent(Agent):
                      "date_hints": date_hints, "empty_hint": empty_hint, "refusal_check": refusal_check, "refusal_min_hits": refusal_min_hits,
                      "leak_guard": leak_guard, "vote_prompts": vote_prompts, "vote_apply": vote_apply, "date_fix": date_fix,
                      "analog_weight": analog_weight, "max_new_tokens": max_new_tokens, "num_beams": num_beams,
-                     "leave_gold_apps_out": leave_gold_apps_out}
+                     "leave_gold_apps_out": leave_gold_apps_out, "history_examples": history_examples,
+                     "result_fixes": result_fixes}
 
     def run(self, task: Task, env) -> None:
         trace = self.last_trace = {"steps": [], "stop": None}  # None: a step raised
@@ -155,6 +161,9 @@ class ReActAgent(Agent):
         tools = [tool_schema(spec) for spec in task.tools]
         specs = {spec["name"]: spec for spec in task.tools}
         seen = scalar_strings([turn.get("tool_results") for turn in task.history], set())
+        prior_calls = [{"name": tc["name"], "arguments": tc["arguments"], "result": tr}
+                       for turn in task.history
+                       for tc, tr in zip(turn.get("tool_calls") or [], turn.get("tool_results") or [])]
         budget = self.llm.context_limit - self.llm.max_new_tokens
         examples_text = ""
         if self.bank is not None:
@@ -204,9 +213,20 @@ class ReActAgent(Agent):
                     trace.setdefault("date_fixes", []).extend({"from": a["arguments"], "to": b["arguments"]}
                                                               for a, b in zip(calls, fixed) if a is not b)
                 calls = fixed
+            if self.result_fixes:
+                fixed = fix_result_calls(calls, prior_calls, task.request)
+                if fixed is not calls:
+                    trace.setdefault("result_fixes", []).extend({"from": a["arguments"], "to": b["arguments"]}
+                                                                for a, b in zip(calls, fixed) if a is not b)
+                calls = fixed
             messages.append({"role": "assistant", "content": BLOCK.sub("", text).strip(), "tool_calls": [
                 {"type": "function", "function": {"name": c["name"], "arguments": c["arguments"]}} for c in calls]})
             for call in calls:
+                if self.result_fixes:
+                    fixed_call = fix_result_call(call, calls, prior_calls, task.request)
+                    if fixed_call is not call:
+                        trace.setdefault("result_fixes", []).append({"from": call["arguments"], "to": fixed_call["arguments"]})
+                        call = fixed_call
                 key = json.dumps([call["name"], call["arguments"]], sort_keys=True, ensure_ascii=False)
                 if key in done:
                     invalid += 1
@@ -235,6 +255,7 @@ class ReActAgent(Agent):
                                      "come from tool results; call a read or search tool to look it up first."})
                     continue
                 result = env.call(call["name"], call["arguments"])
+                prior_calls.append({"name": call["name"], "arguments": call["arguments"], "result": result})
                 scalar_strings(result, seen)
                 done.add(key)
                 if call["name"] == SYS_TOOL:
