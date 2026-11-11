@@ -154,6 +154,7 @@ def test_agent_info_records_prompt_and_options():
     agent = ReActAgent(llm=FakeLLM([]), prompt_version="v1", check_refs=False)
     assert agent.info["prompt"] == "v1" and agent.info["check_refs"] is False
     assert agent.info["weekday_fix"] is False
+    assert agent.info["empty_retry"] is False
 
 
 def test_date_hints_reach_the_system_prompt_and_info():
@@ -803,3 +804,143 @@ def test_spoken_email_is_off_by_default():
     agent = ReActAgent(llm=llm)
     agent.run(dataclasses.replace(TASK, request=HEARD), FakeEnv())
     assert HEARD in json.dumps(llm.seen[0], ensure_ascii=False) and agent.info["spoken_email"] is False
+
+
+# --- empty_retry -------------------------------------------------------------------------------------------------------
+
+def _spec(name, kind, props, required=()):
+    return {"name": name, "kind": kind, "description": name,
+            "parameters": {"type": "object", "properties": {p: {"type": "string"} for p in props}, "required": list(required)}}
+
+
+C_SEARCH = _spec("contacts.search", "read", ["query"])
+C_FLIGHTS = _spec("flights.search", "read", ["origin", "destination", "date", "passengers"], ["origin", "destination", "date"])
+C_EVENTS = _spec("calendar.list_events", "read", ["date_from", "date_to", "query"])
+C_CALL = {"name": "phone.call", "kind": "write", "description": "Gọi điện",
+          "parameters": {"type": "object", "properties": {"contact_id": {"type": "string", "x-ref": "contacts"}},
+                         "required": ["contact_id"]}}
+C_NOTE = _spec("notes.create", "write", ["title", "tags"])
+RETRY_TASK = dataclasses.replace(TASK, request="gọi Sếp Dũng", tools=[C_SEARCH, C_FLIGHTS, C_EVENTS, C_CALL, C_NOTE])
+NO_CONTACTS = {"ok": True, "contacts": []}
+DUNG = {"ok": True, "contacts": [{"id": "c_01", "name": "Sếp Dũng"}]}
+
+
+def _k(name, args):
+    return name, json.dumps(args, sort_keys=True)
+
+
+class ArgEnv(FakeEnv):
+    """Results by (name, arguments); `reject` holds arguments validate refuses."""
+
+    def __init__(self, results=None, reject=()):
+        super().__init__()
+        self.by_args, self.reject = dict(results or {}), list(reject)
+
+    def validate(self, name, args):
+        self.validated.append(name)
+        return {"ok": False, "error": "query is required"} if args in self.reject else {"ok": True}
+
+    def call(self, name, args):
+        self.called.append((name, args))
+        return self.by_args.get(_k(name, args), {"ok": True})
+
+
+def test_empty_retry_resends_the_read_without_its_filter():
+    env = ArgEnv({_k("contacts.search", {"query": "Sếp Nguyễn"}): NO_CONTACTS, _k("contacts.search", {}): DUNG})
+    llm = FakeLLM([CALL("contacts.search", {"query": "Sếp Nguyễn"}), "Xong."])
+    agent = ReActAgent(llm=llm, empty_retry=True)
+    agent.run(RETRY_TASK, env)
+    assert env.called == [("contacts.search", {"query": "Sếp Nguyễn"}), ("contacts.search", {})]
+    assistant, tool = llm.seen[1][-2], llm.seen[1][-1]
+    assert [c["function"]["arguments"] for c in assistant["tool_calls"]] == [{}]
+    assert tool["role"] == "tool" and "Sếp Dũng" in tool["content"]
+    assert agent.last_trace["empty_retries"] == [{"name": "contacts.search", "from": {"query": "Sếp Nguyễn"}, "to": {},
+                                                  "found": True}]
+    assert agent.info["empty_retry"] is True
+
+
+def test_empty_retry_is_off_by_default():
+    env = ArgEnv({_k("contacts.search", {"query": "Sếp Nguyễn"}): NO_CONTACTS, _k("contacts.search", {}): DUNG})
+    llm = FakeLLM([CALL("contacts.search", {"query": "Sếp Nguyễn"}), "Xong."])
+    agent = ReActAgent(llm=llm)
+    agent.run(RETRY_TASK, env)
+    assert env.called == [("contacts.search", {"query": "Sếp Nguyễn"})]
+    assert llm.seen[1][-1]["content"] == json.dumps(NO_CONTACTS)
+    assert "empty_retries" not in agent.last_trace and agent.info["empty_retry"] is False
+
+
+def test_empty_retry_skips_a_read_with_only_required_arguments():
+    args = {"origin": "HAN", "destination": "DAD", "date": "2026-10-03"}
+    env = ArgEnv({_k("flights.search", args): {"ok": True, "flights": []}})
+    ReActAgent(llm=FakeLLM([CALL("flights.search", args), "Xong."]), empty_retry=True).run(RETRY_TASK, env)
+    assert env.called == [("flights.search", args)]
+
+
+def test_empty_retry_skips_a_dated_read():
+    day = {"date_from": "2026-11-22", "date_to": "2026-11-22"}
+    env = ArgEnv({_k("calendar.list_events", day): {"ok": True, "events": []}})
+    ReActAgent(llm=FakeLLM([CALL("calendar.list_events", day), "Xong."]), empty_retry=True).run(RETRY_TASK, env)
+    assert env.called == [("calendar.list_events", day)]
+
+
+def test_empty_retry_never_follows_a_write_or_an_ask():
+    note = {"title": "x", "tags": "y"}
+    env = ArgEnv({_k("notes.create", note): {"ok": True, "items": []}})
+    ReActAgent(llm=FakeLLM([CALL("notes.create", note), "Xong."]), empty_retry=True).run(RETRY_TASK, env)
+    assert env.called == [("notes.create", note)]
+    ask = {"tool_name": "phone.call", "params": ["contact_id"]}
+    env = ArgEnv({_k("sys.ask_missing_info", ask): {"ok": True, "options": []}})
+    ReActAgent(llm=FakeLLM([CALL("sys.ask_missing_info", ask)]), empty_retry=True).run(RETRY_TASK, env)
+    assert env.called == [("sys.ask_missing_info", ask)]
+
+
+def test_empty_retry_does_not_repeat_a_call_already_sent():
+    env = ArgEnv({_k("contacts.search", {}): DUNG, _k("contacts.search", {"query": "Lan"}): NO_CONTACTS})
+    llm = FakeLLM([CALL("contacts.search", {}), CALL("contacts.search", {"query": "Lan"}), "Xong."])
+    agent = ReActAgent(llm=llm, empty_retry=True)
+    agent.run(RETRY_TASK, env)
+    assert env.called == [("contacts.search", {}), ("contacts.search", {"query": "Lan"})]
+    assert llm.seen[2][-1]["content"] == json.dumps(NO_CONTACTS) and "empty_retries" not in agent.last_trace
+
+
+def test_empty_retry_skips_a_relaxed_call_the_env_rejects():
+    env = ArgEnv({_k("contacts.search", {"query": "Lan"}): NO_CONTACTS}, reject=[{}])
+    agent = ReActAgent(llm=FakeLLM([CALL("contacts.search", {"query": "Lan"}), "Xong."]), empty_retry=True)
+    agent.run(RETRY_TASK, env)
+    assert env.called == [("contacts.search", {"query": "Lan"})] and "empty_retries" not in agent.last_trace
+
+
+def test_empty_retry_when_both_are_empty():
+    env = ArgEnv({_k("contacts.search", {"query": "Lan"}): NO_CONTACTS, _k("contacts.search", {}): NO_CONTACTS})
+    llm = FakeLLM([CALL("contacts.search", {"query": "Lan"}), "Xong."])
+    agent = ReActAgent(llm=llm, empty_retry=True)
+    agent.run(RETRY_TASK, env)
+    assert env.called == [("contacts.search", {"query": "Lan"}), ("contacts.search", {})]
+    assert llm.seen[1][-2]["tool_calls"][0]["function"]["arguments"] == {}
+    assert llm.seen[1][-1]["content"] == json.dumps(NO_CONTACTS)
+    assert agent.last_trace["empty_retries"][0]["found"] is False
+
+
+def test_empty_retry_hint_follows_the_result_the_model_sees():
+    found = ArgEnv({_k("contacts.search", {"query": "Lan"}): NO_CONTACTS, _k("contacts.search", {}): DUNG})
+    llm = FakeLLM([CALL("contacts.search", {"query": "Lan"}), "Xong."])
+    ReActAgent(llm=llm, empty_retry=True, empty_hint=True).run(RETRY_TASK, found)
+    assert llm.seen[1][-1]["content"] == json.dumps(DUNG, ensure_ascii=False)
+    empty = ArgEnv({_k("contacts.search", {"query": "Lan"}): NO_CONTACTS, _k("contacts.search", {}): NO_CONTACTS})
+    llm = FakeLLM([CALL("contacts.search", {"query": "Lan"}), "Xong."])
+    ReActAgent(llm=llm, empty_retry=True, empty_hint=True).run(RETRY_TASK, empty)
+    assert llm.seen[1][-1]["content"] == json.dumps(NO_CONTACTS) + HINT
+
+
+def test_ids_from_the_retry_pass_the_ref_check():
+    env = ArgEnv({_k("contacts.search", {"query": "Sếp Nguyễn"}): NO_CONTACTS, _k("contacts.search", {}): DUNG})
+    llm = FakeLLM([CALL("contacts.search", {"query": "Sếp Nguyễn"}), CALL("phone.call", {"contact_id": "c_01"}), "Xong."])
+    ReActAgent(llm=llm, empty_retry=True, check_refs=True).run(RETRY_TASK, env)
+    assert env.called[-1] == ("phone.call", {"contact_id": "c_01"})
+
+
+def test_ids_from_the_retry_feed_id_fix():
+    env = ArgEnv({_k("contacts.search", {"query": "Sếp Nguyễn"}): NO_CONTACTS, _k("contacts.search", {}): DUNG})
+    llm = FakeLLM([CALL("contacts.search", {"query": "Sếp Nguyễn"}), CALL("phone.call", {"contact_id": "Sếp Dũng"}), "Xong."])
+    ReActAgent(llm=llm, empty_retry=True, id_fix=True).run(RETRY_TASK, env)
+    assert env.called[-1] == ("phone.call", {"contact_id": "c_01"})
