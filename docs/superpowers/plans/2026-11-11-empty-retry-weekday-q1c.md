@@ -291,7 +291,7 @@ No code. It can start before Tasks 1 to 3 are done.
 | ASR-noisy copy from cache | `pho-large-fp16` |
 | extra train args | `--model TripleTrouble/qwen35-4b-text --lora-targets q_proj,k_proj,v_proj,o_proj,in_proj_qkv,in_proj_z,out_proj,gate_proj,up_proj,down_proj` |
 
-  Check before leaving it: the records name reads `gold-pool-m1-asr-pho-large-fp16-lao50`, the log's "trainable params" line matches the sft-q1b log, and the step count is 356. If any field of `run_config.json` differs from this table, `run_config.json` wins; report the difference.
+  Check before leaving it: the records name reads `gold-pool-m1-asr-pho-large-fp16-lao50`, the log's "trainable params" line matches the sft-q1b log, and the step count is 356. For a copied field, `run_config.json` wins when it differs from this table; report the difference. The three changed fields (run name, HF repo, leave-out share `50`) always come from this table, whatever `run_config.json` says.
 - [ ] **Step 2: HUMAN (molab), merge** the adapter as for sft-q1b, and note the HF commit sha of the merged model.
 - [ ] **Step 3: HUMAN (molab), gate runs** with `notebooks/molab_run.py`, branch `feat/empty-retry`, split `train`, ASR preset `pho-large-ft-b`: G3 = preset `sft-q1c-refs-fixes`, subset `holdout`; G4 = the same, subset `dev`.
 - [ ] **Step 4: Score** each run (`python -m lifemate.evaluate runs/<run>`) and compare with the sft-q1b baselines:
