@@ -159,3 +159,58 @@ def test_the_fix_never_changes_a_gold_call_of_train(train_samples):
                if fix_calls(s["label"]["tool_calls"], catalog, s["audio_text"], s["context"]["current_time"])
                != s["label"]["tool_calls"]}
     assert changed <= {"train_1249", "train_1338"}, sorted(changed)
+
+
+# weekdays_only (weekday_fix): only "thứ X" phrases, a clock word after the weekday, "hôm đó" after a qualified weekday,
+# and every date argument of a call fixed together when they share one day.
+THU = "2026-09-24T09:00:00+07:00"   # a Thursday
+
+
+def test_weekday_next_week():
+    assert resolve_date("Đặt cho tôi một ghế chuyến RV21 đi Đà Nẵng thứ bảy tuần sau", THU, weekdays_only=True) == "2026-10-03"
+
+
+def test_same_day_reference_after_a_qualified_weekday_is_allowed():
+    text = "Thứ tư tuần sau anh đi Hải Phòng, giữ một chỗ gửi xe từ năm giờ sáng hôm đó"
+    assert resolve_date(text, THU, weekdays_only=True) == "2026-09-30"
+    assert resolve_date(text, THU) is None            # the old rule is unchanged
+
+
+def test_same_day_reference_after_a_bare_weekday_still_blocks():
+    assert resolve_date("Thứ hai họp, nhắc anh sáng hôm đó", THU, weekdays_only=True) is None
+
+
+def test_weekday_followed_by_a_clock_word_is_not_a_weekday():
+    assert resolve_date("ghi vào lịch thứ hai giờ chiều", "2026-10-05T09:00:00+07:00", weekdays_only=True) is None
+
+
+def test_day_phrases_are_left_to_the_model():
+    assert resolve_date("hủy hẹn sáng mai", "2026-10-20T21:10:00+07:00", weekdays_only=True) is None
+    assert resolve_date("hủy hẹn sáng mai", "2026-10-20T21:10:00+07:00") == "2026-10-21"
+
+
+def test_ordinal_is_not_a_weekday():
+    assert resolve_date("mở quán thứ hai trong danh sách", THU, weekdays_only=True) is None
+
+
+EVENT = "tạo lịch Bàn giao lúc mười giờ sáng thứ tư tuần sau"
+NOW = "2026-10-01T09:00:00+07:00"
+
+
+def test_start_and_end_on_one_day_are_fixed_together():
+    call = {"name": "calendar.create_event", "arguments": {
+        "title": "Bàn giao", "start": "2026-10-08T10:00:00+07:00", "end": "2026-10-08T11:00:00+07:00"}}
+    fixed = fix_call_dates(call, None, EVENT, NOW, weekdays_only=True)
+    assert fixed["arguments"]["start"] == "2026-10-07T10:00:00+07:00"
+    assert fixed["arguments"]["end"] == "2026-10-07T11:00:00+07:00"
+    assert fix_call_dates(call, None, EVENT, NOW) is call          # the old rule needs a single dated argument
+
+
+def test_dates_on_different_days_are_left_alone():
+    call = {"name": "parking.reserve", "arguments": {"start": "2026-10-08T05:00:00+07:00", "end": "2026-10-11T05:00:00+07:00"}}
+    assert fix_call_dates(call, None, EVENT, NOW, weekdays_only=True) is call
+
+
+def test_a_right_date_returns_the_same_call():
+    call = {"name": "tasks.add", "arguments": {"title": "x", "due": "2026-10-07T10:00:00+07:00"}}
+    assert fix_call_dates(call, None, EVENT, NOW, weekdays_only=True) is call

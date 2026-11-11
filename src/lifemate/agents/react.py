@@ -14,6 +14,7 @@ from ..task import Task
 from .ask_guard import fold
 from .base import Agent
 from .date_fix import fix_calls
+from .empty_retry import relaxed_call
 from .fewshot import ExampleBank, gold_apps, render_examples
 from .id_fix import entity_names, fix_calls_ids
 from .llm import ChatLLM, HFChatLLM
@@ -103,7 +104,7 @@ class ReActAgent(Agent):
                  leak_guard: bool = False, vote_prompts: int = 0, vote_apply: bool = True,
                  date_fix: bool = False, analog_weight: float = 0.0, max_new_tokens: int = 384, num_beams: int = 1,
                  leave_gold_apps_out: bool = False, group_examples: int = 0, id_fix: bool = False,
-                 spoken_email: bool = False):
+                 spoken_email: bool = False, weekday_fix: bool = False, empty_retry: bool = False):
         """time_budget_s counts from task.started_at (sample start, ASR included) when the runner sets it.
         A step only starts with at least min_step_s left, and its generation is capped at the time remaining.
         check_refs holds back calls whose x-ref ids were never seen in a tool result (off by default: with it the
@@ -139,7 +140,15 @@ class ReActAgent(Agent):
         title or label) by that entity's id (agents/id_fix.py), after date_fix and before the call is validated.
         spoken_email respells the misheard parts of a spoken email address ("Account Example chấm tết") in the request
         and the history's user turns back to the spoken form the model was trained on (agents/spoken.py); the respelled
-        text is what the examples, the prompt and every later check see."""
+        text is what the examples, the prompt and every later check see.
+        weekday_fix is the narrower date_fix of agents/date_fix.py (weekdays_only): it puts the date of the request's
+        only "thứ X" phrase (thứ X tuần sau / tuần này / này, or bare) into the call's date arguments, after date_fix and
+        before id_fix and validation; day phrases (hôm nay, sáng mai) are left to the model. No extra call is ever sent.
+        empty_retry: when a read tool returns an empty result, send it once more without its optional, non-date
+        arguments (agents/empty_retry.py), unless that call was already sent or env.validate rejects it. The model then
+        reads the relaxed call and its result in place of the empty one, so the transcript shows one call and its real
+        result. This is the only option that sends a call the model did not write: empty_hint, which only changed the
+        message, lost on sft-v2, and every call is scored, so it fires only after a read that found nothing."""
         if vote_prompts and not examples:
             raise ValueError("vote_prompts needs examples (the variants differ only in their examples)")
         llm_kw = {"revision": revision, **({"max_new_tokens": max_new_tokens} if max_new_tokens != 384 else {}),
@@ -156,6 +165,7 @@ class ReActAgent(Agent):
         self.leave_gold_apps_out = leave_gold_apps_out
         self.group_examples = group_examples
         self.id_fix, self.spoken_email = id_fix, spoken_email
+        self.weekday_fix, self.empty_retry = weekday_fix, empty_retry
         self.app_groups = load_app_groups(data_root or default_data_root(), split) if group_examples and examples else None
         if self.bank is None and examples:
             self.bank = ExampleBank.from_data(data_root or default_data_root(), split)
@@ -167,7 +177,8 @@ class ReActAgent(Agent):
                      "leak_guard": leak_guard, "vote_prompts": vote_prompts, "vote_apply": vote_apply, "date_fix": date_fix,
                      "analog_weight": analog_weight, "max_new_tokens": max_new_tokens, "num_beams": num_beams,
                      "leave_gold_apps_out": leave_gold_apps_out, "group_examples": group_examples, "id_fix": id_fix,
-                     "spoken_email": spoken_email}
+                     "spoken_email": spoken_email, "weekday_fix": weekday_fix,
+                     "empty_retry": empty_retry}
 
     def run(self, task: Task, env) -> None:
         trace = self.last_trace = {"steps": [], "stop": None}  # None: a step raised
@@ -233,15 +244,22 @@ class ReActAgent(Agent):
                     trace.setdefault("date_fixes", []).extend({"from": a["arguments"], "to": b["arguments"]}
                                                               for a, b in zip(calls, fixed) if a is not b)
                 calls = fixed
+            if self.weekday_fix:  # same place as date_fix: the model reads back the call that was sent
+                fixed = fix_calls(calls, specs, task.request, task.context["current_time"], weekdays_only=True)
+                if fixed is not calls:
+                    trace.setdefault("weekday_fixes", []).extend({"from": a["arguments"], "to": b["arguments"]}
+                                                                 for a, b in zip(calls, fixed) if a is not b)
+                calls = fixed
             if self.id_fix:  # same place as date_fix: the model reads back the call that was sent
                 fixed = fix_calls_ids(calls, specs, names)
                 if fixed is not calls:
                     trace.setdefault("id_fixes", []).extend({"from": a["arguments"], "to": b["arguments"]}
                                                             for a, b in zip(calls, fixed) if a is not b)
                 calls = fixed
-            messages.append({"role": "assistant", "content": BLOCK.sub("", text).strip(), "tool_calls": [
-                {"type": "function", "function": {"name": c["name"], "arguments": c["arguments"]}} for c in calls]})
-            for call in calls:
+            assistant = {"role": "assistant", "content": BLOCK.sub("", text).strip(), "tool_calls": [
+                {"type": "function", "function": {"name": c["name"], "arguments": c["arguments"]}} for c in calls]}
+            messages.append(assistant)
+            for i, call in enumerate(calls):
                 key = json.dumps([call["name"], call["arguments"]], sort_keys=True, ensure_ascii=False)
                 if key in done:
                     invalid += 1
@@ -277,8 +295,25 @@ class ReActAgent(Agent):
                 if call["name"] == SYS_TOOL:
                     trace["stop"] = "asked"
                     return  # asking the user ends the turn; later calls in the batch are dropped
+                if self.empty_retry and is_empty_result(result):
+                    if self.empty_hint:
+                        empty.add(key)
+                    retry = relaxed_call(call, specs.get(call["name"]))
+                    retry_key = retry and json.dumps([retry["name"], retry["arguments"]], sort_keys=True, ensure_ascii=False)
+                    if retry is not None and retry_key not in done and env.validate(retry["name"], retry["arguments"]).get("ok"):
+                        result = env.call(retry["name"], retry["arguments"])
+                        scalar_strings(result, seen)
+                        if self.id_fix:
+                            entity_names(result, names)
+                        done.add(retry_key)
+                        key = retry_key  # the call the model reads back below
+                        trace.setdefault("empty_retries", []).append({"name": call["name"], "from": call["arguments"],
+                                                                      "to": retry["arguments"],
+                                                                      "found": not is_empty_result(result)})
+                        assistant["tool_calls"][i] = {"type": "function",
+                                                      "function": {"name": retry["name"], "arguments": retry["arguments"]}}
                 content = json.dumps(result, ensure_ascii=False)
-                if self.empty_hint and is_empty_result(result):
+                if self.empty_hint and is_empty_result(result):  # with empty_retry: the result the model reads
                     empty.add(key)
                     content += EMPTY_HINT
                 messages.append({"role": "tool", "content": content})

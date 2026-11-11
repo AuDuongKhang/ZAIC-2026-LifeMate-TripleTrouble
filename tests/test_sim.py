@@ -127,6 +127,26 @@ def test_date_fix_rewrite_changes_only_the_date(tmp_path):
     assert rewrite(dict(trace, id="unknown"), catalog) is None
 
 
+
+def test_weekday_fix_rewrite_puts_the_weekday_date_into_each_call():
+    from lifemate.sim import REWRITES
+    catalog = {"tasks.add": {"parameters": {"properties": {"due": {"type": "string"}}}}}
+    rewrite = REWRITES["weekday_fix"](times={"s1": "2026-10-01T09:00:00+07:00"})
+    trace = {"id": "s1", "request": "tạo lịch Bàn giao lúc mười giờ sáng thứ tư tuần sau",
+             "calls": [{"name": "contacts.search", "arguments": {}, "result": {}},
+                       {"name": "tasks.add", "arguments": {"due": "2026-10-08T10:00:00+07:00"}, "result": {}}]}
+    assert rewrite(trace, catalog) == [{"name": "contacts.search", "arguments": {}},
+                                       {"name": "tasks.add", "arguments": {"due": "2026-10-07T10:00:00+07:00"}}]
+
+
+def test_weekday_fix_rewrite_returns_none_without_a_weekday_phrase():
+    from lifemate.sim import REWRITES
+    rewrite = REWRITES["weekday_fix"](times={"s1": "2026-10-01T09:00:00+07:00"})
+    trace = {"id": "s1", "request": "họp chiều mai",
+             "calls": [{"name": "calendar.create_event", "arguments": {"start": "2026-09-30T15:00:00+07:00"}, "result": {}}]}
+    assert rewrite(trace, {}) is None
+    assert rewrite(dict(trace, id="unknown", request="họp thứ tư tuần sau"), {}) is None
+
 ID_CATALOG = {"loyalty.redeem": {"name": "loyalty.redeem", "kind": "write",
                                  "parameters": {"properties": {"program": {"type": "string"}, "reward_id": {"type": "string"}}}}}
 REDEEM_BY_NAME = {"name": "loyalty.redeem", "arguments": {"program": "MinhPoint", "reward_id": "rw_1"}, "result": {"ok": True}}
@@ -145,3 +165,24 @@ def test_id_fix_rewrite_uses_earlier_results_and_the_history():
 def test_id_fix_rewrite_returns_none_when_nothing_changes():
     rewrite = id_fix(histories={"s1": []})
     assert rewrite({"id": "s1", "calls": [REDEEM_BY_NAME]}, ID_CATALOG) is None  # no entity named MinhPoint seen
+
+
+def test_main_passes_the_selected_data_root_to_factories_that_take_one(tmp_path):
+    from lifemate.sim import build_rewrite
+
+    seen = {}
+
+    def with_root(data_root=None, **kw):
+        seen.update(data_root=data_root, **kw)
+        return lambda trace, catalog: None
+
+    def without_root(flag=0):
+        seen.update(flag=flag)
+        return lambda trace, catalog: None
+
+    build_rewrite(with_root, {"x": 1}, tmp_path)
+    assert seen == {"data_root": tmp_path, "x": 1}
+    build_rewrite(without_root, {"flag": 2}, tmp_path)
+    assert seen["flag"] == 2
+    build_rewrite(with_root, {"data_root": "explicit"}, tmp_path)  # an explicit --kw wins
+    assert seen["data_root"] == "explicit"
