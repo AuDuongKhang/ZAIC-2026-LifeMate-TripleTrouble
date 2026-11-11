@@ -123,9 +123,11 @@ python -m lifemate.sft.merge --adapter checkpoints/sft-v2/last --out merged/sft-
 python -m lifemate.infer --split public_test --agent-preset sft-v2 --asr-preset pho-large-ft-b
 ```
 
-Experiments train on the pool only (`configs/splits.json`), so dev and holdout stay unseen. The shipped model is
-retrained with the same recipe on `--subset all` (records and transcription) and no eval records. `RESULTS.md` notes
-give the exact command, presets and model revision of the shipped system.
+Experiments train on the pool only (`configs/splits.json`), so dev and holdout stay unseen. The shipped LLM, sft-q1c, is
+such a pool model (records and transcription on `--subset pool`, `gold-dev` as eval loss); its exact commands are in
+`docker/training_code/README.md`. A retrain on `--subset all` (no eval records) is possible but has not been shipped
+since sft-final-h; the shipped ASR, `pho-large-ft-all`, is trained on all train clips. `RESULTS.md` notes give the
+presets and model revisions of each run.
 
 ## Running on molab (GPU)
 
