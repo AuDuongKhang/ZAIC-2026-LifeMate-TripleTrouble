@@ -263,8 +263,9 @@ Plan: `docs/superpowers/plans/2026-11-11-empty-retry-weekday-q1c.md` (Tasks 4 to
 (+ `weekday_fix`), `sft-q1b-refs-fixes-all` (both), `sft-q1c-refs-fixes` (sft-q1c, no new option),
 `sft-q1c-refs-fixes-all` (sft-q1c, both). Branch `feat/empty-retry` until it is merged, then `main`.
 
-**Training `sft-q1c`** (`notebooks/molab_train.py`): every field of the sft-q1b run (its `run_config.json` next to the
-weights in `TripleTrouble/lifemate-sft-q1b` wins over this list), with three changed:
+**Training `sft-q1c`** (`notebooks/molab_train.py`): every field of the sft-q1b run, with three changed: run
+name, HF repo and the leave-out share. For a copied field, the sft-q1b `run_config.json` (next to the weights in
+`TripleTrouble/lifemate-sft-q1b`) wins over this list; the three changed fields always come from this list.
 
 | Field | Value |
 |---|---|
