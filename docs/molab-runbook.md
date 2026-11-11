@@ -256,6 +256,59 @@ Preset `sft-q1b-refs` (PR #77; before it is merged, branch `feat/preset-sft-q1b`
 preset `pho-large-ft-b`. Compare with the sft-v2 + check_refs baseline rescored with the current scorer: **42.77**
 (41.37 under the old scorer), gate +0.5 with the CI above 0 (`python -m lifemate.compare`).
 
+### C3. Empty retry, weekday fix and sft-q1c
+
+Plan: `docs/superpowers/plans/2026-11-11-empty-retry-weekday-q1c.md` (Tasks 4 to 6). Presets (all `react`, `examples` 4,
+`check_refs`, `id_fix`, `spoken_email`): `sft-q1b-refs-fixes-retry` (+ `empty_retry`), `sft-q1b-refs-fixes-wd`
+(+ `weekday_fix`), `sft-q1b-refs-fixes-all` (both), `sft-q1c-refs-fixes` (sft-q1c, no new option),
+`sft-q1c-refs-fixes-all` (sft-q1c, both). Branch `feat/empty-retry` until it is merged, then `main`.
+
+**Training `sft-q1c`** (`notebooks/molab_train.py`): every field of the sft-q1b run (its `run_config.json` next to the
+weights in `TripleTrouble/lifemate-sft-q1b` wins over this list), with three changed:
+
+| Field | Value |
+|---|---|
+| Branch | the branch of the sft-q1b run (`main`) |
+| Run name | `sft-q1c` |
+| HF model repo | `TripleTrouble/lifemate-sft-q1c` |
+| Train records | `pool (experiments)` |
+| Eval loss records | `dev` |
+| few-shot examples in the records | `4` |
+| function-masked copies per record | `1` |
+| perturb / weekday table / synthetic / reasoning / paraphrase | off, empty |
+| **records with the gold apps left out, %** | **`50`** |
+| ASR-noisy copy from cache | `pho-large-fp16` |
+| extra train args | `--model TripleTrouble/qwen35-4b-text --lora-targets q_proj,k_proj,v_proj,o_proj,in_proj_qkv,in_proj_z,out_proj,gate_proj,up_proj,down_proj` |
+
+Check: the records name reads `gold-pool-m1-asr-pho-large-fp16-lao50`, "trainable params" matches the sft-q1b log, 356
+steps. Then merge the adapter as for sft-q1b and note the HF commit sha of the merged model.
+
+**Gate runs** (`notebooks/molab_run.py`): Branch `feat/empty-retry`, Split `train`, ASR preset `pho-large-ft-b`, HF model
+owner `TripleTrouble`, extra infer args empty.
+
+| Run | Agent preset | Train subset |
+|---|---|---|
+| G1 | `sft-q1b-refs-fixes-retry` | `holdout` |
+| G2 | `sft-q1b-refs-fixes-retry` | `dev` |
+| G3 | `sft-q1c-refs-fixes` (after the sft-q1c merge) | `holdout` |
+| G4 | `sft-q1c-refs-fixes` (after the sft-q1c merge) | `dev` |
+
+Send the run folders (`trace.jsonl`, `submission.jsonl`, `meta.json`). Baselines: `sft-q1b-refs-fixes` with
+`pho-large-ft-b`, holdout 44.83 (`runs/20261110-161452_dc97998_train_sft-q1b-refs-fixes_pho-large-ft-b_holdout`) and dev
+75.04 (`runs/20261110-163834_dc97998_train_sft-q1b-refs-fixes_pho-large-ft-b_dev`); gate +0.5 on holdout with the CI above
+0 and dev >= -0.3 (`python -m lifemate.compare <baseline> <run>`).
+
+- `empty_retry` (G1, G2): gate passed, it stays in the `-all` presets; below the gate but not negative, only the public run
+  decides; negative on either split, it is dropped from the shipped preset.
+- `sft-q1c` (G3, G4): pooled difference over the 597 samples below 0 closes it; at or above 0 it gets a public run.
+- `weekday_fix` has no train gate (three samples change in the simulator); the public run decides.
+
+**Public runs**: Branch `feat/empty-retry`, Split `public_test`, ASR preset `pho-large-ft-all-beam5`, HF model owner
+`TripleTrouble`, extra infer args `--time-field`. In this order: `sft-q1b-refs-fixes-all` (`sft-q1b-refs-fixes-wd` if
+`empty_retry` was dropped), `sft-q1c-refs-fixes-all` (only if sft-q1c was kept), `sft-q1b-refs-fixes` (only if the first
+scores below 61.05). Validate `submission.jsonl`, check `over_time_limit` is 0, submit; the baseline to beat is 61.05 and a
+tie goes to sft-q1b with the fewer options.
+
 ## D. Closed, nothing to run
 
 Experiments 7 (few-shot selection by tool structure: +1.04 points of hit rate against a 10-point bar), 8 (date correction: simulation

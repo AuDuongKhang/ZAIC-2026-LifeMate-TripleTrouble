@@ -194,6 +194,23 @@ def test_id_fix_preset_is_sft_q1b_refs_plus_the_flag():
     assert resolve("agent", "sft-q1b-refs-fixes", env) == (name, {**kw, "id_fix": True, "spoken_email": True})
 
 
+
+@pytest.mark.parametrize("name, model, flags", [
+    ("sft-q1b-refs-fixes-retry", "q1b", {"empty_retry": True}),
+    ("sft-q1b-refs-fixes-wd", "q1b", {"weekday_fix": True}),
+    ("sft-q1b-refs-fixes-all", "q1b", {"empty_retry": True, "weekday_fix": True}),
+    ("sft-q1c-refs-fixes", "q1c", {}),
+    ("sft-q1c-refs-fixes-all", "q1c", {"empty_retry": True, "weekday_fix": True}),
+])
+def test_empty_retry_and_weekday_presets(name, model, flags):
+    assert resolve("agent", name, {"HF_MODEL_OWNER": "me"}) == ("react", {
+        "model": f"me/lifemate-sft-{model}", "examples": 4, "check_refs": True, "id_fix": True, "spoken_email": True, **flags})
+
+
+def test_new_options_are_off_in_every_other_preset():
+    on = {k for k, v in load_presets()["agent"].items() if v["agent_kw"].get("empty_retry") or v["agent_kw"].get("weekday_fix")}
+    assert on == {"sft-q1b-refs-fixes-retry", "sft-q1b-refs-fixes-wd", "sft-q1b-refs-fixes-all", "sft-q1c-refs-fixes-all"}
+
 def test_beam_preset_passes_num_beams():
     env = {"HF_MODEL_OWNER": "team"}
     name, kw = resolve("agent", "sft-v2-refs", env)
