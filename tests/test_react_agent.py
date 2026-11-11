@@ -731,6 +731,15 @@ def test_id_fix_uses_entities_from_the_history():
     assert env.called == [("loyalty.redeem", {"program": "prog_815", "reward_id": "rw_02_1"})]
 
 
+def test_id_fix_after_a_refusal_check_keeps_the_entity_map():
+    task = dataclasses.replace(ID_TASK, history=[{"role": "assistant", "text": "", "tool_calls": [], "tool_results": [PROGRAMS]}])
+    env = FakeEnv()
+    agent = ReActAgent(llm=FakeLLM([REFUSE, BY_NAME, "Xong."]), id_fix=True, refusal_check=True, refusal_min_hits=1)
+    agent.run(task, env)
+    assert agent.last_trace["refusal_check"]
+    assert env.called == [("loyalty.redeem", {"program": "prog_815", "reward_id": "rw_02_1"})]
+
+
 def test_id_fix_is_off_by_default():
     env = FakeEnv(results={"loyalty.get_points": PROGRAMS})
     agent = ReActAgent(llm=FakeLLM([CALL("loyalty.get_points", {}), BY_NAME, "Xong."]))

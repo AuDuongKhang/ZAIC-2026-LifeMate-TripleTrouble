@@ -218,11 +218,11 @@ class ReActAgent(Agent):
             trace["steps"].append({"output": text[:2000], "rejected": rejected})
             if not calls and not errors and self.refusal_check and not checked and len(trace["steps"]) == 1:
                 checked = True
-                names = matching_tools(task.request, task.tools, self.refusal_min_hits)
-                if names:
-                    trace["refusal_check"] = names
+                hits = matching_tools(task.request, task.tools, self.refusal_min_hits)
+                if hits:
+                    trace["refusal_check"] = hits
                     messages.append({"role": "assistant", "content": BLOCK.sub("", text).strip(), "tool_calls": []})
-                    messages.append({"role": "user", "content": REFUSAL_CHECK.format(names=", ".join(names))})
+                    messages.append({"role": "user", "content": REFUSAL_CHECK.format(names=", ".join(hits))})
                     continue
             if not calls and not errors:
                 trace["stop"] = "no_call"  # a plain answer: finished, or nothing to do (out of scope)

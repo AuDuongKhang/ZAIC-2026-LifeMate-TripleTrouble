@@ -1,4 +1,4 @@
-from lifemate.agents.id_fix import entity_names, fix_call_ids, fix_calls_ids
+from lifemate.agents.id_fix import IDS, entity_names, fix_call_ids, fix_calls_ids
 
 REDEEM = {"name": "loyalty.redeem", "kind": "write",
           "parameters": {"properties": {"program": {"type": "string"}, "reward_id": {"type": "string"}}}}
@@ -10,8 +10,21 @@ RESULT = {"ok": True, "programs": [{"id": "prog_815", "name": "Cao Nguyên Rewar
 
 
 def test_entity_names_maps_folded_names_titles_labels_to_ids():
-    assert entity_names(RESULT, {}) == {"cao nguyên rewards": {"prog_815"}, "ly phin": {"rw_02_1"}}
-    assert entity_names([{"id": "a1", "title": "Họp nhóm", "label": "Nhà"}], {}) == {"họp nhóm": {"a1"}, "nhà": {"a1"}}
+    assert entity_names(RESULT, {}) == {"cao nguyên rewards": {"prog_815"}, "ly phin": {"rw_02_1"},
+                                        IDS: {"prog_815", "rw_02_1"}}
+    assert entity_names([{"id": "a1", "title": "Họp nhóm", "label": "Nhà"}], {}) == {"họp nhóm": {"a1"}, "nhà": {"a1"},
+                                                                                    IDS: {"a1"}}
+
+
+def test_id_of_one_entity_that_names_another_stays():
+    names = entity_names([{"id": "c1", "name": "x"}, {"id": "c2", "name": "c1"}], {})
+    call = {"name": "loyalty.redeem", "arguments": {"program": "c1", "reward_id": "r"}}
+    assert fix_call_ids(call, REDEEM, names) is call
+
+
+def test_blank_argument_is_left_alone():
+    call = {"name": "loyalty.redeem", "arguments": {"program": "  ", "reward_id": "r"}}
+    assert fix_call_ids(call, REDEEM, entity_names(RESULT, {})) is call
 
 
 def test_name_of_a_seen_entity_becomes_its_id():
