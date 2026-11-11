@@ -142,8 +142,8 @@ def test_a_right_date_returns_the_same_call():
   - `test_weekday_fix_leaves_day_phrases_alone`: request "nhắc tôi sáng mai", option on, the call is sent as the model wrote it.
   - Extend `test_agent_info_records_prompt_and_options` to expect `weekday_fix` in `info`.
 - [ ] **Step 6: Implement the option.** After the `date_fix` block of `run`: `fix_calls(calls, specs, task.request, task.context["current_time"], weekdays_only=True)`, recorded under `weekday_fixes`. Docstring line: what it does, and that it never sends a call.
-- [ ] **Step 7: Simulator.** `sim.weekday_fix` mirrors `sim.date_fix` but applies `fix_calls([call], ..., weekdays_only=True)` to each recorded call (the agent fixes one model turn at a time, and a trace does not keep turn boundaries). Tests in `tests/test_sim.py` in the style of the `date_fix` ones: one trace whose call gets the weekday date, one that returns `None`.
-- [ ] **Step 8: Verify on recorded runs** (needs `data/train`; run `lifemate.evaluate` first if a run has no `per_sample.jsonl`):
+- [ ] **Step 7: Simulator.** `sim.weekday_fix` mirrors `sim.date_fix` but applies `fix_calls([call], ..., weekdays_only=True)` to each recorded call (the agent fixes one model turn at a time, and a trace does not keep turn boundaries); the agent skips a turn with two dated calls, so on a run that batches them the per-call number is an upper bound. On the recorded runs both give the same samples: the three fired train calls are alone in their turn, and public gives the same 9 samples per call and per turn. Tests in `tests/test_sim.py` in the style of the `date_fix` ones: one trace whose call gets the weekday date, one that returns `None`.
+- [ ] **Step 8: Verify on recorded runs** (needs `data/train`; run `lifemate.evaluate` first if a run has no `per_sample.jsonl`; from a checkout without `data/`, add `--data-root <path>`, which the rewrite factories also read since PR #83):
 
 ```bash
 python -m lifemate.sim weekday_fix runs/check_oracle
