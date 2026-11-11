@@ -47,13 +47,15 @@
 - Test: `tests/test_id_fix.py`, `tests/test_react_agent.py`, `tests/test_sim.py`, `tests/test_presets.py`
 
 **Interfaces:**
-- Produces: `entity_names(obj, out: dict[str, set[str]]) -> dict[str, set[str]]` — every dict with a string `id` inside `obj` adds its `name`, `title` and `label` strings (key: `casefold()` of the stripped string) mapped to that id; returns `out`.
-- Produces: `fix_call_ids(call: dict, spec: dict | None, names: dict[str, set[str]], seen: set[str]) -> dict` — `call` itself when nothing changes, else a copy with new `arguments`.
-- Produces: `fix_calls_ids(calls: list[dict], specs: dict[str, dict], names, seen) -> list[dict]` — `calls` itself when no call changes (same contract as `date_fix.fix_calls`).
+- Produces: `entity_names(obj, out: dict[str, set[str]]) -> dict[str, set[str]]` — every dict with a string `id` inside `obj` adds its `name`, `title` and `label` strings (key: `casefold()` of the stripped string) mapped to that id, and the id itself under the key `""` (never a name, since names are stripped and non-empty); returns `out`.
+- Produces: `fix_call_ids(call: dict, spec: dict | None, names: dict[str, set[str]]) -> dict` — `call` itself when nothing changes, else a copy with new `arguments`.
+- Produces: `fix_calls_ids(calls: list[dict], specs: dict[str, dict], names) -> list[dict]` — `calls` itself when no call changes (same contract as `date_fix.fix_calls`).
 - Produces: `ReActAgent(..., id_fix: bool = False)`, `info["id_fix"]`, trace key `id_fixes` = list of `{"from": args, "to": args}`.
 - Produces: `sim.id_fix(data_root: Path | None = None) -> Rewrite`, name `"id_fix"` in `REWRITES`.
 
-Rule of `fix_call_ids`: only when `spec["kind"] == "write"`; for each argument whose value is a `str`, whose property is not `x-match: fuzzy`, and whose value is not in `seen`: if `names[value.strip().casefold()]` holds exactly one id, use that id.
+Rule of `fix_call_ids`: only when `spec["kind"] == "write"`; for each argument whose value is a `str`, whose property is not `x-match: fuzzy`, and whose value is not the id of any entity seen so far (`names[""]`; not `seen`, which also holds the names this rule converts): if `names[value.strip().casefold()]` holds exactly one id, use that id.
+
+The rule is not limited to `x-ref` parameters: on train, 42 gold write arguments that carry a seen entity's id are plain strings (`loyalty.redeem.program` and `.reward_id`, the case this fix is for), against 1 non-fuzzy write argument whose gold value is an entity name.
 
 - [ ] **Step 1: Write the failing tests** in `tests/test_id_fix.py`
 
@@ -64,37 +66,42 @@ POINTS = {"name": "loyalty.get_points", "kind": "read", "parameters": {"properti
 RESULT = {"ok": True, "programs": [{"id": "prog_815", "name": "Cao Nguyên Rewards", "rewards": [{"id": "rw_02_1", "name": "Ly phin"}]}]}
 
 def test_entity_names_maps_folded_names_titles_labels_to_ids():
-    assert entity_names(RESULT, {}) == {"cao nguyên rewards": {"prog_815"}, "ly phin": {"rw_02_1"}}
+    assert entity_names(RESULT, {}) == {"cao nguyên rewards": {"prog_815"}, "ly phin": {"rw_02_1"}, "": {"prog_815", "rw_02_1"}}
+
+def test_id_of_one_entity_that_names_another_stays():
+    names = entity_names([{"id": "c1", "name": "x"}, {"id": "c2", "name": "c1"}], {})
+    call = {"name": "loyalty.redeem", "arguments": {"program": "c1", "reward_id": "r"}}
+    assert fix_call_ids(call, REDEEM, names) is call
 
 def test_name_of_a_seen_entity_becomes_its_id():
     call = {"name": "loyalty.redeem", "arguments": {"program": " cao nguyên REWARDS", "reward_id": "rw_02_1"}}
-    fixed = fix_call_ids(call, REDEEM, entity_names(RESULT, {}), scalar_strings(RESULT, set()))
+    fixed = fix_call_ids(call, REDEEM, entity_names(RESULT, {}))
     assert fixed["arguments"] == {"program": "prog_815", "reward_id": "rw_02_1"} and call["arguments"]["program"] == " cao nguyên REWARDS"
 
 def test_seen_id_free_text_read_and_non_strings_are_left_alone():
-    names, seen = entity_names(RESULT, {}), scalar_strings(RESULT, set())
+    names = entity_names(RESULT, {})
     for spec, call in [(REDEEM, {"name": "loyalty.redeem", "arguments": {"program": "prog_815", "reward_id": "rw_02_1"}}),
                        (NOTE, {"name": "notes.create", "arguments": {"title": "Cao Nguyên Rewards"}}),
                        (POINTS, {"name": "loyalty.get_points", "arguments": {"program": "Cao Nguyên Rewards"}}),
                        (REDEEM, {"name": "loyalty.redeem", "arguments": {"program": 5, "reward_id": "rw_02_1"}})]:
-        assert fix_call_ids(call, spec, names, seen) is call
+        assert fix_call_ids(call, spec, names) is call
 
 def test_a_name_shared_by_two_entities_is_left_alone():
     names = entity_names([{"id": "p1", "name": "MinhPoint"}, {"id": "p2", "name": "minhpoint"}], {})
     call = {"name": "loyalty.redeem", "arguments": {"program": "MinhPoint", "reward_id": "r"}}
-    assert fix_call_ids(call, REDEEM, names, set()) is call
+    assert fix_call_ids(call, REDEEM, names) is call
 
 def test_fix_calls_ids_returns_the_same_list_when_nothing_changes():
     calls = [{"name": "loyalty.redeem", "arguments": {"program": "prog_815", "reward_id": "rw_02_1"}}]
-    assert fix_calls_ids(calls, {"loyalty.redeem": REDEEM}, entity_names(RESULT, {}), {"prog_815"}) is calls
+    assert fix_calls_ids(calls, {"loyalty.redeem": REDEEM}, entity_names(RESULT, {})) is calls
 ```
 
 - [ ] **Step 2: Run** `pytest tests/test_id_fix.py -q` — expected: ImportError (module missing).
 - [ ] **Step 3: Implement** `src/lifemate/agents/id_fix.py` with the three functions above (module docstring states the 1136:6 evidence and the rule).
 - [ ] **Step 4: Run** `pytest tests/test_id_fix.py -q` — expected: 5 passed.
 - [ ] **Step 5: Agent test** in `tests/test_react_agent.py`: with `id_fix=True`, a `FakeLLM` that first reads (result holding `{"id": "prog_815", "name": "Cao Nguyên Rewards"}`) and then redeems by name sends `program="prog_815"` to the env, records one `id_fixes` entry, and `info["id_fix"] is True`; with the default, the env gets the name. Names from `task.history` tool results count too (second test: entity only in history).
-- [ ] **Step 6: Implement in `react.py`**: `names = entity_names([t.get("tool_results") for t in task.history], {})` next to `seen`; after the `date_fix` block, `fixed = fix_calls_ids(calls, specs, names, seen)` when `self.id_fix`, trace like `date_fixes`; after each `env.call`, `entity_names(result, names)` next to `scalar_strings(result, seen)`.
-- [ ] **Step 7: Sim rewrite** `sim.id_fix(data_root=None)`: loads the train samples for history results, walks `trace["calls"]` in order (names and seen grow from each recorded `result`), returns `None` when nothing changes. Test in `tests/test_sim.py` with a hand-made trace line and `times`-style injected samples (factory takes `histories: dict[str, list] | None` for tests, like `date_fix(times=...)`).
+- [ ] **Step 6: Implement in `react.py`**: `names = entity_names([t.get("tool_results") for t in task.history], {})` next to `seen`; after the `date_fix` block, `fixed = fix_calls_ids(calls, specs, names)` when `self.id_fix`, trace like `date_fixes`; after each `env.call`, `entity_names(result, names)` next to `scalar_strings(result, seen)`.
+- [ ] **Step 7: Sim rewrite** `sim.id_fix(data_root=None)`: loads the train samples for history results, walks `trace["calls"]` in order (names grow from each recorded `result`), returns `None` when nothing changes. Test in `tests/test_sim.py` with a hand-made trace line and `times`-style injected samples (factory takes `histories: dict[str, list] | None` for tests, like `date_fix(times=...)`).
 - [ ] **Step 8: Preset** `"sft-q1b-refs-idfix"` = `sft-q1b-refs` + `"id_fix": true`; test `resolve("agent", "sft-q1b-refs-idfix", env) == (name, {**kw, "id_fix": True})`.
 - [ ] **Step 9: Run** `pytest tests/test_id_fix.py tests/test_react_agent.py tests/test_sim.py tests/test_presets.py -q` — expected: all pass.
 - [ ] **Step 10: Offline score** `python -m lifemate.sim id_fix runs/<sft-q1b-refs holdout>` and the dev run — expected about holdout +0.44 [CI above 0], dev +0.00. If dev is below 0, stop and report.
@@ -110,7 +117,7 @@ def test_fix_calls_ids_returns_the_same_list_when_nothing_changes():
 
 **Interfaces:**
 - Produces: `respell_emails(text: str) -> str` — case-insensitive, on NFC text:
-  - `(a còng|a cong|acong|account|item)` followed by whitespace and the word `example` becomes `a còng`;
+  - `(a còng|a cong|acong|account|item)` followed by whitespace, the word `example`, then `.` or `chấm` becomes `a còng` (the dot is the email evidence: "account example" alone stays);
   - `example` followed by optional spaces, `.` or `chấm`, optional spaces, then `test|tết|tét|step` as a whole word becomes `example chấm test`.
   Anything else is returned unchanged.
 - Produces: `ReActAgent(..., spoken_email: bool = False)`, `info["spoken_email"]`; when on, `run` works on `dataclasses.replace(task, request=respell_emails(task.request), history=[user turns with respelled "text", other turns as they are])`.
@@ -127,7 +134,7 @@ def test_fix_calls_ids_returns_the_same_list_when_nothing_changes():
 def test_misheard_email_parts_get_the_spoken_form(heard, said):
     assert respell_emails(heard) == said
 
-@pytest.mark.parametrize("text", ["Cho anh xem một example về cách nấu phở", "Kiểm tra account ngân hàng", "Đặt báo thức sáu giờ", ""])
+@pytest.mark.parametrize("text", ["Cho anh xem một example về cách nấu phở", "Kiểm tra account ngân hàng", "show me an account example", "Đặt báo thức sáu giờ", ""])
 def test_text_without_an_email_is_unchanged(text):
     assert respell_emails(text) == text
 ```
