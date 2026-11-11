@@ -17,3 +17,6 @@ data/*
 data/train/*
 !data/train/train.jsonl
 !data/train/train_tools_catalog.json
+context
+asr_runs
+*.md5

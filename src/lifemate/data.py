@@ -31,6 +31,15 @@ def load_catalog(data_root: Path, split: str) -> dict[str, dict]:
     return {t["name"]: t for app in catalog["apps"] for t in app["tools"]}
 
 
+def load_app_groups(data_root: Path, split: str) -> dict[str, str]:
+    """{app id: catalog group} of the split's catalog (communication, finance, mobility, ...), merged over the train catalog."""
+    groups: dict[str, str] = {}
+    for name in dict.fromkeys(("train", split)):
+        with open(data_root / name / f"{name}_tools_catalog.json", encoding="utf-8") as f:
+            groups.update({app["id"]: app.get("group", "") for app in json.load(f)["apps"]})
+    return groups
+
+
 def installed_tool_names(sample: dict) -> list[str]:
     names = [t for app in sample["context"]["installed_apps"].values() for t in app["tools"]]
     return names + [SYS_TOOL]

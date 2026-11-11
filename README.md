@@ -5,6 +5,30 @@ messaging, …). For each sample it acts (calls the right tools), asks for missi
 (`sys.ask_missing_info`), or does nothing when no installed app can help. The organiser specs are in
 [`context/`](context/): task, data, metric, rules and deadlines.
 
+## Solution (submitted Docker image)
+
+Public leaderboard 57.5. Configuration in `configs/shipped.json`; training details and the code that trained the models
+in `docker/training_code/README.md` (`/code/training_code/` in the image) and `docs/shipped-model.md`.
+
+| Part | Model | Parameters | Details |
+|---|---|---|---|
+| ASR | `TripleTrouble/pho-large-ft-all` | 1.55 B | `vinai/PhoWhisper-large` fine-tuned on all train clips (3 epochs, lr 1e-5); fp16, beam search 5 |
+| LLM | `TripleTrouble/lifemate-sft-final-h` | 4.02 B | `Qwen/Qwen3-4B-Instruct-2507` + merged LoRA (r 16) SFT; bf16, greedy; context ≤ 16,384 tokens (training records ≤ 12,288) |
+
+Total 5.57 B parameters, all open models, fully offline.
+
+- **Inference, per sample** (`lifemate.infer.run_sample`): one `ToolEnv`; the ASR transcribes the final request and
+  every history user turn; a ReAct loop (`lifemate.agents.react`) prompts the LLM with the tool schemas of the
+  installed apps, the history with its tool calls and results, the user profile and current time, and 4 few-shot
+  examples picked by BM25 from the train requests. Each step the model writes one `<tool_call>`; the runner checks it
+  with `env.validate` (free), rejects IDs never seen in the history or earlier results (`check_refs`), sends it with
+  `env.call` and appends the result. The loop stops when the model answers without a call, calls
+  `sys.ask_missing_info`, or reaches 8 steps or the 20 s budget (ASR included).
+- **Training data**: the organisers' train split only. SFT records replay each sample's gold calls through the same
+  prompt (training text = inference text), plus a function-masked copy (apps, tools and parameters renamed, tools
+  shuffled) and an ASR-noisy copy (off-the-shelf PhoWhisper-large transcripts); half of the samples get few-shot
+  examples without their own apps, as for an unseen app. 4,629 records, 2 epochs. No external data, no LLM API.
+
 ## Setup
 
 Python ≥ 3.10 (3.11 recommended). The setup scripts create `.venv/`, install the project in editable mode and tell
@@ -117,20 +141,47 @@ stronger than the scoring A30 (24 GB) while its CPU is weaker (4 vs 16 cores), s
 
 ## Docker (final solution)
 
-The image runs the shipped system offline on one split. `configs/shipped.json` names the agent and ASR presets,
-extra kwargs and the pinned model revisions; the build downloads exactly those weights and the entry
-(`lifemate.docker_entry`) loads them with the Hugging Face offline flags set.
+The image follows the organiser Docker guide (`context/Docker_Guide_ZAC2026_LifeMate.pdf`, not in git): code in
+`/code` with `predict.sh`, `start_jupyter.sh`, `predict_notebook.ipynb`, this README and `training_code/` (its README,
+this code, and the code at `records_commit` of `configs/shipped.json` that trained the shipped models, exported by
+`scripts/docker_build.sh` from git, so builds need that commit in the history: tag `sft-final-h-code`); the organisers
+mount the folder that holds the split folder at `/data` (`/data/private_test/`) and read `/result/submission.jsonl`
+(the notebook writes `/result/jupyter_submission.jsonl`). Each line has `id`, `tool_calls`, `state_hash` and `time`
+(ms). `configs/shipped.json` names the agent and ASR presets, extra kwargs and the pinned model revisions; the build
+downloads exactly those weights and `lifemate.docker_entry` loads them with the Hugging Face offline flags set.
 
 ```bash
-HF_TOKEN=... bash scripts/docker_build.sh            # BuildKit secret; writes lifemate_<sha>.tar.gz + .sha256
-docker run --rm --gpus all --network none \
-    -v $PWD/data/public_test:/data:ro -v $PWD/out:/app/result lifemate:<sha>   # -> out/submission.jsonl, out/meta.json
+HF_TOKEN=... bash scripts/docker_build.sh     # BuildKit secret; writes zac2026_TripleTrouble.tar.gz + .md5
+docker run --rm --gpus '"device=0"' --network none -v $PWD/<folder holding public_test/>:/data:ro     -v $PWD/out:/result zac2026-tripletrouble:<sha> /bin/bash /code/predict.sh    # -> out/submission.jsonl
+bash scripts/docker_smoke.sh zac2026-tripletrouble:<sha> data      # CPU check: offline models, predict.sh, notebook
 ```
 
-`/data` is the split folder itself; the split name comes from its `<split>_tools_catalog.json`. The image carries
-`data/train/train.jsonl` and the train catalog for the few-shot bank, never audio or environments. The entry exits
-with an error if the submission does not have one line per sample. Pass `--build-arg BASE=pytorch/pytorch:<tag>` to
-match molab's torch version (CUDA 12.x).
+The base image (`pytorch/pytorch:2.15.0-cuda13.2-cudnn9-runtime`) keeps CUDA at 13.2, the organisers' limit, and the
+build fails unless torch has kernels for both the A30 (sm_80) and the RTX 5090 (sm_120). The image carries
+`data/train/train.jsonl` and the train catalog for the few-shot bank, never audio or environments. The GitHub Actions
+workflow *Docker image* builds it, runs the smoke check and uploads the archive to Google Drive for the portal's *Test
+Solution* (secrets `HF_TOKEN`, `HF_DATASET`, `RCLONE_CONFIG`).
+
+Running the workflow several times:
+
+- Pull requests that change the image (Dockerfile, `docker/`, `configs/shipped.json` or the presets it uses, requirements,
+  `docker_entry.py`, `infer.py`, the Docker scripts) get a build + smoke test without upload; new experiment presets
+  alone do not trigger it (`scripts/shipped_fingerprint.py`).
+- Start an upload from the Actions tab (*Run workflow*, optional label such as `final`) or push a new tag `docker-<name>`
+  (each tag name works once). Upload runs queue; a new push to a PR cancels that PR's older check.
+- Every upload gets its own Drive folder, `zaic2026/<UTC date-time>-<commit>-r<run id>.<attempt>[-<label>]/`, holding
+  `zac2026_TripleTrouble.tar.gz` (the name the guide asks for) and `info.txt` (MD5, size, link, commit, run). Earlier
+  links and MD5s never change, and an existing folder is never overwritten (`scripts/drive_upload.sh` refuses).
+- Drive access and free space (20 GiB minimum) are checked before the build. A run fails in about a minute when the
+  rclone token has expired: run `rclone config reconnect gdrive:` and set the `RCLONE_CONFIG` secret again.
+- Nothing is deleted automatically: the organisers download the **submitted** link after the deadline, so that folder
+  must stay. Clean up by hand, keeping the submitted folder, then empty the Drive trash (deleted files still count):
+
+```bash
+rclone lsf gdrive:zaic2026                                  # one folder per upload
+rclone cat gdrive:zaic2026/<folder>/info.txt                # which commit, MD5 and link it is
+rclone purge gdrive:zaic2026/<old folder> && rclone cleanup gdrive:
+```
 
 ## Contributing
 
@@ -148,7 +199,7 @@ Fill in the leaderboard score by hand for public_test submissions, and say what 
 ```text
 src/lifemate/
   infer.py        runner: per sample ASR -> Task -> agent.run(task, env); writes the run folder
-  docker_entry.py Docker entry: offline run of configs/shipped.json on the split mounted at /data
+  docker_entry.py Docker entry: offline run of configs/shipped.json on the split mounted under /data
   evaluate.py     local metric on train, per-group breakdown, RESULTS.md row
   scoring.py      re-implementation of the official metric (assumptions in its docstring)
   task.py         Task: what an agent sees (request, history, context, tool specs)

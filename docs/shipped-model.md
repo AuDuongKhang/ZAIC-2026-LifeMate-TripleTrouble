@@ -46,6 +46,59 @@ Pinned revision `73bb56a73e1e1470bbda0fad99353b6f1ed6c338`. `vinai/PhoWhisper-la
 (`train_asr --subset all`), decoded with `num_beams` 5 (preset `pho-large-ft-all-beam5`). On public it raised sft-final
 from 53.58 (pho-large-ft-b, greedy) to 56.01.
 
+### How it was trained
+
+Both ASR models were trained with `notebooks/molab_asr.py` (which runs `python -m lifemate.train_asr`) on molab. No
+training log was kept, so the recipe below is rebuilt from the repo history. Each line says where it comes from.
+
+| Setting | `pho-large-ft-b` (pool, used for gates) | `pho-large-ft-all` (shipped) | Source |
+|---|---|---|---|
+| Base model | `vinai/PhoWhisper-large` | same | notebook default; HF commit titles |
+| Clips | 2,928 pool clips (final requests and history user turns, 3.98 h) | all train clips: pool + dev + holdout, about 5,036 | `train_asr --subset pool` / `--subset all`; plan `2026-11-02-final-sprint.md` P5 ("same hyper-parameters as pho-large-ft-b, `--subset all`") |
+| Epochs, lr, batch, grad accum | 3, 1e-5, 8, 2 (effective batch 16) | same | notebook defaults on 1 Nov (`1321406`, run name default `pho-large-ft-b`); the ft-a recipe in `RESULTS.md` |
+| Warmup, SpecAugment | 100 steps, `mask_time_prob` 0.05 | same | `train_asr` defaults; `config.json` of both repos (`apply_spec_augment` true, `mask_time_prob` 0.05) |
+| Eval and checkpoint | every 100 steps on a fixed 400-clip dev + holdout subset (seed 0); **checkpoint-500** kept (400-clip WER 0.1057) | no eval; the model after the last step | HF commit `04c0bdb` "checkpoint-500 of pho-large-ft-b"; `selection_args("all")` |
+| Seed, precision | 0, bf16 | same | `train_asr` defaults |
+| Time | about 1 h | about 1.5 h (code `ac2862c` at 04:50 UTC, upload 06:41 UTC on 4 Nov) | commit and upload times |
+| Upload | weights + processor only | same, plus the base tokenizer files (`73bb56a`) | HF commits |
+
+To reproduce `pho-large-ft-all`:
+
+```bash
+python -m lifemate.train_asr --model vinai/PhoWhisper-large --out asr_runs/pho-large-ft-all \
+    --epochs 3 --lr 1e-5 --batch 8 --grad-accum 2 --eval-steps 100 --subset all
+# then upload asr_runs/pho-large-ft-all/final (weights + processor) to the model repo
+```
+
+The epochs, lr, batch and grad accum of the two runs were not logged. They are the notebook defaults of that day and the
+recipe the plan names. A run that changed them would have needed someone to edit the fields by hand. The ASR
+augmentation flags added later (PR #67) are off by default and were not used for either model.
+
+## Docker image
+
+Built by `.github/workflows/docker-image.yml` (`scripts/docker_build.sh`), layout as in the organiser Docker guide:
+`/code` holds `predict.sh`, `start_jupyter.sh`, `predict_notebook.ipynb`, `README.md`, `requirements.txt` and
+`training_code/` (README, this code, and the code at `records_commit` that trained the models); the weights are in the
+HF cache under `/models`; input is the split folder under `/data`, output `/result/submission.jsonl` (and
+`/result/jupyter_submission.jsonl` from the notebook), one line per sample with `time` in ms.
+
+| | |
+|---|---|
+| Base image | `pytorch/pytorch:2.15.0-cuda13.2-cudnn9-runtime` (torch 2.15.0+cu132, kernels sm_75 to sm_120: A30 and RTX 5090) |
+| Libraries | `docker/constraints.txt` (transformers 5.21.0, huggingface_hub 2.3.0, tokenizers 0.23.3) |
+| Size | image 20.78 GB, `zac2026_TripleTrouble.tar.gz` 14.44 GiB |
+| CPU smoke test | every build: models load offline, `predict.sh` and the notebook give the same 634 lines on public_test, `zaic_tools --validate` 0 errors |
+
+Portal *Test Solution* runs:
+
+| Date | Commit | MD5 | Result |
+|---|---|---|---|
+| 2026-11-10 | `28e209e` (tag `docker-test4`) | `51fe14c8721c93178f03ad42af613e7b` | "Test passed. Your solution runs correctly." |
+
+The Drive links are not kept in the repo (the image carries `train.jsonl`, licensed data); `rclone cat
+gdrive:zaic2026/<folder>/info.txt` gives the link of each upload. Still to check on GPU: score and time per sample
+with the image's library versions (molab run of `sft-final-h` on public_test from this branch).
+
 ## Total size
 
 PhoWhisper-large 1.55 B + Qwen3-4B 4.02 B = 5.57 B parameters, under the 6 B limit; the LLM is under 5 B.

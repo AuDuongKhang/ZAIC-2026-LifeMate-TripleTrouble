@@ -10,8 +10,10 @@ import inspect
 import json
 import time
 import traceback
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from types import ModuleType
 
 from .agents import AGENTS, build_agent
 from .asr import BACKENDS, build_asr
@@ -50,6 +52,50 @@ def with_split(agent_cls: type, agent_kw: dict, split: str, data_root: Path) -> 
     return {**{k: v for k, v in extra.items() if k in params}, **agent_kw}
 
 
+@dataclass
+class Pipeline:
+    """What every sample needs: the split's zaic_tools and catalog, and the loaded ASR and agent."""
+    split: str
+    data_root: Path
+    zaic_tools: ModuleType
+    catalog: dict[str, dict]
+    asr: object
+    agent: object
+
+
+def load_pipeline(split: str, data_root: Path, agent_name: str, agent_kw: dict, asr_name: str,
+                  asr_kw: dict) -> Pipeline:
+    """Import the split's zaic_tools, load its catalog and build the ASR, then the agent. Does not seed."""
+    zaic_tools = import_zaic_tools(data_root, split)
+    catalog = load_catalog(data_root, split)
+    agent_kw = with_split(AGENTS[agent_name], agent_kw, split, data_root)
+    asr = build_asr(asr_name, **asr_kw)
+    agent = build_agent(agent_name, **agent_kw)
+    return Pipeline(split, data_root, zaic_tools, catalog, asr, agent)
+
+
+def run_sample(p: Pipeline, sample: dict) -> tuple[dict, dict]:
+    """Run one sample in its own ToolEnv: (submission line, trace record). Never raises: an error goes to the trace.
+
+    `time` is the sample's milliseconds from before its ToolEnv and audio to the end of the agent, as the organiser
+    guide measures it."""
+    t0 = time.perf_counter()
+    env = p.zaic_tools.ToolEnv(p.split, sample["id"], root=p.data_root)  # the sample's one and only env
+    task, error = None, None
+    p.agent.last_trace = None
+    try:
+        task = build_task(sample, p.asr, p.catalog, p.data_root, p.split, started_at=t0)
+        p.agent.run(task, env)
+    except Exception:
+        error = traceback.format_exc()
+    elapsed = time.perf_counter() - t0
+    line = {"id": sample["id"], "tool_calls": env.get_tool_calls(), "state_hash": env.get_state_hash(),
+            "time": int(elapsed * 1000)}
+    trace = {"id": sample["id"], "request": task.request if task else None, "calls": env.log,
+             "agent": p.agent.last_trace, "seconds": round(elapsed, 3), "error": error}
+    return line, trace
+
+
 def main(argv: list[str] | None = None) -> Path:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--split", default="public_test")
@@ -64,6 +110,9 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--subset", choices=SUBSETS, default=None, help="train only: a part of configs/splits.json")
     ap.add_argument("--out", type=Path, default=None, help="run folder (default runs/<time>_<split>_<agent>_<asr>)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--time-field", action="store_true",
+                    help="keep each sample's `time` (ms) in submission.jsonl, as the Docker guide asks; off by default "
+                         "so that two identical runs give byte-identical files")
     ap.add_argument("--agent-kw", action="append", metavar="KEY=VALUE", help="agent constructor option (repeatable)")
     ap.add_argument("--asr-kw", action="append", metavar="KEY=VALUE", help="ASR constructor option (repeatable)")
     args = ap.parse_args(argv)
@@ -73,7 +122,6 @@ def main(argv: list[str] | None = None) -> Path:
     except (ValueError, KeyError) as e:
         ap.error(str(e.args[0]))
 
-    zaic_tools = import_zaic_tools(args.data_root, args.split)
     samples = load_samples(args.data_root, args.split)
     if args.asr_name == "gold" and samples and "audio_text" not in samples[0]:
         ap.error(f"--asr gold needs transcripts, which only train has; use a real ASR or --asr none on {args.split}")
@@ -87,14 +135,13 @@ def main(argv: list[str] | None = None) -> Path:
         samples = [s for s in samples if s["id"] in wanted]
     if args.limit:
         samples = samples[: args.limit]
-    catalog = load_catalog(args.data_root, args.split)
-
     t_load = time.perf_counter()
-    agent_kw = with_split(AGENTS[args.agent_name], agent_kw, args.split, args.data_root)
-    asr = build_asr(args.asr_name, **asr_kw)
-    agent = build_agent(args.agent_name, **agent_kw)
-    agent_kw.pop("data_root", None)  # a machine path: needed to build the agent, not part of the run record
+    p = load_pipeline(args.split, args.data_root, args.agent_name, agent_kw, args.asr_name, asr_kw)
+    agent = p.agent
     load_s = time.perf_counter() - t_load
+    # the run record keeps split= but not data_root= (a machine path, needed only to build the agent)
+    agent_kw = {k: v for k, v in with_split(AGENTS[args.agent_name], agent_kw, args.split, args.data_root).items()
+                if k != "data_root"}
     seed_everything(args.seed)
 
     out = args.out or REPO_ROOT / "runs" / (
@@ -104,22 +151,14 @@ def main(argv: list[str] | None = None) -> Path:
     times, errors = [], 0
     with open(out / "submission.jsonl", "w", encoding="utf-8") as fsub, open(out / "trace.jsonl", "w", encoding="utf-8") as ftr:
         for i, sample in enumerate(samples, 1):
-            t0 = time.perf_counter()
-            env = zaic_tools.ToolEnv(args.split, sample["id"], root=args.data_root)  # the sample's one and only env
-            task, error = None, None
-            agent.last_trace = None
-            try:
-                task = build_task(sample, asr, catalog, args.data_root, args.split, started_at=t0)
-                agent.run(task, env)
-            except Exception:
-                error = traceback.format_exc()
-                errors += 1
-            elapsed = time.perf_counter() - t0
+            line, trace = run_sample(p, sample)
+            elapsed, error = trace["seconds"], trace["error"]
+            errors += bool(error)
             times.append(elapsed)
-            line = {"id": sample["id"], "tool_calls": env.get_tool_calls(), "state_hash": env.get_state_hash()}
+            if not args.time_field:
+                line.pop("time")
             fsub.write(json.dumps(line, ensure_ascii=False) + "\n")
-            ftr.write(json.dumps({"id": sample["id"], "request": task.request if task else None, "calls": env.log,
-                                  "agent": agent.last_trace, "seconds": round(elapsed, 3), "error": error}, ensure_ascii=False) + "\n")
+            ftr.write(json.dumps(trace, ensure_ascii=False) + "\n")
             if error or elapsed > TIME_LIMIT_S or i % 10 == 0 or i == len(samples):
                 flag = " ERROR" if error else (" OVER 30s" if elapsed > TIME_LIMIT_S else "")
                 print(f"[{i}/{len(samples)}] {sample['id']} {elapsed:.2f}s (mean {sum(times) / len(times):.2f}s){flag}",
