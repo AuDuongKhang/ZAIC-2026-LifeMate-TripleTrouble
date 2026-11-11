@@ -236,9 +236,10 @@ def test_extract_unseen_history_chains_same_app_read_and_write():
     assert extract_unseen_history([sample], cat, known_apps={"parking"}) == []
 
 
-def test_from_data_with_history_examples_adds_unseen_apps(train_samples):
+def test_from_data_with_history_examples_on_train_mines_only_the_pool(train_samples):
+    from lifemate.splits import load_splits
+
     root = default_data_root()
-    plain = ExampleBank.from_data(root, "train", history_examples=False)
     with_hist = ExampleBank.from_data(root, "train", history_examples=True)
-    assert len(with_hist) > len(plain)
-    assert "subscriptions" not in plain.bank_apps and "subscriptions" in with_hist.bank_apps
+    pool = set(load_splits()["pool"])
+    assert {d["id"] for d in with_hist.docs} <= pool

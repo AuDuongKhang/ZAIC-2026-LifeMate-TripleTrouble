@@ -130,8 +130,9 @@ class ExampleBank:
     @classmethod
     def from_data(cls, data_root: Path, split: str = "train", history_examples: bool = False) -> "ExampleBank":
         """The pool when evaluating on train (dev/holdout stay unseen); every train sample for any other split.
-        With `history_examples=True`, also mines self-contained history turns from `split` for apps absent from the
-        training bank (unseen apps on holdout, public_test, or private_test)."""
+        With `history_examples=True`, also mines self-contained history turns for apps absent from the training bank:
+        from the pool's histories when evaluating on train (so dev/holdout stay unseen), from `split` otherwise
+        (unseen apps on public_test or private_test)."""
         samples = load_samples(data_root, "train")
         train_cat = load_catalog(data_root, "train")
         pool = set(load_splits()["pool"]) if split == "train" else {s["id"] for s in samples}
@@ -139,7 +140,9 @@ class ExampleBank:
             return cls(samples, pool, train_cat)
         base_docs = [s for s in samples if s["id"] in pool and _sees_its_ids(s, train_cat)]
         known_apps = set().union(*(gold_apps(s["label"]) for s in base_docs)) if base_docs else set()
-        split_samples = samples if split == "train" else load_samples(data_root, split)
+        # On train, mine only pool histories: dev/holdout histories repeat the scenarios of other dev/holdout
+        # samples (same templates, same env), so mining them would leak those samples' answers into the gate.
+        split_samples = [s for s in samples if s["id"] in pool] if split == "train" else load_samples(data_root, split)
         split_cat = train_cat if split == "train" else load_catalog(data_root, split)
         hdocs = extract_unseen_history(split_samples, split_cat, known_apps)
         all_docs = base_docs + hdocs
