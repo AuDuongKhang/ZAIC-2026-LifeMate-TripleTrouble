@@ -209,3 +209,11 @@ def test_smoke_config_names_known_presets():
     env = {"HF_MODEL_OWNER": cfg["hf_model_owner"]}
     assert resolve("agent", cfg["agent_preset"], env)[0] == "empty"
     assert resolve("asr", cfg["asr_preset"], env)[0] == "none"
+
+
+def test_committed_shipped_config_pins_both_models_by_full_commit():
+    import re
+
+    cfg = docker_entry.load_config()
+    for part in ("agent_kw", "asr_kw"):
+        assert re.fullmatch(r"[0-9a-f]{40}", cfg[part].get("revision") or ""), part  # a later push cannot change the system

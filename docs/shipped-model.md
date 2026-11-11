@@ -1,14 +1,43 @@
-# Shipped model: sft-final-h + pho-large-ft-all beam 5
+# Shipped model: sft-q1c + four agent rules + pho-large-ft-all beam 5
 
-The system in `configs/shipped.json`, best on the public leaderboard: **57.5** (7 Nov 2026, run commit `0c7152b`, mean 3.84 s
-and max 11.93 s per sample on molab, 634/634 samples). The previous best, sft-final with the same ASR, scored 56.01, so the
-difference (+1.49) comes from the agent alone.
+The system in `configs/shipped.json` (agent preset `sft-q1c-refs-fixes-all`), best on the public leaderboard: **63.23**
+(11 Nov 2026, run commit `d200053`, mean 5.11 s and max 14.71 s per sample on molab, 634/634 samples, 0 over the time
+limit). The same rules on sft-q1b scored 62.83, and sft-q1b without them 61.05. The holdout/dev gate runs
+(`RESULTS.md`, 11 Nov): sft-q1c vs sft-q1b with the same rules except `empty_retry` and `weekday_fix`, holdout +2.18
+[-1.52, +5.89], dev -1.78 [-4.92, +1.48], pooled +0.19; `empty_retry` alone on sft-q1b, holdout +0.95 [+0.01, +1.99], dev
++0.80 [+0.13, +1.68]. The public difference between sft-q1c and sft-q1b (+0.40) is within noise.
 
-## Agent: `TripleTrouble/lifemate-sft-final-h`
+## Agent: `TripleTrouble/lifemate-sft-q1c`, preset `sft-q1c-refs-fixes-all`
+
+Pinned revision `8cb4336e529f0a4b2d6f10cdcfc63d15c45b651d` (merge commit "merged .../checkpoints/sft-q1c/last", 11 Nov
+09:09 UTC; the gate and public runs ran after it, unpinned, on that latest commit). `run_config.json` and
+`train_log.jsonl` are next to the weights in `checkpoints/sft-q1c/last/`. 4.21 B parameters (bf16).
+
+Agent options: prompt v1, 4 few-shot examples by BM25 from the train bank, `check_refs`, `id_fix`, `spoken_email`,
+`empty_retry`, `weekday_fix` (`configs/presets.json`, `src/lifemate/agents/`).
+
+It is the sft-q1b recipe (Qwen3.5-4B student on the experiment pool) with the gold apps left out of the few-shot
+examples for half of the records:
+
+| Setting | Value |
+|---|---|
+| Base model | `TripleTrouble/qwen35-4b-text` @ `300ccc1`: text-only weights of `Qwen/Qwen3.5-4B` @ `851bf6e`, chat template `configs/chat_templates/qwen_json_nothink.jinja` (`lifemate.sft.text_only`) |
+| Train records | `gold-pool-m1-asr-pho-large-fp16-lao50`: pool samples (train minus dev and holdout), gold replay + 1 function-masked copy + 1 ASR-noisy copy per sample |
+| ASR-noisy copy | user turns from the `pho-large-fp16` cache (off-the-shelf `vinai/PhoWhisper-large`) |
+| Leave-app-out | `--leave-app-out 0.5`: each record drawn separately, half get few-shot examples without their gold apps |
+| Eval records | `gold-dev` (final eval loss 0.0350) |
+| LoRA | r 16, alpha 32, dropout 0.05, targets `q_proj,k_proj,v_proj,o_proj,in_proj_qkv,in_proj_z,out_proj,gate_proj,up_proj,down_proj` |
+| Optimiser | lr 1e-4, warmup 3%, micro batch 1, grad accum 16, 2 epochs = 356 steps, max length 12,288, seed 0 |
+| Time | 2 h 34 min on molab (RTX Pro 6000), with the `fla` kernels of PR #82 (sft-q1b took 10 h without them) |
+| Code | repo commit `4f37ecbb` (`records_commit`): `main` when the notebook cloned it; its `src/` equals `595e080`, #82 changed only the Dockerfile and requirements |
+
+Commands: `docker/training_code/README.md`, steps 0 and 2–4.
+
+## Previous shipped agent: `TripleTrouble/lifemate-sft-final-h` (57.5)
 
 Pinned revision `e3a659cb166907460f564c31a01e613786a835b6` (merge commit "merged .../checkpoints/sft-final-h2/last", 6 Nov
 13:22 UTC). The repo also holds checkpoint folders of other runs (`checkpoints/sft-final-h`, `checkpoints/sft-v1`); only
-`checkpoints/sft-final-h2` produced the shipped model. `run_config.json` and `train_log.jsonl` are stored next to the weights.
+`checkpoints/sft-final-h2` produced that model. `run_config.json` and `train_log.jsonl` are stored next to the weights.
 
 It is the sft-final recipe (all 1,545 train samples) plus few-shot examples hidden for half of the samples:
 
@@ -101,7 +130,15 @@ with the image's library versions (molab run of `sft-final-h` on public_test fro
 
 ## Total size
 
-PhoWhisper-large 1.55 B + Qwen3-4B 4.02 B = 5.57 B parameters, under the 6 B limit; the LLM is under 5 B.
+PhoWhisper-large 1.54 B + Qwen3.5-4B text-only 4.21 B = 5.75 B parameters (safetensors metadata of the pinned
+revisions), under the 6 B limit; the LLM is under 5 B.
+
+## Image libraries
+
+The image installs `flash-linear-attention` / `fla-core` 0.6.0 (PR #82) for the gated delta net layers of Qwen3.5. The
+public runs of 11 Nov ran on `d200053`, before #82, so without these kernels: the image decodes the same greedy text
+through different kernels, which may change a few outputs. A molab run of this branch on public_test (runbook C1 with
+the pinned revisions) gives the score and time with the image's libraries.
 
 ## Not shipped
 
