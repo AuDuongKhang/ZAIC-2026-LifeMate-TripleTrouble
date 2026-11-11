@@ -8,3 +8,9 @@ huggingface_hub    # fetching the team's data copy (lifemate.fetch_data / hf_upl
 transformers>=4.56  # Qwen3 + Whisper, `dtype=` kwarg; torch itself comes preinstalled on molab (and in the Docker base image)
 jinja2             # chat templates
 soundfile
+# Triton kernels for the gated delta net layers of Qwen3.5-style models (transformers imports `fla`; without it the
+# layers fall back to a much slower PyTorch path, in training and at inference). No torch dependency without extras.
+# causal-conv1d is left out: it compiles CUDA, which fails on molab (no CCCL headers) and in the runtime Docker image.
+einops
+fla-core
+flash-linear-attention

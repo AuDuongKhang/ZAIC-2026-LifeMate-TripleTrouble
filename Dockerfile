@@ -14,15 +14,18 @@ ENV PYTHONUTF8=1 \
     PIP_BREAK_SYSTEM_PACKAGES=1 \
     DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Ho_Chi_Minh \
+    TRITON_CACHE_DIR=/tmp/triton \
     HF_HOME=/models
 WORKDIR /code
 
-RUN apt-get update && apt-get install -y --no-install-recommends libsndfile1 && rm -rf /var/lib/apt/lists/*
+# gcc + libc6-dev: Triton (used by flash-linear-attention) compiles a small C launcher the first time a kernel runs.
+RUN apt-get update && apt-get install -y --no-install-recommends libsndfile1 gcc libc6-dev && rm -rf /var/lib/apt/lists/*
 RUN python -c "import torch; a = torch._C._cuda_getArchFlags().split(); print(torch.__version__, torch.version.cuda, a); assert 'sm_80' in a and 'sm_120' in a, a"
 
 COPY requirements.txt pyproject.toml ./
 COPY docker/constraints.txt ./docker/constraints.txt
 RUN pip install -r requirements.txt -c docker/constraints.txt jupyterlab nbconvert ipykernel
+RUN python -c "import importlib.util as u, triton; assert u.find_spec('fla'), 'flash-linear-attention missing'; print('triton', triton.__version__)"
 COPY src ./src
 COPY configs ./configs
 RUN pip install --no-deps -e .
