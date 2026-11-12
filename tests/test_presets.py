@@ -232,3 +232,13 @@ def test_diagnostic_preset_is_sft_v2_refs_plus_the_flag():
 def test_sft_presets_name_their_merged_model(name):
     agent, kw = resolve("agent", f"sft-{name}-refs", {"HF_MODEL_OWNER": "team"})
     assert (agent, kw) == ("react", {"model": f"team/lifemate-sft-{name}", "examples": 4, "check_refs": True})
+
+
+def test_clock_fix_preset_is_the_shipped_preset_plus_the_flag():
+    env = {"HF_MODEL_OWNER": "me"}
+    name, kw = resolve("agent", "sft-q1c-refs-fixes-all", env)
+    assert resolve("agent", "sft-q1c-refs-fixes-all-clock", env) == (name, {**kw, "clock_fix": True})
+
+
+def test_clock_fix_is_off_in_every_other_preset():
+    assert {k for k, v in load_presets()["agent"].items() if v["agent_kw"].get("clock_fix")} == {"sft-q1c-refs-fixes-all-clock"}
