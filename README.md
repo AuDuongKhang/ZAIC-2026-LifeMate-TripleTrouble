@@ -7,7 +7,7 @@ messaging, …). For each sample it acts (calls the right tools), asks for missi
 
 ## Solution (submitted Docker image)
 
-Public leaderboard 63.23. Configuration in `configs/shipped.json`; training details and the code that trained the models
+Public leaderboard 63.44. Configuration in `configs/shipped.json`; training details and the code that trained the models
 in `docker/training_code/README.md` (`/code/training_code/` in the image) and `docs/shipped-model.md`.
 
 | Part | Model | Parameters | Details |
@@ -22,11 +22,12 @@ Total 5.75 B parameters, all open models, fully offline.
   installed apps, the history with its tool calls and results, the user profile and current time, and 4 few-shot
   examples picked by BM25 from the train requests. Each step the model writes one `<tool_call>`; the runner checks it
   with `env.validate` (free), rejects IDs never seen in the history or earlier results (`check_refs`), sends it with
-  `env.call` and appends the result. Four schema-driven rules help the model: `id_fix` (an entity's id where a write
+  `env.call` and appends the result. Five schema-driven rules help the model: `id_fix` (an entity's id where a write
   call names it), `spoken_email` (respells a misheard spoken email), `weekday_fix` (calendar date of the request's only
-  "thứ X tuần sau" phrase) and `empty_retry` (a read that found nothing is re-sent without its optional, non-date
+  "thứ X tuần sau" phrase), `clock_fix` (the time of day of the request's only clock time, "tám rưỡi tối" → 20:30,
+  in the first dated call) and `empty_retry` (a read that found nothing is re-sent without its optional, non-date
   filters). The loop stops when the model answers without a call, calls
-  `sys.ask_missing_info`, or reaches 8 steps or the 20 s budget (ASR included).
+  `sys.ask_missing_info`, or reaches 8 steps or the 24 s budget (ASR included).
 - **Training data**: the organisers' train split only. SFT records replay each sample's gold calls through the same
   prompt (training text = inference text), plus a function-masked copy (apps, tools and parameters renamed, tools
   shuffled) and an ASR-noisy copy (off-the-shelf PhoWhisper-large transcripts); half of the records get few-shot

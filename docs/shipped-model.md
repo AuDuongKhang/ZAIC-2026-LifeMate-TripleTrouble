@@ -1,6 +1,10 @@
-# Shipped model: sft-q1c + four agent rules + pho-large-ft-all beam 5
+# Shipped model: sft-q1c + five agent rules + pho-large-ft-all beam 5
 
-The system in `configs/shipped.json` (agent preset `sft-q1c-refs-fixes-all`), best on the public leaderboard: **63.23**
+The system in `configs/shipped.json` (agent preset `sft-q1c-refs-fixes-all-clock`), best on the public leaderboard:
+**63.44** (12 Nov 2026, run commit `6093204`, mean 4.53 s and max 13.23 s per sample, 0 over the time limit): the
+system below plus `clock_fix` (plan `docs/superpowers/plans/2026-11-12-clock-fix.md`), which changed only public_0147
+and public_0238 against the 63.29 run; its train gate (12 Nov) was holdout +0.73 [+0.0, +1.68] and dev +0.33
+[+0.0, +1.0], no fired sample worse. Without `clock_fix` (preset `sft-q1c-refs-fixes-all`): **63.23**
 (11 Nov 2026, run commit `d200053`, mean 5.11 s and max 14.71 s per sample on molab, 634/634 samples, 0 over the time
 limit). With the image's libraries (fla kernels), the warmup and the 24 s budget it scored **63.29** (12 Nov, run commit
 `6bed3b4`, mean 4.49 s, max 13.20 s, load 43.4 s with the warmup; 9 state hashes differ from the 11 Nov run, from the
@@ -9,14 +13,14 @@ kernels). The same rules on sft-q1b scored 62.83, and sft-q1b without them 61.05
 [-1.52, +5.89], dev -1.78 [-4.92, +1.48], pooled +0.19; `empty_retry` alone on sft-q1b, holdout +0.95 [+0.01, +1.99], dev
 +0.80 [+0.13, +1.68]. The public difference between sft-q1c and sft-q1b (+0.40) is within noise.
 
-## Agent: `TripleTrouble/lifemate-sft-q1c`, preset `sft-q1c-refs-fixes-all`
+## Agent: `TripleTrouble/lifemate-sft-q1c`, preset `sft-q1c-refs-fixes-all-clock`
 
 Pinned revision `8cb4336e529f0a4b2d6f10cdcfc63d15c45b651d` (merge commit "merged .../checkpoints/sft-q1c/last", 11 Nov
 09:09 UTC; the gate and public runs ran after it, unpinned, on that latest commit). `run_config.json` and
 `train_log.jsonl` are next to the weights in `checkpoints/sft-q1c/last/`. 4.21 B parameters (bf16).
 
 Agent options: prompt v1, 4 few-shot examples by BM25 from the train bank, `check_refs`, `id_fix`, `spoken_email`,
-`empty_retry`, `weekday_fix` (`configs/presets.json`, `src/lifemate/agents/`).
+`empty_retry`, `weekday_fix`, `clock_fix` (`configs/presets.json`, `src/lifemate/agents/`).
 
 It is the sft-q1b recipe (Qwen3.5-4B student on the experiment pool) with the gold apps left out of the few-shot
 examples for half of the records:

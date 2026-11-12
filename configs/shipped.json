@@ -1,5 +1,5 @@
 {
-  "agent_preset": "sft-q1c-refs-fixes-all",
+  "agent_preset": "sft-q1c-refs-fixes-all-clock",
   "asr_preset": "pho-large-ft-all-beam5",
   "agent_kw": {"revision": "8cb4336e529f0a4b2d6f10cdcfc63d15c45b651d"},
   "asr_kw": {"revision": "73bb56a73e1e1470bbda0fad99353b6f1ed6c338"},
