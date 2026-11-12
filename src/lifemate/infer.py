@@ -64,14 +64,36 @@ class Pipeline:
 
 
 def load_pipeline(split: str, data_root: Path, agent_name: str, agent_kw: dict, asr_name: str,
-                  asr_kw: dict) -> Pipeline:
-    """Import the split's zaic_tools, load its catalog and build the ASR, then the agent. Does not seed."""
+                  asr_kw: dict, warm: bool = True) -> Pipeline:
+    """Import the split's zaic_tools, load its catalog and build the ASR, then the agent, then (warm) run warmup().
+    Does not seed."""
     zaic_tools = import_zaic_tools(data_root, split)
     catalog = load_catalog(data_root, split)
     agent_kw = with_split(AGENTS[agent_name], agent_kw, split, data_root)
     asr = build_asr(asr_name, **asr_kw)
     agent = build_agent(agent_name, **agent_kw)
-    return Pipeline(split, data_root, zaic_tools, catalog, asr, agent)
+    p = Pipeline(split, data_root, zaic_tools, catalog, asr, agent)
+    if warm:
+        warmup(p)
+    return p
+
+
+def warmup(p: Pipeline, sample: dict | None = None) -> float:
+    """Untimed dry run of the split's first sample (or `sample`) for agents with a warmup() method: its ASR, then one
+    LLM generation on its prompt. One-off GPU costs (CUDA context, cuDNN/cuBLAS setup, Triton compilation and
+    autotuning of the fla kernels) then fall in the load time, not in the first sample's 30 s. No ToolEnv is created
+    and no call is sent. A failure is printed and ignored: the samples still run. Returns the seconds it took."""
+    if not hasattr(p.agent, "warmup"):
+        return 0.0
+    t0 = time.perf_counter()
+    try:
+        sample = sample or load_samples(p.data_root, p.split)[0]
+        p.agent.warmup(build_task(sample, p.asr, p.catalog, p.data_root, p.split))
+    except Exception:
+        print(f"warmup failed (ignored):\n{traceback.format_exc()}", flush=True)
+    seconds = time.perf_counter() - t0
+    print(f"warmup: {seconds:.1f} s", flush=True)
+    return seconds
 
 
 def run_sample(p: Pipeline, sample: dict) -> tuple[dict, dict]:

@@ -2,7 +2,9 @@
 
 The system in `configs/shipped.json` (agent preset `sft-q1c-refs-fixes-all`), best on the public leaderboard: **63.23**
 (11 Nov 2026, run commit `d200053`, mean 5.11 s and max 14.71 s per sample on molab, 634/634 samples, 0 over the time
-limit). The same rules on sft-q1b scored 62.83, and sft-q1b without them 61.05. The holdout/dev gate runs
+limit). With the image's libraries (fla kernels), the warmup and the 24 s budget it scored **63.29** (12 Nov, run commit
+`6bed3b4`, mean 4.49 s, max 13.20 s, load 43.4 s with the warmup; 9 state hashes differ from the 11 Nov run, from the
+kernels). The same rules on sft-q1b scored 62.83, and sft-q1b without them 61.05. The holdout/dev gate runs
 (`RESULTS.md`, 11 Nov): sft-q1c vs sft-q1b with the same rules except `empty_retry` and `weekday_fix`, holdout +2.18
 [-1.52, +5.89], dev -1.78 [-4.92, +1.48], pooled +0.19; `empty_retry` alone on sft-q1b, holdout +0.95 [+0.01, +1.99], dev
 +0.80 [+0.13, +1.68]. The public difference between sft-q1c and sft-q1b (+0.40) is within noise.
@@ -140,6 +142,14 @@ The image installs `flash-linear-attention` / `fla-core` 0.6.0 (PR #82) for the 
 public runs of 11 Nov ran on `d200053`, before #82, so without these kernels: the image decodes the same greedy text
 through different kernels, which may change a few outputs. A molab run of this branch on public_test (runbook C1 with
 the pinned revisions) gives the score and time with the image's libraries.
+
+Triton compiles (and autotunes) the fla kernels on their first call, which no GPU check of an image has covered: the
+10 Nov Test Solution ran sft-final-h (Qwen3, no fla) and the CI smoke test runs on CPU. Since 12 Nov,
+`infer.load_pipeline` runs `infer.warmup` before the first timed sample: the split's first sample goes through the ASR
+and one LLM generation on its prompt, with no ToolEnv and no call, so that cost lands in the load time. The same day
+the agent's `time_budget_s` default went from 20 to 24 s: an A30 estimate from the 11 Nov public trace (prefill
+~2-3.5x slower than molab, decode bound by kernel launches) put up to ~20 samples (3%) past 20 s, where the agent stops
+before its last calls, and none past 30 s.
 
 ## Not shipped
 

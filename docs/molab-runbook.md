@@ -312,6 +312,44 @@ Send the run folders (`trace.jsonl`, `submission.jsonl`, `meta.json`). Baselines
 scores below 61.05). Validate `submission.jsonl`, check `over_time_limit` is 0, submit; the baseline to beat is 61.05 and a
 tie goes to sft-q1b with the fewer options.
 
+### C4. Clock fix
+
+Plan: `docs/superpowers/plans/2026-11-12-clock-fix.md` (Tasks 4 and 5). Preset `sft-q1c-refs-fixes-all-clock` is the
+shipped preset `sft-q1c-refs-fixes-all` plus `clock_fix` (the time of day the request states, put into the first dated
+call of the sample). Branch `feat/clock-fix` until it is merged, then `main`.
+
+**Gate runs** (`notebooks/molab_run.py`): Branch `feat/clock-fix`, Split `train`, ASR preset `pho-large-ft-b`, HF model
+owner `TripleTrouble`, extra infer args `--agent-kw revision=8cb4336e529f0a4b2d6f10cdcfc63d15c45b651d` (the shipped
+sft-q1c revision of `configs/shipped.json`). About 25 minutes each.
+
+| Run | Agent preset | Train subset |
+|---|---|---|
+| G1 | `sft-q1c-refs-fixes-all` | `holdout` |
+| G2 | `sft-q1c-refs-fixes-all` | `dev` |
+| G3 | `sft-q1c-refs-fixes-all-clock` | `holdout` |
+| G4 | `sft-q1c-refs-fixes-all-clock` | `dev` |
+
+G1 and G2 are the baselines (and the first train scores of the shipped preset). Send the four run folders
+(`trace.jsonl`, `submission.jsonl`, `meta.json`). Compare with `python -m lifemate.compare runs/<G1> runs/<G3>` and
+`python -m lifemate.compare runs/<G2> runs/<G4>`. The simulator expects `agent.clock_fixes` on train_0618, train_0842,
+train_1064 (holdout) and train_0031 (dev), unless `empty_retry` changed their calls.
+
+- Few samples fire, so the usual gate (holdout +0.5 with the CI above 0) cannot be met. `clock_fix` passes when no sample
+  with `clock_fixes` scores lower than in its baseline and the difference pooled over the 597 samples is at or above 0.
+- A fired sample that got worse: name it and the rule that fired, and stop; the owner decides.
+- Samples that differ without a `clock_fixes` entry are run-to-run noise (expected 0: fixed seeds, greedy decoding); report
+  their count and judge on the fired samples only.
+
+**Public run** (only if the gate passed): Branch `feat/clock-fix`, Split `public_test`, ASR preset
+`pho-large-ft-all-beam5`, HF model owner `TripleTrouble`, agent preset `sft-q1c-refs-fixes-all-clock`, extra infer args
+`--time-field --agent-kw revision=8cb4336e529f0a4b2d6f10cdcfc63d15c45b651d`. Validate `submission.jsonl`, check
+`over_time_limit` is 0 in `meta.json`. Before submitting, the samples with `agent.clock_fixes` should be public_0147 and
+public_0238, and the samples whose `tool_calls` differ from
+`runs/20261111-115254_d200053_public_test_sft-q1c-refs-fixes-all_pho-large-ft-all-beam5/submission.jsonl` should be those
+two plus any that follow from them; more than 5 means the run is not comparable to the 63.23 submission (stop and tell the
+owner). Ship when the leaderboard score is at or above 63.23; below it, `clock_fix` stays off and the shipped image stays as
+it is. One sample is 0.158 points, so a result within ±0.32 comes from the two fired samples alone.
+
 ## D. Closed, nothing to run
 
 Experiments 7 (few-shot selection by tool structure: +1.04 points of hit rate against a 10-point bar), 8 (date correction: simulation

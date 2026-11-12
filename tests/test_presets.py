@@ -180,7 +180,8 @@ def test_empty_retry_and_weekday_presets(name, model, flags):
 
 def test_new_options_are_off_in_every_other_preset():
     on = {k for k, v in load_presets()["agent"].items() if v["agent_kw"].get("empty_retry") or v["agent_kw"].get("weekday_fix")}
-    assert on == {"sft-q1b-refs-fixes-retry", "sft-q1b-refs-fixes-wd", "sft-q1b-refs-fixes-all", "sft-q1c-refs-fixes-all"}
+    assert on == {"sft-q1b-refs-fixes-retry", "sft-q1b-refs-fixes-wd", "sft-q1b-refs-fixes-all", "sft-q1c-refs-fixes-all",
+                  "sft-q1c-refs-fixes-all-clock"}
 
 
 def test_no_preset_reads_labels():
@@ -192,3 +193,13 @@ def test_no_preset_reads_labels():
 def test_sft_presets_name_their_merged_model(name):
     agent, kw = resolve("agent", f"sft-{name}-refs", {"HF_MODEL_OWNER": "team"})
     assert (agent, kw) == ("react", {"model": f"team/lifemate-sft-{name}", "examples": 4, "check_refs": True})
+
+
+def test_clock_fix_preset_is_the_shipped_preset_plus_the_flag():
+    env = {"HF_MODEL_OWNER": "me"}
+    name, kw = resolve("agent", "sft-q1c-refs-fixes-all", env)
+    assert resolve("agent", "sft-q1c-refs-fixes-all-clock", env) == (name, {**kw, "clock_fix": True})
+
+
+def test_clock_fix_is_off_in_every_other_preset():
+    assert {k for k, v in load_presets()["agent"].items() if v["agent_kw"].get("clock_fix")} == {"sft-q1c-refs-fixes-all-clock"}

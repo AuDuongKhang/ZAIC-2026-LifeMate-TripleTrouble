@@ -59,6 +59,31 @@ def test_run_sample_keeps_going_when_the_agent_raises():
     assert "boom" in trace["error"]
 
 
+class _WarmAgent(_Agent):
+    def __init__(self, fail=False):
+        super().__init__(fail=fail)
+        self.warmed = []
+
+    def warmup(self, task):
+        if self.fail:
+            raise RuntimeError("boom")
+        self.warmed.append(task)
+
+
+def test_warmup_runs_asr_and_agent_without_an_env(monkeypatch):
+    p = _pipeline(_WarmAgent())
+    monkeypatch.setattr(p.zaic_tools, "ToolEnv", None)  # a warmup must never build an env
+    assert infer.warmup(p, SAMPLE) >= 0
+    assert [t.request for t in p.agent.warmed] == ["đặt báo thức"]
+    assert p.agent.last_trace is None
+
+
+def test_warmup_skips_agents_without_one_and_ignores_failures(capsys):
+    assert infer.warmup(_pipeline(_Agent()), SAMPLE) == 0.0
+    infer.warmup(_pipeline(_WarmAgent(fail=True)), SAMPLE)  # does not raise
+    assert "warmup failed" in capsys.readouterr().out
+
+
 @pytest.mark.parametrize("flag, has_time", [([], False), (["--time-field"], True)])
 def test_infer_writes_time_only_when_asked(tmp_path, flag, has_time):
     from lifemate.data import default_data_root
