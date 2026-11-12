@@ -10,7 +10,15 @@ read arguments and fuzzy free text never make a pair: gold is not consistent the
 """
 from __future__ import annotations
 
-from ..data import SYS_TOOL
+import argparse
+import json
+import random
+import zlib
+from collections import Counter
+from pathlib import Path
+
+from ..data import SYS_TOOL, default_data_root, fuzzy_params, load_catalog
+from .records import RECORDS_DIR
 
 Decision = tuple[str, "str | None"]
 
@@ -73,3 +81,111 @@ def args_differ(gold: dict, model: dict, name_map: dict[str, str], fuzzy: dict[s
     loose = fuzzy.get(tool, set())
     return any(k in model_args and k not in loose and model_args[k] != v
                for k, v in (g.get("arguments") or {}).items())
+
+
+def _assistant(text: str) -> dict:
+    from .replay import assistant_message  # replay imports the agent; only the pair building needs it
+
+    return assistant_message(text)
+
+
+def choose_rejected(gold_message: dict, candidates: list[str], name_map: dict[str, str], kinds: dict[str, str],
+                    fuzzy: dict[str, set[str]]) -> tuple[str, str, bool] | None:
+    """(type, rejected text, greedy_wrong) for the most frequent wrong decision among candidates ([greedy] + samples),
+    or None when no candidate makes a pair. Ties go to the earliest candidate; write:args candidates form one group."""
+    gold = decision(gold_message, name_map, kinds)
+    groups: dict[tuple, list[int]] = {}
+    types: dict[tuple, str] = {}
+    for i, text in enumerate(candidates):
+        message = _assistant(text)
+        model = decision(message, name_map, kinds)
+        kind = pair_type(gold, model)
+        key: tuple = (kind, model)
+        if kind is None and gold[0] == "write" and model == gold and args_differ(gold_message, message, name_map, fuzzy):
+            kind, key = "write:args", ("write:args",)
+        if kind is None:
+            continue
+        groups.setdefault(key, []).append(i)
+        types[key] = kind
+    if not groups:
+        return None
+    best = max(groups, key=lambda k: (len(groups[k]), -groups[k][0]))
+    greedy_wrong = any(0 in members for members in groups.values())
+    return types[best], candidates[groups[best][0]], greedy_wrong
+
+
+def is_heldout(sample_id: str) -> bool:
+    """10% of the samples, by id, whose pairs are held out of training (cheap selection before the gate)."""
+    return zlib.crc32(sample_id.encode()) % 10 == 0
+
+
+def _review(pairs: list[dict]) -> str:
+    lines = ["# Pairs to read by hand", "",
+             "Mark each pair `decision` (gold is the single right answer) or `convention` (another step could be right).", ""]
+    for p in pairs:
+        user = next(m["content"] for m in reversed(p["messages"]) if m["role"] == "user")
+        lines += [f"## {p['id']} turn {p['turn']} — {p['type']}", "", f"- request: {user}",
+                  f"- gold: `{json.dumps(p['chosen'].get('tool_calls') or p['chosen'].get('content'), ensure_ascii=False)}`",
+                  f"- model: `{json.dumps(p['rejected'].get('tool_calls') or p['rejected'].get('content'), ensure_ascii=False)}`",
+                  "- verdict: ", ""]
+    return "\n".join(lines)
+
+
+def _jsonl(path: Path) -> list[dict]:
+    with open(path, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+def main(argv: list[str] | None = None) -> dict:
+    ap = argparse.ArgumentParser(description="Build preference pairs from a steps file (lifemate.sft.sample_steps).")
+    ap.add_argument("--records", action="append", required=True, help="train_records/<NAME>.jsonl the steps came from")
+    ap.add_argument("--steps", required=True, help="train_records/steps/<NAME>.jsonl")
+    ap.add_argument("--out", required=True, help="train_records/pairs/<NAME>.jsonl (+ -heldout.jsonl, -review.md)")
+    ap.add_argument("--greedy-wrong-only", action="store_true", help="keep only pairs where the greedy step was wrong")
+    ap.add_argument("--records-dir", type=Path, default=RECORDS_DIR)
+    ap.add_argument("--data-root", type=Path, default=default_data_root())
+    args = ap.parse_args(argv)
+
+    catalog = load_catalog(args.data_root, "train")
+    kinds, fuzzy = tool_kinds(catalog), fuzzy_params(catalog)
+    records = {name: _jsonl(args.records_dir / f"{name}.jsonl") for name in args.records}
+    train, held = [], []
+    points = with_pair = greedy_wrong = 0
+    by_type: Counter = Counter()
+    for row in _jsonl(args.records_dir / "steps" / f"{args.steps}.jsonl"):
+        try:
+            record = records[row["records"]][row["record"]]
+        except (KeyError, IndexError):
+            raise ValueError(f"steps row {row['records']}:{row['record']} has no record") from None
+        points += 1
+        name_map = record.get("name_map", {})
+        gold = record["messages"][row["turn"]]
+        chosen = choose_rejected(gold, [row["greedy"], *row["samples"]], name_map, kinds, fuzzy)
+        if chosen is None:
+            continue
+        kind, text, wrong = chosen
+        with_pair += 1
+        greedy_wrong += wrong
+        by_type[kind] += 1
+        if args.greedy_wrong_only and not wrong:
+            continue
+        pair = {"id": record["id"], "record": row["record"], "turn": row["turn"], "type": kind, "greedy_wrong": wrong,
+                "messages": record["messages"][: row["turn"]], "tools": record["tools"], "chosen": gold,
+                "rejected": _assistant(text)}
+        (held if is_heldout(record["id"]) else train).append(pair)
+
+    out = args.records_dir / "pairs"
+    out.mkdir(parents=True, exist_ok=True)
+    for path, rows in ((out / f"{args.out}.jsonl", train), (out / f"{args.out}-heldout.jsonl", held)):
+        path.write_text("".join(json.dumps(p, ensure_ascii=False) + "\n" for p in rows), encoding="utf-8")
+    picked = random.Random(0).sample(train + held, min(30, len(train) + len(held)))
+    (out / f"{args.out}-review.md").write_text(_review(picked), encoding="utf-8")
+    report = {"points": points, "with_pair": with_pair, "rate": with_pair / points if points else 0.0,
+              "greedy_wrong": greedy_wrong, "by_type": dict(by_type), "train": len(train), "heldout": len(held)}
+    print(f"{points} decision points, {with_pair} with a pair ({report['rate']:.1%}); greedy wrong {greedy_wrong}; "
+          f"by type {dict(by_type)}; {len(train)} train pairs, {len(held)} held out -> {out / args.out}.jsonl", flush=True)
+    return report
+
+
+if __name__ == "__main__":
+    main()
