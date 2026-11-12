@@ -13,6 +13,7 @@ from ..data import SYS_TOOL, default_data_root, load_app_groups
 from ..task import Task
 from .ask_guard import fold
 from .base import Agent
+from .clock_fix import fix_call_clock, has_datetime
 from .date_fix import fix_calls
 from .empty_retry import relaxed_call
 from .fewshot import ExampleBank, gold_apps, render_examples
@@ -104,7 +105,8 @@ class ReActAgent(Agent):
                  leak_guard: bool = False, vote_prompts: int = 0, vote_apply: bool = True,
                  date_fix: bool = False, analog_weight: float = 0.0, max_new_tokens: int = 384, num_beams: int = 1,
                  leave_gold_apps_out: bool = False, group_examples: int = 0, id_fix: bool = False,
-                 spoken_email: bool = False, weekday_fix: bool = False, empty_retry: bool = False):
+                 spoken_email: bool = False, weekday_fix: bool = False, empty_retry: bool = False,
+                 clock_fix: bool = False):
         """time_budget_s counts from task.started_at (sample start, ASR included) when the runner sets it.
         A step only starts with at least min_step_s left, and its generation is capped at the time remaining. The
         default 24 s leaves 6 s of the 30 s limit for the last token, the call it sends and the rules after it; it was
@@ -146,6 +148,10 @@ class ReActAgent(Agent):
         weekday_fix is the narrower date_fix of agents/date_fix.py (weekdays_only): it puts the date of the request's
         only "thứ X" phrase (thứ X tuần sau / tuần này / này, or bare) into the call's date arguments, after date_fix and
         before id_fix and validation; day phrases (hôm nay, sáng mai) are left to the model. No extra call is ever sent.
+        clock_fix puts the time of day the request states ("tám rưỡi tối mai" → 20:30) into the first dated call of the
+        sample (agents/clock_fix.py), call by call right before validation, so a dated call that was rejected before it
+        was sent (in this turn or an earlier one) does not use up the fix; the assistant turn is updated, so the model
+        reads back the call that was sent. No extra call is ever sent.
         empty_retry: when a read tool returns an empty result, send it once more without its optional, non-date
         arguments (agents/empty_retry.py), unless that call was already sent or env.validate rejects it. The model then
         reads the relaxed call and its result in place of the empty one, so the transcript shows one call and its real
@@ -168,6 +174,7 @@ class ReActAgent(Agent):
         self.group_examples = group_examples
         self.id_fix, self.spoken_email = id_fix, spoken_email
         self.weekday_fix, self.empty_retry = weekday_fix, empty_retry
+        self.clock_fix = clock_fix  # self.clock is the timer
         self.app_groups = load_app_groups(data_root or default_data_root(), split) if group_examples and examples else None
         if self.bank is None and examples:
             self.bank = ExampleBank.from_data(data_root or default_data_root(), split)
@@ -180,7 +187,7 @@ class ReActAgent(Agent):
                      "analog_weight": analog_weight, "max_new_tokens": max_new_tokens, "num_beams": num_beams,
                      "leave_gold_apps_out": leave_gold_apps_out, "group_examples": group_examples, "id_fix": id_fix,
                      "spoken_email": spoken_email, "weekday_fix": weekday_fix,
-                     "empty_retry": empty_retry}
+                     "empty_retry": empty_retry, "clock_fix": clock_fix}
 
     def _prompt(self, task: Task) -> tuple[Task, list[dict], list[dict]]:
         """(task as the agent reads it, tool schemas, first messages): emails respelled, examples picked, prompt built."""
@@ -223,6 +230,7 @@ class ReActAgent(Agent):
         done: set[str] = set()  # canonical (name, arguments) of calls already sent
         empty: set[str] = set()  # the subset of done whose result was empty (only tracked with empty_hint)
         invalid = 0
+        dated_sent = False  # clock_fix only touches calls until the first dated call was sent
         checked = False  # the refusal check runs at most once, and only after the first output
         voted = not self.vote_prompts  # the prompt vote runs at most once, at the first write or ask
         if self.vote_prompts:
@@ -276,6 +284,12 @@ class ReActAgent(Agent):
                 {"type": "function", "function": {"name": c["name"], "arguments": c["arguments"]}} for c in calls]}
             messages.append(assistant)
             for i, call in enumerate(calls):
+                if self.clock_fix and not dated_sent and has_datetime(call):
+                    fixed = fix_call_clock(call, task.request, task.context["current_time"])
+                    if fixed is not call:  # the assistant turn shows the call that is sent
+                        trace.setdefault("clock_fixes", []).append({"from": call["arguments"], "to": fixed["arguments"]})
+                        call = calls[i] = fixed
+                        assistant["tool_calls"][i]["function"]["arguments"] = fixed["arguments"]
                 key = json.dumps([call["name"], call["arguments"]], sort_keys=True, ensure_ascii=False)
                 if key in done:
                     invalid += 1
@@ -304,6 +318,7 @@ class ReActAgent(Agent):
                                      "come from tool results; call a read or search tool to look it up first."})
                     continue
                 result = env.call(call["name"], call["arguments"])
+                dated_sent = dated_sent or has_datetime(call)
                 scalar_strings(result, seen)
                 if self.id_fix:
                     entity_names(result, names)

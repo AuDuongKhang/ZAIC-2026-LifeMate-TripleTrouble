@@ -147,6 +147,20 @@ def test_weekday_fix_rewrite_returns_none_without_a_weekday_phrase():
     assert rewrite(trace, {}) is None
     assert rewrite(dict(trace, id="unknown", request="họp thứ tư tuần sau"), {}) is None
 
+def test_clock_fix_rewrite_fixes_the_first_dated_call_only():
+    from lifemate.sim import REWRITES
+    rewrite = REWRITES["clock_fix"](times={"s1": "2026-11-05T11:40:00+07:00"})
+    trace = {"id": "s1", "request": "Nhớ nhắc mình gọi lại cho khách lúc tám rưỡi tối mai nhé.",
+             "calls": [{"name": "contacts.search", "arguments": {}, "result": {}},
+                       {"name": "reminders.create", "arguments": {"time": "2026-11-06T19:30:00+07:00"}, "result": {}},
+                       {"name": "alarm.create", "arguments": {"time": "2026-11-06T19:00:00+07:00"}, "result": {}}]}
+    assert rewrite(trace, {}) == [{"name": "contacts.search", "arguments": {}},
+                                  {"name": "reminders.create", "arguments": {"time": "2026-11-06T20:30:00+07:00"}},
+                                  {"name": "alarm.create", "arguments": {"time": "2026-11-06T19:00:00+07:00"}}]
+    assert rewrite(dict(trace, request="nhắc mình gọi lại cho khách"), {}) is None
+    assert rewrite(dict(trace, id="unknown"), {}) is None
+
+
 ID_CATALOG = {"loyalty.redeem": {"name": "loyalty.redeem", "kind": "write",
                                  "parameters": {"properties": {"program": {"type": "string"}, "reward_id": {"type": "string"}}}}}
 REDEEM_BY_NAME = {"name": "loyalty.redeem", "arguments": {"program": "MinhPoint", "reward_id": "rw_1"}, "result": {"ok": True}}
