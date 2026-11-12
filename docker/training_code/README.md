@@ -1,7 +1,7 @@
 # LifeMate, team TripleTrouble: solution and training code
 
 The image runs the system in `/code/configs/shipped.json`: ASR `pho-large-ft-all` (beam 5) feeding a ReAct agent on
-`lifemate-sft-q1c` (preset `sft-q1c-refs-fixes-all`). Public leaderboard: 63.23 (11 Nov 2026). The full source is in `/code/src/lifemate`, the
+`lifemate-sft-q1c` (preset `sft-q1c-refs-fixes-all-clock`). Public leaderboard: 63.44 (12 Nov 2026). The full source is in `/code/src/lifemate`, the
 model card with every training setting in `/code/docs/shipped-model.md`, and experiment logs in `/code/RESULTS.md`.
 
 ## Idea
@@ -13,11 +13,12 @@ model card with every training setting in `/code/docs/shipped-model.md`, and exp
    and 4 few-shot examples picked by BM25 from the train requests. The model writes one `<tool_call>` per step; the
    runner checks it with `env.validate` (free, not scored), sends it with `env.call`, and appends the result. It
    stops when the model answers without a call (done, or nothing to do) or calls `sys.ask_missing_info`.
-   `check_refs` rejects calls whose IDs were never seen in the history or earlier results. Four schema-driven
+   `check_refs` rejects calls whose IDs were never seen in the history or earlier results. Five schema-driven
    rules (no app or tool name decides anything): `id_fix` passes an entity's id where a write call names it,
    `spoken_email` respells a misheard spoken email address, `weekday_fix` puts the calendar date of the request's only
-   "thứ X (tuần sau)" phrase into the call, and `empty_retry` re-sends a read that found nothing without its optional,
-   non-date filters.
+   "thứ X (tuần sau)" phrase into the call, `clock_fix` puts the time of day of the request's only clock time
+   ("tám rưỡi tối" → 20:30) into the first dated call, and `empty_retry` re-sends a read that found nothing without its
+   optional, non-date filters.
 3. **One `ToolEnv` per sample**, created by the runner; app data is only read through tool calls.
 
 | Part | Model | Parameters | Notes |

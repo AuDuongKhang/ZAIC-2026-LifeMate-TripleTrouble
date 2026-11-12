@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 
@@ -203,3 +204,9 @@ def test_clock_fix_preset_is_the_shipped_preset_plus_the_flag():
 
 def test_clock_fix_is_off_in_every_other_preset():
     assert {k for k, v in load_presets()["agent"].items() if v["agent_kw"].get("clock_fix")} == {"sft-q1c-refs-fixes-all-clock"}
+
+
+def test_the_shipped_preset_has_clock_fix():
+    shipped = json.loads((Path(__file__).resolve().parents[1] / "configs" / "shipped.json").read_text(encoding="utf-8"))
+    assert shipped["agent_preset"] == "sft-q1c-refs-fixes-all-clock"
+    assert load_presets()["agent"][shipped["agent_preset"]]["agent_kw"]["clock_fix"] is True
