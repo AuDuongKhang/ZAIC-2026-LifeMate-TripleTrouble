@@ -703,3 +703,42 @@ def test_leave_gold_apps_out_reaches_the_prompt_vote_selects_too():
                        vote_prompts=3, leave_gold_apps_out=True)
     agent.run(task, FakeEnv())
     assert len(seen) == 3 and all(s == {"alarm"} for s in seen)
+
+
+def test_repeat_writes_lets_an_identical_write_through_but_not_a_repeated_read():
+    from lifemate.agents.react import ReActAgent
+
+    class _Env:
+        def __init__(self):
+            self.sent = []
+
+        def validate(self, name, args):
+            return {"ok": True}
+
+        def call(self, name, args):
+            self.sent.append(name)
+            return {"ok": True}
+
+    outputs = iter(['<tool_call>{"name": "loyalty.redeem", "arguments": {"reward_id": "r1"}}</tool_call>',
+                    '<tool_call>{"name": "loyalty.redeem", "arguments": {"reward_id": "r1"}}</tool_call>',
+                    '<tool_call>{"name": "loyalty.get_points", "arguments": {}}</tool_call>',
+                    '<tool_call>{"name": "loyalty.get_points", "arguments": {}}</tool_call>',
+                    "Đã xong."])
+
+    class _LLM:
+        context_limit, max_new_tokens = 16384, 384
+
+        def count_tokens(self, messages, tools):
+            return 10
+
+        def generate(self, messages, tools, max_time=None):
+            return next(outputs)
+
+    from lifemate.task import Task
+    tools = [{"name": "loyalty.redeem", "kind": "write", "description": "", "parameters": {"properties": {}}},
+             {"name": "loyalty.get_points", "kind": "read", "description": "", "parameters": {"properties": {}}}]
+    task = Task(id="t", request="đổi hai ly", history=[], context={"installed_apps": ["loyalty"],
+                "current_time": "2026-11-12T09:00:00+07:00"}, tools=tools)
+    env = _Env()
+    ReActAgent(llm=_LLM(), repeat_writes=True).run(task, env)
+    assert env.sent == ["loyalty.redeem", "loyalty.redeem", "loyalty.get_points"]

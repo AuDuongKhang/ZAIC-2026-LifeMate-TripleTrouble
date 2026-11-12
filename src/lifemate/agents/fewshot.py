@@ -122,7 +122,7 @@ class ExampleBank:
     def select(self, request: str, installed_apps: set[str], k: int, exclude_id: str | None = None,
                offset: int = 0, tools: list[dict] | None = None, analog_weight: float = 0.0,
                exclude_apps: "frozenset[str] | set[str]" = frozenset(), group_slots: int = 0,
-               app_groups: dict[str, str] | None = None) -> list[dict]:
+               app_groups: dict[str, str] | None = None, max_empty: int | None = None) -> list[dict]:
         """Up to k pool samples whose gold-call apps are all installed (out-of-scope ones always qualify), best
         BM25 match to the request first, ties by id. exclude_id is never returned. offset skips that many of the
         best matches (the prompt vote shows each variant the next k). Docs whose gold apps intersect exclude_apps are
@@ -131,7 +131,11 @@ class ExampleBank:
         analog_weight > 0 adds analog_weight x the mean, over the example's gold tools, of the best Jaccard of
         tool_tokens against the NEAR_TOOLS installed tools of apps the bank has no example of (`tools` are the
         installed specs). It finds a tool of the same shape on another app, such as end_ride for end_session. With
-        no such tool the score is plain BM25, so a sample whose apps are all in the bank keeps its examples."""
+        no such tool the score is plain BM25, so a sample whose apps are all in the bank keeps its examples.
+
+        max_empty (None = no limit) keeps at most that many out-of-scope examples (no gold call), and only ones that
+        share a word with the request: they pass every app filter, so without a cap they fill the slots of requests
+        whose apps have no example and show "answer with no tool call" for a request that needs tools."""
         query = set(normalize(request))
         near = []
         if analog_weight and tools:
@@ -148,6 +152,15 @@ class ExampleBank:
 
         ranked = sorted((-score(i), doc["id"], i) for i, doc in enumerate(self.docs)
                         if doc["id"] != exclude_id and self.apps[i] <= installed_apps and not self.apps[i] & exclude_apps)
+        if max_empty is not None:
+            kept, empties = [], 0
+            for entry in ranked:
+                if self.docs[entry[2]]["label"]["tool_calls"]:
+                    kept.append(entry)
+                elif empties < max_empty and entry[0] < 0:  # entry[0] is minus the score: a real match
+                    kept.append(entry)
+                    empties += 1
+            ranked = kept
         if not (group_slots and tools and app_groups):
             return [self.docs[i] for _, _, i in ranked[offset:offset + k]]
         # group_slots: up to that many of the k examples come from the catalog group of the unseen app the request is

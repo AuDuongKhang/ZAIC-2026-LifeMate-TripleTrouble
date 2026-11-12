@@ -18,7 +18,7 @@ from .llm import ChatLLM, HFChatLLM
 from .parsing import BLOCK, parse_tool_calls
 from .prompting import build_messages, system_message, tool_schema
 from .prompts import DEFAULT_PROMPT, FINAL_TEXT, REFUSAL_TEXT
-from .refs import scalar_strings, unseen_refs
+from .refs import scalar_strings, ungrounded_phones, unseen_refs
 from .refusal import matching_tools
 
 EMPTY_HINT = ("\nNo results. Try once more with other values: another date (up to 7 days away), fewer optional filters "
@@ -92,7 +92,8 @@ class ReActAgent(Agent):
                  refusal_check: bool = False, refusal_min_hits: int = 1,
                  leak_guard: bool = False, vote_prompts: int = 0, vote_apply: bool = True,
                  date_fix: bool = False, analog_weight: float = 0.0, max_new_tokens: int = 384, num_beams: int = 1,
-                 leave_gold_apps_out: bool = False, group_examples: int = 0):
+                 leave_gold_apps_out: bool = False, group_examples: int = 0, max_empty_examples: int | None = None,
+                 example_result_chars: int = 300, repeat_writes: bool = False, check_phone_refs: bool = False):
         """time_budget_s counts from task.started_at (sample start, ASR included) when the runner sets it.
         A step only starts with at least min_step_s left, and its generation is capped at the time remaining.
         check_refs holds back calls whose x-ref ids were never seen in a tool result (off by default: with it the
@@ -122,6 +123,12 @@ class ReActAgent(Agent):
         group_examples=g (0 = off) takes up to g of the k examples from the catalog group (finance, mobility, ...) of
         the installed app the bank has no example of that the request matches best (ExampleBank.select), so an unseen
         app is shown examples of apps of the same kind; the other examples stay plain BM25.
+        max_empty_examples (None = no cap) keeps at most that many out-of-scope examples, and only ones sharing a word
+        with the request (ExampleBank.select max_empty). example_result_chars is where example tool results are cut
+        (300 cuts the id a later example call uses in about 1 in 6 non-empty examples). repeat_writes lets a write
+        call repeat an earlier identical one (gold redeems the same reward twice); only reads count as already called.
+        check_phone_refs holds back a phone/phone_number argument whose digits appear in no tool result, request or
+        history turn (refs.ungrounded_phones): phone parameters carry no x-ref, so check_refs lets made-up numbers by.
         leave_gold_apps_out (SFT rendering and the train-only diagnostic, never a real run) leaves the apps of the
         task's gold calls out of the examples; it reads Task.label and raises ValueError without one."""
         if vote_prompts and not examples:
@@ -138,6 +145,8 @@ class ReActAgent(Agent):
         self.vote_prompts, self.vote_apply = vote_prompts, vote_apply
         self.analog_weight = analog_weight
         self.leave_gold_apps_out = leave_gold_apps_out
+        self.max_empty_examples, self.example_result_chars = max_empty_examples, example_result_chars
+        self.repeat_writes, self.check_phone_refs = repeat_writes, check_phone_refs
         self.group_examples = group_examples
         self.app_groups = load_app_groups(data_root or default_data_root(), split) if group_examples and examples else None
         if self.bank is None and examples:
@@ -149,7 +158,9 @@ class ReActAgent(Agent):
                      "date_hints": date_hints, "empty_hint": empty_hint, "refusal_check": refusal_check, "refusal_min_hits": refusal_min_hits,
                      "leak_guard": leak_guard, "vote_prompts": vote_prompts, "vote_apply": vote_apply, "date_fix": date_fix,
                      "analog_weight": analog_weight, "max_new_tokens": max_new_tokens, "num_beams": num_beams,
-                     "leave_gold_apps_out": leave_gold_apps_out, "group_examples": group_examples}
+                     "leave_gold_apps_out": leave_gold_apps_out, "group_examples": group_examples,
+                     "max_empty_examples": max_empty_examples, "example_result_chars": example_result_chars,
+                     "repeat_writes": repeat_writes, "check_phone_refs": check_phone_refs}
 
     def run(self, task: Task, env) -> None:
         trace = self.last_trace = {"steps": [], "stop": None}  # None: a step raised
@@ -166,9 +177,10 @@ class ReActAgent(Agent):
             analog = {"tools": task.tools, "analog_weight": self.analog_weight} if self.analog_weight else {}
             if self.group_examples:
                 analog.update(tools=task.tools, group_slots=self.group_examples, app_groups=self.app_groups)
+            capped = {"max_empty": self.max_empty_examples} if self.max_empty_examples is not None else {}
             picked = self.bank.select(task.request, set(task.context["installed_apps"]), self.examples, exclude_id=task.id,
-                                      **analog, **left_out)
-            examples_text = render_examples(picked)
+                                      **analog, **left_out, **capped)
+            examples_text = render_examples(picked, self.example_result_chars)
         messages = build_messages(task, lambda m: self.llm.count_tokens(m, tools), budget, self.prompt_version,
                                   examples_text, self.date_hints)
         done: set[str] = set()  # canonical (name, arguments) of calls already sent
@@ -235,6 +247,9 @@ class ReActAgent(Agent):
                                      "Write the content the user asked for."})
                     continue
                 unseen = unseen_refs(specs.get(call["name"]), call["arguments"], seen) if self.check_refs else []
+                if self.check_phone_refs and not unseen:
+                    unseen = ungrounded_phones(call["arguments"], seen, [task.request] + [
+                        str(turn.get("text") or "") for turn in task.history])
                 if unseen:
                     invalid += 1
                     rejected.append(f"{call['name']}: unknown id {', '.join(unseen)}")
@@ -243,7 +258,8 @@ class ReActAgent(Agent):
                     continue
                 result = env.call(call["name"], call["arguments"])
                 scalar_strings(result, seen)
-                done.add(key)
+                if not (self.repeat_writes and (specs.get(call["name"]) or {}).get("kind") == "write"):
+                    done.add(key)
                 if call["name"] == SYS_TOOL:
                     trace["stop"] = "asked"
                     return  # asking the user ends the turn; later calls in the batch are dropped
