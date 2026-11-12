@@ -62,7 +62,8 @@ def pair_type(gold: Decision, model: Decision) -> str | None:
     if g == "ask":
         return None if m == "ask" else f"ask:{m}"
     if g == "answer":
-        return f"answer:{m}" if m in ("write", "ask") else None
+        # Any call where gold stops is scored as extra (an out-of-scope sample scores only when empty), reads included.
+        return None if m == "answer" else f"answer:{m}"
     if g == "read":
         return None if m == "read" else f"read:{m}"
     return None

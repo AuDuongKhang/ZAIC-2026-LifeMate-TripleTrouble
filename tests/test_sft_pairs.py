@@ -31,7 +31,7 @@ def test_decision_maps_names_back_and_reads_the_kind():
     (("ask", "sms.send"), ("write", "sms.send"), "ask:write"),
     (("ask", "sms.send"), ("read", "contacts.search"), "ask:read"),
     (("ask", "sms.send"), ("answer", None), "ask:answer"),
-    (("answer", None), ("read", "alarm.list"), None),
+    (("answer", None), ("read", "alarm.list"), "answer:read"),
     (("answer", None), ("write", "alarm.create"), "answer:write"),
     (("answer", None), ("ask", "sms.send"), "answer:ask"),
     (("read", "alarm.list"), ("read", "contacts.search"), None),
