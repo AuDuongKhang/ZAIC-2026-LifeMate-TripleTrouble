@@ -2,7 +2,9 @@
 
 The system in `configs/shipped.json` (agent preset `sft-q1c-refs-fixes-all`), best on the public leaderboard: **63.23**
 (11 Nov 2026, run commit `d200053`, mean 5.11 s and max 14.71 s per sample on molab, 634/634 samples, 0 over the time
-limit). The same rules on sft-q1b scored 62.83, and sft-q1b without them 61.05. The holdout/dev gate runs
+limit). With the image's libraries (fla kernels), the warmup and the 24 s budget it scored **63.29** (12 Nov, run commit
+`6bed3b4`, mean 4.49 s, max 13.20 s, load 43.4 s with the warmup; 9 state hashes differ from the 11 Nov run, from the
+kernels). The same rules on sft-q1b scored 62.83, and sft-q1b without them 61.05. The holdout/dev gate runs
 (`RESULTS.md`, 11 Nov): sft-q1c vs sft-q1b with the same rules except `empty_retry` and `weekday_fix`, holdout +2.18
 [-1.52, +5.89], dev -1.78 [-4.92, +1.48], pooled +0.19; `empty_retry` alone on sft-q1b, holdout +0.95 [+0.01, +1.99], dev
 +0.80 [+0.13, +1.68]. The public difference between sft-q1c and sft-q1b (+0.40) is within noise.
