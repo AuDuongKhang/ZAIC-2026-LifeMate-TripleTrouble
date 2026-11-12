@@ -115,3 +115,12 @@ def test_only_the_first_dated_call_of_a_list_is_fixed():
     assert fixed[1] == call(time="2026-11-06T20:30:00+07:00")
     unchanged = [read, call(time="2026-11-06T20:30:00+07:00"), second]
     assert fix_calls_clock(unchanged, EVENING, NOW) is unchanged
+
+
+@pytest.mark.parametrize("value, now", [
+    ("2026-11-31T19:30:00+07:00", NOW),  # a day the calendar does not have
+    ("2026-11-06T19:30:00+07:00", "not a time"),
+])
+def test_a_value_that_is_not_a_real_datetime_is_left_alone(value, now):
+    c = call(time=value)
+    assert fix_call_clock(c, EVENING, now) is c

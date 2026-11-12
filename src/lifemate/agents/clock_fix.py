@@ -165,8 +165,11 @@ def fix_call_clock(call: dict, request: str, current_time: str) -> dict:
     if len(found) != 1 or not 1 <= len(keys) <= 2:
         return call
     arguments = call["arguments"]
-    old = min(_wall(arguments[key]) for key in keys)
-    target = _target(found[0], old, _wall(current_time))
+    try:  # a value the model wrote need not be a real date ("2026-11-31"): leave the call to validation
+        old = min(_wall(arguments[key]) for key in keys)
+        target = _target(found[0], old, _wall(current_time))
+    except ValueError:
+        return call
     if target is None or target == old:
         return call
     shift = target - old
