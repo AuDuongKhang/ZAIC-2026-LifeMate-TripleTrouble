@@ -61,6 +61,7 @@
 - Produces: `Decision = tuple[str, str | None]`, kinds `"write" | "read" | "ask" | "answer" | "other"`.
 - Produces: `decision(message: dict, name_map: dict[str, str], kinds: dict[str, str]) -> Decision`: `message` is an assistant message as records store it (`tool_calls[i]["function"]["name"/"arguments"]`) or as `sft.replay.assistant_message(text)` returns it. First tool call only. Its name is mapped back with `name_map` (new → original; names absent from it are already original). `sys.ask_missing_info` → `("ask", <original name of arguments["tool_name"]>)`. A name not in `kinds` → `("other", None)`. No tool call → `("answer", None)`.
 - Produces: `pair_type(gold: Decision, model: Decision) -> str | None`.
+- Produces: `args_differ(gold: dict, model: dict, name_map: dict[str, str], fuzzy: dict[str, set[str]]) -> bool`: both assistant messages call the same write tool (after `name_map`); True when some argument key present on both sides (after mapping parameter names back) is not in `fuzzy[tool]` and the values differ (`!=`, exactly as `scoring.call_matches` compares them). An optional key on one side only is not a difference.
 - Produces: `tool_kinds(catalog: dict[str, dict]) -> dict[str, str]`: `{name: spec["kind"]}` for every tool of `data.load_catalog(root, "train")` except `sys.ask_missing_info`.
 
 Pairing table (design section 3, plus one ruling): `gold_kind:model_kind`, and `write:other_write` for a write to another tool.
@@ -71,6 +72,8 @@ Pairing table (design section 3, plus one ruling): `gold_kind:model_kind`, and `
 | ask | `ask:write` | `ask:write` | `ask:read` | — (any target) | `ask:answer` | — |
 | answer | `answer:write` | `answer:write` | — | `answer:ask` | — | — |
 | read | `read:write` | `read:write` | — | `read:ask` | `read:answer` | — |
+
+Added on 12 Nov at the owner's request: `write:args` when gold and model write to the same tool and `args_differ` is True (Task 2 assigns it, since it needs the messages, not only the decisions).
 
 Ruling recorded here: `read:answer` (the model stops where gold still reads) is a pair; the design's table is silent on it but its Intent names "stop or continue" as a decision.
 
@@ -122,6 +125,26 @@ def test_an_unparsable_output_is_other():
     from lifemate.sft.replay import assistant_message
     broken = assistant_message('<tool_call>{"name": "orbit.make", "arguments": {</tool_call>')
     assert decision(broken, MAP, KINDS) == ("other", None)
+
+FUZZY = {"alarm.create": {"label"}, "sms.send": {"content"}}
+MAP_P = MAP | {"stamp": "time", "tag": "label"}
+
+@pytest.mark.parametrize("gold_args, model_args, expected", [
+    ({"time": "2026-11-06T20:30:00+07:00"}, {"stamp": "2026-11-06T19:30:00+07:00"}, True),   # non-fuzzy value differs
+    ({"time": "2026-11-06T20:30:00+07:00"}, {"stamp": "2026-11-06T20:30:00+07:00"}, False),
+    ({"time": "t", "label": "Đi chợ"}, {"stamp": "t", "tag": "đi chợ sáng"}, False),         # fuzzy key ignored
+    ({"time": "t"}, {"stamp": "t", "tag": "x"}, False),                                        # optional key on one side only
+    ({"time": "t", "repeat": "daily"}, {"stamp": "t"}, False),
+])
+def test_args_differ_on_non_fuzzy_keys_only(gold_args, model_args, expected):
+    from lifemate.sft.pairs import args_differ
+    gold = msg("alarm.create", **gold_args)
+    model = msg("orbit.make", **model_args)
+    assert args_differ(gold, model, MAP_P, FUZZY) is expected
+
+def test_args_differ_needs_the_same_write_tool():
+    from lifemate.sft.pairs import args_differ
+    assert args_differ(msg("alarm.create", time="a"), msg("comet.dispatch", time="b"), MAP_P, FUZZY) is False
 ```
 
 (`assistant_message` keeps unparsable text as plain `content`, markup included; `decision` must not read that as an answer.)
@@ -137,7 +160,7 @@ def test_an_unparsable_output_is_other():
 
 **Interfaces:**
 - Consumes: `decision`, `pair_type`, `tool_kinds` (Task 1); steps rows of Task 3 (format below; this task's tests write them by hand).
-- Produces: `choose_rejected(gold: Decision, candidates: list[str], name_map, kinds) -> tuple[str, str, bool] | None`: candidates are `[greedy] + samples` (texts); returns `(type, rejected_text, greedy_wrong)` for the most frequent wrong model decision (ties: the earliest candidate), rejected text = earliest candidate with that decision; `greedy_wrong` = the greedy candidate's decision makes a pair. None when no candidate makes a pair.
+- Produces: `choose_rejected(gold_message: dict, candidates: list[str], name_map, kinds, fuzzy) -> tuple[str, str, bool] | None`: candidates are `[greedy] + samples` (texts); a candidate's type is `pair_type(decision(gold), decision(candidate))`, or `write:args` when that is None, gold is a write and `args_differ` is True. Returns `(type, rejected_text, greedy_wrong)` for the most frequent wrong model decision (`write:args` candidates form one group; ties: the earliest candidate), rejected text = earliest candidate of that group; `greedy_wrong` = the greedy candidate has a type. None when no candidate has one. `fuzzy` comes from `data.fuzzy_params(load_catalog(root, "train"))`.
 - Produces: `is_heldout(sample_id: str) -> bool`: `zlib.crc32(sample_id.encode()) % 10 == 0`.
 - Produces: pair row `{"id", "record", "turn", "type", "greedy_wrong", "messages", "tools", "chosen", "rejected"}`: `messages` = the record's messages before `turn`, `tools` = the record's tools, `chosen` = the record's message at `turn`, `rejected` = `assistant_message(rejected_text)`.
 - Produces: CLI `python -m lifemate.sft.pairs --records NAME [--records NAME ...] --steps NAME --out NAME [--greedy-wrong-only] [--records-dir DIR]` writes `<records-dir>/pairs/<out>.jsonl` (train), `<out>-heldout.jsonl` and `<out>-review.md` (30 pairs drawn with `random.Random(0)`: last user message, gold step, rejected step, type), prints and returns `{"points", "with_pair", "rate", "greedy_wrong", "by_type", "train", "heldout"}`.
@@ -146,7 +169,8 @@ def test_an_unparsable_output_is_other():
 - [ ] **Step 1: Write the failing tests** (add to `tests/test_sft_pairs.py`):
   - `test_choose_rejected_takes_the_most_frequent_wrong_decision`: gold `("write", "alarm.create")`, candidates `[greedy = gold call, read alarm.list, answer, read alarm.list]` → `("write:read", <first read text>, False)`.
   - `test_choose_rejected_breaks_ties_by_order_and_flags_a_wrong_greedy`: candidates `[answer, read]` (one each) → type `"write:answer"`, `greedy_wrong` True.
-  - `test_no_pair_when_every_candidate_agrees_on_the_decision`: candidates that call `alarm.create` with other arguments → None.
+  - `test_no_pair_when_only_fuzzy_arguments_differ`: candidates that call `alarm.create` with another `label` (fuzzy) → None.
+  - `test_write_args_pair_when_a_non_fuzzy_argument_differs`: candidates `[gold call, alarm.create with another time, alarm.create with another time]` → `("write:args", <first such text>, False)`.
   - `test_cli_writes_train_heldout_review_and_report(tmp_path)`: a records file with one masked record of 2 agent turns and a steps file with rows for both turns (one disagreeing); assert files exist, report `points == 2`, `with_pair == 1`, `rate == 0.5`, the pair's `messages` end with the user turn (turn 0) and `chosen` equals the record's message at `turn`; pairs of an id with `is_heldout(id)` True go only to `-heldout.jsonl`.
   - `test_greedy_wrong_only_keeps_only_those_pairs`.
 - [ ] **Step 2:** Run them. Expected: `ImportError` / `AttributeError` on the new names.
@@ -297,3 +321,7 @@ B1/B2 re-run the baseline on the current code (the 12 Nov G3/G4 ran before the c
 - [ ] **Step 3: Ship PR** on `feat/ship-q1d` from `origin/main` (after the code PR is merged): `configs/shipped.json` `agent_preset` and `agent_kw.revision` of the passing model, `records_commit` = the commit of `feat/onpolicy-pref` that produced the pairs and the training; copy the pair file into `docker/training_code/pairs/`; `docker/training_code/README.md` gains the reproduction steps (records with seed 7, `sample_steps` → the shipped pair file instead of re-sampling, `train --pairs`, `merge`) and the WiSE-FT command if that model ships; `docs/shipped-model.md` and `README.md` describe the new model. `pytest -q`; CI builds and smoke-tests the image.
 - [ ] **Step 4: HUMAN.** Merge, tag `docker-*`, Test Solution (only offered until 15 Nov 23:59), submit link + MD5 before 16 Nov 23:59. Never commit the Drive link.
 - [ ] **Step 5: Round 2** only if Step 2 shipped and more than 24 hours remain before 16 Nov 23:59: Tasks 8 to 11 again with `model` = q1d at its sha and name `r2`.
+
+### Later (not planned in detail): trajectory-level pairs
+
+Only after Task 11, and only with more than a day left before 16 Nov 23:59: the design's section "Later, if time remains". It gets its own plan then; nothing in Tasks 1 to 11 depends on it.

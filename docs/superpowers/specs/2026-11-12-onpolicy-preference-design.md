@@ -101,7 +101,8 @@ A sampled step is compared to the gold step on the decision only:
 | a plain answer (done, or out of scope) | any tool call | yes, if the call is a write or an ask |
 | a read call to tool X | another read tool | **no** (reads in another order or another search can be valid) |
 | a read call | a write call or an ask | yes |
-| same tool | other arguments | **no** in round 1 (argument conventions are inconsistent in gold) |
+| a write call to tool X | a write call to X whose non-fuzzy argument present on both sides has another value | **yes** (`write:args`, added 12 Nov: these arguments decide the state hash and scoring requires them equal, so gold is the single right answer) |
+| same tool | other arguments otherwise (reads, fuzzy free text, an optional key on one side only) | **no** (argument conventions are inconsistent in gold) |
 
 Tool identity is compared on the real tool names (the masking map is inverted before comparing). The rejected text is
 the model's sampled step exactly as generated; the chosen text is the gold step as the record renders it.
@@ -168,6 +169,15 @@ bar. If both tracks win, the plan may apply the interpolation to q1d.
 - `sft.mask` must expose the renaming map of a masked record so sampled calls can be mapped back to real names.
 - Tests: pairing table (section 3) as unit tests, loss on a toy model, masking inversion, deterministic sampling seeds.
 
+## Later, if time remains: trajectory-level pairs scored by the metric
+
+Discussed with the owner on 12 Nov and deferred until the plan's tasks are done and time remains before 16 Nov. Instead
+of comparing a step with gold, run the shipped agent end to end K times per pool sample (masking through a wrapper
+around the LLM, the real `ToolEnv`), score each trajectory with the official metric, and pair a higher-scoring with a
+lower-scoring trajectory (score gap ≥ 0.3), with the shared prefix up to their first difference as the prompt. It also
+covers the "state right, calls differ" losses (19.1 holdout points) and errors after an earlier wrong step, because
+the reward is the score itself; gold inconsistencies only add noise. It reuses the loss and trainer of this design.
+
 ## Risks
 
 - **The model is too sure on pool samples** (it trained on them), so few disagreements appear: the pilot measures this
@@ -196,7 +206,7 @@ pilot and the cheap selection above replace them with measured values where it i
 ## Calls made by the designer (not discussed with the owner; check these)
 
 - K = 4 samples at temperature 0.8 / top-p 0.95 per decision point, plus the greedy step (starting point; the pilot picks).
-- The pairing table of section 3, in particular: no pairs for read-vs-read or for argument differences in round 1.
+- The pairing table of section 3, in particular: no pairs for read-vs-read, read arguments or free text; `write:args` pairs only for non-fuzzy keys present on both sides (the owner asked for write arguments on 12 Nov).
 - DPO β = 0.1 with an SFT term of weight 1 (RPO form), one epoch, a new LoRA on the merged sft-q1c.
 - The pilot threshold (15% of decision points give a pair) and the train gate (holdout +1.0 with CI above 0, dev ≥ -0.3).
 - The pair file ships inside `training_code/` for reproducibility (approved by the owner, 12 Nov).
