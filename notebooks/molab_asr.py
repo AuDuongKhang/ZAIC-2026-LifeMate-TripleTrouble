@@ -44,6 +44,10 @@ def _(mo):
     5. **Transcribe**: any model (a checkpoint of a run, or an HF id such as `vinai/PhoWhisper-large`) into an ASR cache.
        Subset `eval` (dev + holdout) also prints the WER report against the other caches and the error analysis.
        The pool cache with the *untuned* PhoWhisper-large (`pho-large-fp16`, subset `pool`) is the noisy text for SFT.
+       **Cross-fit** (noisy pool text that looks like ASR on unseen clips): Start training twice, run names
+       `pho-large-xfit-0` / `pho-large-xfit-1`, extra args `--holdout-fold 0 --crossfit-cache pho-large-xfit` and
+       then `--holdout-fold 1 --crossfit-cache pho-large-xfit` (ft-b recipe: 3 epochs, lr 1e-5, batch 8, accum 2).
+       Each run trains on half the pool and transcribes the other half into the cache; then **Upload cache**.
     6. **Upload model** pushes weights + processor (no optimizer state) to the HF model repo, then add an ASR preset with
        `"model": "${HF_MODEL_OWNER}/<repo name>"` on a branch. This notebook never deletes anything on the hub.
     """)
@@ -369,6 +373,44 @@ def _(hf_write, mo, model_dir, ready_model, up_repo, upload):
     _name = _repo.split("/")[-1]
     mo.md(f"-> https://huggingface.co/{_repo} (private)  \nPreset for `configs/presets.json`: "
           f'`"{_name}": {{"asr": "whisper", "asr_kw": {{"model": "${{HF_MODEL_OWNER}}/{_name}"}}}}`')
+    return
+
+
+@app.cell
+def _(mo):
+    up_cache = mo.ui.text(value="pho-large-xfit", label="Cache name")
+    upload_cache = mo.ui.run_button(label="Upload cache")
+    mo.vstack([mo.md("## Upload an ASR cache\nPushes `asr_cache/train/<name>.jsonl` (transcripts only, no audio) to the "
+                     "private HF dataset above, where the trainer notebook downloads it. Cross-fit: finish both folds "
+                     "with the same cache name first. Needs the HF write token."),
+               mo.hstack([up_cache, upload_cache], justify="start")])
+    return up_cache, upload_cache
+
+
+@app.cell
+def _(hf_repo, hf_write, mo, repo_dir, step_env, subprocess, sys, up_cache, upload_cache, work):
+    mo.stop(not upload_cache.value, mo.md("_Press **Upload cache**._"))
+    if not hf_write.value.strip():
+        raise RuntimeError("fill in the HF write token")
+    _name = up_cache.value.strip()
+    _path = work / "asr_cache" / "train" / f"{_name}.jsonl"
+    if not _path.exists():
+        raise RuntimeError(f"no cache {_path}")
+    _check = subprocess.run(  # pool clips covered: a cross-fit cache must hold both folds
+        [sys.executable, "-c", "import sys; from lifemate.asr.cached import cache_path, read_cache, sample_clips; "
+         "from lifemate.data import default_data_root, load_samples; from lifemate.splits import load_splits; "
+         "pool = set(load_splits()['pool']); done = read_cache(cache_path('train', sys.argv[1])); "
+         "want = {c for s in load_samples(default_data_root(), 'train') if s['id'] in pool for c in sample_clips(s)}; "
+         "print(f'{len(want & done.keys())} / {len(want)} pool clips, {len(done)} clips in the cache')", _name],
+        cwd=repo_dir, env=step_env(), capture_output=True, text=True)
+    if _check.returncode:
+        raise RuntimeError(_check.stderr[-2000:])
+    from huggingface_hub import HfApi
+
+    HfApi(token=hf_write.value.strip()).upload_file(
+        path_or_fileobj=str(_path), path_in_repo=f"asr_cache/train/{_name}.jsonl", repo_id=hf_repo.value.strip(),
+        repo_type="dataset", commit_message=f"ASR cache {_name}")
+    mo.md(f"-> `{hf_repo.value.strip()}`: `asr_cache/train/{_name}.jsonl`; {_check.stdout.strip()}")
     return
 
 

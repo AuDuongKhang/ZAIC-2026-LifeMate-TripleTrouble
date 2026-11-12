@@ -15,6 +15,14 @@ backend loads directly:
 `--speed-perturb 0.9,1.0,1.1`, `--noise-prob P` and `--babble-prob P` (with `--snr-db LOW,HIGH`) augment the train clips
 on the fly (lifemate.asr_augment); eval clips are never augmented. All are off by default.
 
+Cross-fit (noisy pool text for SFT that looks like ASR on unseen clips): `--folds 2 --holdout-fold K` trains on the
+pool minus fold K, and `--crossfit-cache NAME` then transcribes fold K with the trained model into the ASR cache NAME.
+Run it once per fold with the same NAME; every pool clip ends up transcribed by a model that never heard it:
+
+    python -m lifemate.train_asr --model vinai/PhoWhisper-large --out asr_runs/xfit-0 --epochs 3 --batch 8 \
+        --grad-accum 2 --folds 2 --holdout-fold 0 --crossfit-cache pho-large-xfit
+    python -m lifemate.train_asr ... --out asr_runs/xfit-1 --folds 2 --holdout-fold 1 --crossfit-cache pho-large-xfit
+
 `--subset all` is the final retrain: every train clip, no eval and no checkpoint selection, so <out>/final is the model
 after the last step. Keep the recipe of the pool run, whose eval clips are now training data. Nothing local can score it.
 
@@ -35,12 +43,18 @@ from .asr_augment import Augment, parse_floats
 from .asr.wer import cer, wer
 from .asr_data import build_eval_manifest, build_train_manifest
 from .data import audio_path, default_data_root, load_samples
-from .splits import load_splits
+from .splits import fold_ids, load_splits
 from .utils import seed_everything
 
 
-def training_ids(subset: str, samples: list[dict]) -> set[str]:
-    return {s["id"] for s in samples} if subset == "all" else set(load_splits()["pool"])
+def training_ids(subset: str, samples: list[dict], folds: int = 0, holdout_fold: int | None = None) -> set[str]:
+    """Train sample ids. With `holdout_fold`, the pool minus that cross-fit fold (`lifemate.splits.pool_fold`)."""
+    if subset == "all":
+        if holdout_fold is not None:
+            raise ValueError("--holdout-fold needs --subset pool")
+        return {s["id"] for s in samples}
+    pool = set(load_splits()["pool"])
+    return pool if holdout_fold is None else pool - fold_ids(pool, folds, holdout_fold)
 
 
 def selection_args(subset: str, eval_steps: int) -> dict:
@@ -153,7 +167,17 @@ def main(argv: list[str] | None = None) -> Path:
                          "~3x the model size per push: slow for large models); default: push the final model only")
     ap.add_argument("--resume", action="store_true", help="continue from the last checkpoint (local, else --hub-repo)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--folds", type=int, default=2, help="number of cross-fit folds (with --holdout-fold)")
+    ap.add_argument("--holdout-fold", type=int, default=None, help="cross-fit: leave this pool fold out of training")
+    ap.add_argument("--crossfit-cache", default=None,
+                    help="cross-fit: after training, transcribe the left-out fold into this ASR cache")
     args = ap.parse_args(argv)
+    if args.holdout_fold is not None and args.subset != "pool":
+        ap.error("--holdout-fold needs --subset pool")
+    if args.holdout_fold is not None and not 0 <= args.holdout_fold < args.folds:
+        ap.error(f"--holdout-fold must be in 0..{args.folds - 1}")
+    if args.crossfit_cache and args.holdout_fold is None:
+        ap.error("--crossfit-cache needs --holdout-fold")
 
     try:
         import accelerate  # noqa: F401  (Trainer needs it; kept out of requirements.txt because it depends on torch)
@@ -188,7 +212,8 @@ def main(argv: list[str] | None = None) -> Path:
         model.config.use_cache = False
 
     samples = load_samples(args.data_root, "train")
-    train_rows = build_train_manifest(samples, training_ids(args.subset, samples))[: args.limit]
+    train_rows = build_train_manifest(samples, training_ids(args.subset, samples, args.folds,
+                                                            args.holdout_fold))[: args.limit]
     eval_rows = [] if args.subset == "all" else build_eval_manifest(samples, limit=args.eval_clips, seed=args.seed)
     print(f"train clips {len(train_rows)}, eval clips {len(eval_rows)}, augment {augment if augment.active else 'off'}",
           flush=True)
@@ -253,6 +278,14 @@ def main(argv: list[str] | None = None) -> Path:
         api.create_repo(args.hub_repo, private=True, exist_ok=True)
         api.upload_folder(folder_path=str(final), repo_id=args.hub_repo, commit_message=f"final ({args.subset} clips)")
         print(f"-> https://huggingface.co/{args.hub_repo}")
+    if args.crossfit_cache:
+        del trainer, model  # free the GPU for transcription
+        torch.cuda.empty_cache()
+        from . import transcribe
+        transcribe.main(["--split", "train", "--data-root", str(args.data_root), "--asr", "whisper",
+                         "--asr-kw", f"model={final}", "--name", args.crossfit_cache, "--subset", "pool",
+                         "--folds", str(args.folds), "--fold", str(args.holdout_fold),
+                         *(["--limit", str(args.limit)] if args.limit else [])])
     return final
 
 

@@ -15,7 +15,7 @@ from pathlib import Path
 from .asr import BACKENDS, build_asr
 from .asr.cached import cache_path, read_cache, sample_clips
 from .data import audio_path, default_data_root, load_samples
-from .splits import SUBSETS, load_splits
+from .splits import SUBSETS, fold_ids, load_splits
 from .utils import parse_kw, seed_everything
 
 
@@ -35,7 +35,11 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--name", required=True, help="cache name, e.g. pho-large-fp16")
     ap.add_argument("--subset", choices=(*SUBSETS, "eval"), default=None, help="train only; eval = dev + holdout")
     ap.add_argument("--limit", type=int, default=None, help="first N samples only")
+    ap.add_argument("--folds", type=int, default=2, help="number of cross-fit folds (with --fold)")
+    ap.add_argument("--fold", type=int, default=None, help="--subset pool only: just this cross-fit fold")
     args = ap.parse_args(argv)
+    if args.fold is not None and args.subset != "pool":
+        ap.error("--fold needs --subset pool")
 
     samples = load_samples(args.data_root, args.split)
     if args.subset:
@@ -43,6 +47,8 @@ def main(argv: list[str] | None = None) -> Path:
             ap.error("--subset needs --split train")
         splits = load_splits()
         wanted = set(splits["dev"]) | set(splits["holdout"]) if args.subset == "eval" else set(splits[args.subset])
+        if args.fold is not None:
+            wanted = fold_ids(wanted, args.folds, args.fold)
         samples = [s for s in samples if s["id"] in wanted]
     if args.limit:
         samples = samples[: args.limit]

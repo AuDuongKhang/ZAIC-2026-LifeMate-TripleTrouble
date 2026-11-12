@@ -43,7 +43,9 @@ def _(mo):
        properties and drops optional ones the record never uses. *ASR-noisy copy* adds a copy whose user turns
        come from an ASR cache; clips missing from this session's cache are transcribed first (about 15 minutes for the
        pool) with the model given, which must **not** be fine-tuned on the pool clips (keep the off-the-shelf
-       `vinai/PhoWhisper-large`). *Synthetic samples* names a file in the HF data repo (for example
+       `vinai/PhoWhisper-large`). A cache the session lacks is first looked up in the HF data repo
+       (`asr_cache/train/<name>.jsonl`, pushed by `molab_asr.py` **Upload cache**, e.g. the cross-fit `pho-large-xfit`)
+       and then used as it is, with no transcription. *Synthetic samples* names a file in the HF data repo (for example
        `synth/synth-v1.jsonl`, written by `lifemate.sft.synth`); it is rendered with the train records only (pool
        environments, or all for `all`). *Reasoning sentences* names a file in the HF data repo (for example
        `thoughts/r1.jsonl`, written by `molab_thoughts.py`); every record then carries one sentence before each tool
@@ -281,9 +283,22 @@ def _(Path, asr_cache, asr_model, data_root, date_hints, eval_records, examples,
         _train_k += ["--remix", str(_remix_file)]
     if _synth_file:
         _train_k += ["--extra-samples", _synth_file]
-    if _asr:  # resumable: only clips missing from this session's cache are transcribed
+    _asr_local = work / "asr_cache" / "train" / f"{_asr}.jsonl"
+    _asr_from_hub = False
+    if _asr and not _asr_local.exists():  # a cache uploaded by molab_asr.py (e.g. the cross-fit pho-large-xfit)
+        from huggingface_hub import hf_hub_download
+        from huggingface_hub.errors import EntryNotFoundError
+
+        try:
+            hf_hub_download(repo_id=hf_repo.value.strip(), repo_type="dataset", filename=f"asr_cache/train/{_asr}.jsonl",
+                            token=hf_token.value or None, local_dir=work)
+            _asr_from_hub = True
+        except EntryNotFoundError:
+            pass
+    if _asr and not _asr_from_hub:  # resumable: only clips missing from this session's cache are transcribed
         _run([sys.executable, "-m", "lifemate.transcribe", "--split", "train", "--asr", "whisper", "--asr-kw",
               f"model={asr_model.value.strip()}", "--name", _asr, *(["--subset", "pool"] if records.value == "pool" else [])])
+    if _asr:  # a hub cache is used as it is: a missing clip fails in records instead of mixing in another model
         _train_k += ["--text", "gold", "--text", f"cache:{_asr}"]
     _run([sys.executable, "-m", "lifemate.sft.records", "--name", _name(records.value, train=True), "--subset",
           records.value, *_k, *_train_k])

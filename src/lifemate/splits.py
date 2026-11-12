@@ -7,6 +7,7 @@ Every experiment reports dev and holdout numbers; few-shot retrieval and trainin
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import random
 from collections import defaultdict
@@ -77,6 +78,18 @@ def make_splits(samples: list[dict], seed: int = 0, n_holdout_apps: int = 8, dev
 
 def load_splits(path: Path = SPLITS_PATH) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def pool_fold(sample_id: str, folds: int) -> int:
+    """Cross-fit fold of a pool sample, stable across runs and machines (sha1 of the id, not Python's hash)."""
+    return int(hashlib.sha1(sample_id.encode("utf-8")).hexdigest(), 16) % folds
+
+
+def fold_ids(pool, folds: int, fold: int) -> set[str]:
+    """Pool ids in `fold`. Clips of one sample (final request and history turns) always share a fold."""
+    if not 0 <= fold < folds:
+        raise ValueError(f"fold {fold} out of range for {folds} folds")
+    return {i for i in pool if pool_fold(i, folds) == fold}
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -80,3 +80,22 @@ def test_report_scores_against_audio_text(tmp_cache, train_samples):
     [row] = asr_report.main(["--split", "train", "g"])
     assert row["clips"] == 2 and row["wer"] == 0.0 and row["cer"] == 0.0
     assert (tmp_cache / "train" / "report.md").exists()
+
+
+def test_transcribe_fold_writes_only_that_pool_fold(tmp_path, monkeypatch):
+    from lifemate.data import default_data_root
+    if not (default_data_root() / "train").is_dir():
+        pytest.skip("data/train not downloaded")
+    from lifemate import transcribe
+    from lifemate.asr.cached import read_cache, sample_clips
+    from lifemate.data import load_samples
+    from lifemate.splits import fold_ids, load_splits
+
+    monkeypatch.setenv("LIFEMATE_ASR_CACHE", str(tmp_path))
+    out = transcribe.main(["--split", "train", "--asr", "none", "--name", "xfit", "--subset", "pool",
+                           "--folds", "2", "--fold", "1"])
+    fold = fold_ids(load_splits()["pool"], 2, 1)
+    want = {c for s in load_samples(default_data_root(), "train") if s["id"] in fold for c in sample_clips(s)}
+    assert set(read_cache(out)) == want
+    with pytest.raises(SystemExit):
+        transcribe.main(["--split", "train", "--asr", "none", "--name", "x", "--subset", "dev", "--fold", "0"])
