@@ -7,27 +7,31 @@ messaging, …). For each sample it acts (calls the right tools), asks for missi
 
 ## Solution (submitted Docker image)
 
-Public leaderboard 57.5. Configuration in `configs/shipped.json`; training details and the code that trained the models
+Public leaderboard 63.23. Configuration in `configs/shipped.json`; training details and the code that trained the models
 in `docker/training_code/README.md` (`/code/training_code/` in the image) and `docs/shipped-model.md`.
 
 | Part | Model | Parameters | Details |
 |---|---|---|---|
 | ASR | `TripleTrouble/pho-large-ft-all` | 1.55 B | `vinai/PhoWhisper-large` fine-tuned on all train clips (3 epochs, lr 1e-5); fp16, beam search 5 |
-| LLM | `TripleTrouble/lifemate-sft-final-h` | 4.02 B | `Qwen/Qwen3-4B-Instruct-2507` + merged LoRA (r 16) SFT; bf16, greedy; context ≤ 16,384 tokens (training records ≤ 12,288) |
+| LLM | `TripleTrouble/lifemate-sft-q1c` | 4.21 B | `Qwen/Qwen3.5-4B` text-only weights + merged LoRA (r 16) SFT; bf16, greedy; context ≤ 16,384 tokens (training records ≤ 12,288) |
 
-Total 5.57 B parameters, all open models, fully offline.
+Total 5.75 B parameters, all open models, fully offline.
 
 - **Inference, per sample** (`lifemate.infer.run_sample`): one `ToolEnv`; the ASR transcribes the final request and
   every history user turn; a ReAct loop (`lifemate.agents.react`) prompts the LLM with the tool schemas of the
   installed apps, the history with its tool calls and results, the user profile and current time, and 4 few-shot
   examples picked by BM25 from the train requests. Each step the model writes one `<tool_call>`; the runner checks it
   with `env.validate` (free), rejects IDs never seen in the history or earlier results (`check_refs`), sends it with
-  `env.call` and appends the result. The loop stops when the model answers without a call, calls
+  `env.call` and appends the result. Four schema-driven rules help the model: `id_fix` (an entity's id where a write
+  call names it), `spoken_email` (respells a misheard spoken email), `weekday_fix` (calendar date of the request's only
+  "thứ X tuần sau" phrase) and `empty_retry` (a read that found nothing is re-sent without its optional, non-date
+  filters). The loop stops when the model answers without a call, calls
   `sys.ask_missing_info`, or reaches 8 steps or the 20 s budget (ASR included).
 - **Training data**: the organisers' train split only. SFT records replay each sample's gold calls through the same
   prompt (training text = inference text), plus a function-masked copy (apps, tools and parameters renamed, tools
-  shuffled) and an ASR-noisy copy (off-the-shelf PhoWhisper-large transcripts); half of the samples get few-shot
-  examples without their own apps, as for an unseen app. 4,629 records, 2 epochs. No external data, no LLM API.
+  shuffled) and an ASR-noisy copy (off-the-shelf PhoWhisper-large transcripts); half of the records get few-shot
+  examples without their own apps, as for an unseen app. Experiment pool (train minus dev and holdout), 2 epochs.
+  No external data, no LLM API.
 
 ## Setup
 
@@ -119,9 +123,11 @@ python -m lifemate.sft.merge --adapter checkpoints/sft-v2/last --out merged/sft-
 python -m lifemate.infer --split public_test --agent-preset sft-v2 --asr-preset pho-large-ft-b
 ```
 
-Experiments train on the pool only (`configs/splits.json`), so dev and holdout stay unseen. The shipped model is
-retrained with the same recipe on `--subset all` (records and transcription) and no eval records. `RESULTS.md` notes
-give the exact command, presets and model revision of the shipped system.
+Experiments train on the pool only (`configs/splits.json`), so dev and holdout stay unseen. The shipped LLM, sft-q1c, is
+such a pool model (records and transcription on `--subset pool`, `gold-dev` as eval loss); its exact commands are in
+`docker/training_code/README.md`. A retrain on `--subset all` (no eval records) is possible but has not been shipped
+since sft-final-h; the shipped ASR, `pho-large-ft-all`, is trained on all train clips. `RESULTS.md` notes give the
+presets and model revisions of each run.
 
 ## Running on molab (GPU)
 
@@ -144,7 +150,7 @@ stronger than the scoring A30 (24 GB) while its CPU is weaker (4 vs 16 cores), s
 The image follows the organiser Docker guide (`context/Docker_Guide_ZAC2026_LifeMate.pdf`, not in git): code in
 `/code` with `predict.sh`, `start_jupyter.sh`, `predict_notebook.ipynb`, this README and `training_code/` (its README,
 this code, and the code at `records_commit` of `configs/shipped.json` that trained the shipped models, exported by
-`scripts/docker_build.sh` from git, so builds need that commit in the history: tag `sft-final-h-code`); the organisers
+`scripts/docker_build.sh` from git, so builds need that commit in the history; the shipped `4f37ecb` is on `main`); the organisers
 mount the folder that holds the split folder at `/data` (`/data/private_test/`) and read `/result/submission.jsonl`
 (the notebook writes `/result/jupyter_submission.jsonl`). Each line has `id`, `tool_calls`, `state_hash` and `time`
 (ms). `configs/shipped.json` names the agent and ASR presets, extra kwargs and the pinned model revisions; the build

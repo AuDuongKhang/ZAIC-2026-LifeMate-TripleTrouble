@@ -1,8 +1,8 @@
 {
-  "agent_preset": "sft-final-h",
+  "agent_preset": "sft-q1c-refs-fixes-all",
   "asr_preset": "pho-large-ft-all-beam5",
-  "agent_kw": {"revision": "e3a659cb166907460f564c31a01e613786a835b6"},
+  "agent_kw": {"revision": "8cb4336e529f0a4b2d6f10cdcfc63d15c45b651d"},
   "asr_kw": {"revision": "73bb56a73e1e1470bbda0fad99353b6f1ed6c338"},
   "hf_model_owner": "TripleTrouble",
-  "records_commit": "0c7152bd009c80a5269b3db65efa12e224801e13"
+  "records_commit": "4f37ecbb79105105a67908b4d8f2caf26ff7254c"
 }
