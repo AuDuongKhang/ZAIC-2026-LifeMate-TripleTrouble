@@ -59,14 +59,16 @@ The merged model lands at `TripleTrouble/lifemate-sft-<name>`.
 - the holdout ask column drops by at most 5 points.
 - Baselines: holdout 41.37 (ask 33.06), dev 66.86 (sft-v2 + check_refs, ASR `pho-large-ft-b`).
 
-**How to run the gate for a model named `<name>`** (`molab_run.py`, branch `main`): split `train`, agent preset `sft-v2-refs`,
+**How to run the gate for a model named `<name>`** (`molab_run.py`, branch `main`): split `train`, agent preset `sft-q1b-refs`,
 ASR preset `pho-large-ft-b`, extra infer args `--agent-kw model=TripleTrouble/lifemate-sft-<name>`; run subset `holdout`, then
-`dev` (each about 17 minutes *(est.)*: ~300 samples at ~3.4 s). The run folder is named after the preset `sft-v2-refs`, so write
+`dev` (each about 17 minutes *(est.)*: ~300 samples at ~3.4 s). The run folder is named after the preset `sft-q1b-refs`, so write
 down which run belongs to which model. For each run send back: the RESULTS row the notebook prints, plus the files
 `per_sample.jsonl`, `metrics.json` and `meta.json` (download buttons) so the diff and CI can be computed against the baselines.
 
 **Hub storage.** Private repos hold about 40 GB now and every merged model adds about 8.5 GB. After a model fails its gate, delete
 its repo on the Hub at once (log the RESULTS row first). Do not make repos public: they hold weights trained on licensed data.
+12 Nov: `lifemate-sft-v2`, `lifemate-sft-final` and `lifemate-sft-final-h` were deleted (superseded by sft-q1b and
+sft-q1c), together with their presets. Steps below that name them are kept as a record; their scores stay in `RESULTS.md`.
 
 ## 2. Split between the two accounts
 

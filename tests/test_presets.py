@@ -141,31 +141,9 @@ def test_infer_builds_the_fewshot_bank_from_the_given_data_root(tmp_path, monkey
     assert "data_root" not in meta["agent_kw"]
 
 
-@pytest.mark.parametrize("name", ["sft-v2", "sft-final", "sft-final-h"])
-def test_sft_presets_name_their_merged_model_and_four_examples(name):
-    backend, kw = resolve("agent", name, {"HF_MODEL_OWNER": "team"})
-    assert backend == "react" and kw["model"] == f"team/lifemate-{name}" and kw["examples"] == 4
-
-
 def test_fine_tuned_asr_presets_name_their_hub_model():
     for name in ("pho-large-ft-b", "pho-large-ft-all"):
         assert resolve("asr", name, {"HF_MODEL_OWNER": "team"}) == ("whisper", {"model": f"team/{name}"})
-
-
-def test_check_refs_presets():
-    """check_refs passed its gate on sft-v2: holdout +0.60 [+0.03, +1.47], dev +0.0 (all 300 samples unchanged)."""
-    env = {"HF_MODEL_OWNER": "team"}
-    assert resolve("agent", "sft-v2-refs", env) == (
-        "react", {"model": "team/lifemate-sft-v2", "examples": 4, "check_refs": True})
-    assert resolve("agent", "sft-final", env) == (
-        "react", {"model": "team/lifemate-sft-final", "examples": 4, "check_refs": True})
-
-
-def test_date_hint_presets_are_their_base_plus_the_flag():
-    env = {"HF_MODEL_OWNER": "team"}
-    for base, dates in (("sft-v2-refs", "sft-v2-refs-dates"), ("sft-final", "sft-final-dates")):
-        name, kw = resolve("agent", base, env)
-        assert resolve("agent", dates, env) == (name, {**kw, "date_hints": True})
 
 
 def test_beam_search_asr_preset_keeps_the_same_model():
@@ -181,18 +159,11 @@ def test_context_prompt_asr_presets_only_add_the_flag():
         assert resolve("asr", context, env) == (name, {**kw, "context_prompt": True})
 
 
-def test_date_fix_preset_is_its_base_plus_the_flag():
-    env = {"HF_MODEL_OWNER": "team"}
-    name, kw = resolve("agent", "sft-v2-refs", env)
-    assert resolve("agent", "sft-v2-refs-datefix", env) == (name, {**kw, "date_fix": True})
-
-
 def test_id_fix_preset_is_sft_q1b_refs_plus_the_flag():
     env = {"HF_MODEL_OWNER": "team"}
     name, kw = resolve("agent", "sft-q1b-refs", env)
     assert resolve("agent", "sft-q1b-refs-idfix", env) == (name, {**kw, "id_fix": True})
     assert resolve("agent", "sft-q1b-refs-fixes", env) == (name, {**kw, "id_fix": True, "spoken_email": True})
-
 
 
 @pytest.mark.parametrize("name, model, flags", [
@@ -211,21 +182,10 @@ def test_new_options_are_off_in_every_other_preset():
     on = {k for k, v in load_presets()["agent"].items() if v["agent_kw"].get("empty_retry") or v["agent_kw"].get("weekday_fix")}
     assert on == {"sft-q1b-refs-fixes-retry", "sft-q1b-refs-fixes-wd", "sft-q1b-refs-fixes-all", "sft-q1c-refs-fixes-all"}
 
-def test_beam_preset_passes_num_beams():
-    env = {"HF_MODEL_OWNER": "team"}
-    name, kw = resolve("agent", "sft-v2-refs", env)
-    assert resolve("agent", "sft-v2-refs-beam3", env) == (name, {**kw, "num_beams": 3})
 
-
-def test_only_diagnostic_presets_read_labels():
+def test_no_preset_reads_labels():
     readers = {k for k, v in load_presets()["agent"].items() if v["agent_kw"].get("leave_gold_apps_out")}
-    assert readers == {"sft-v2-refs-lao-diag"}
-
-
-def test_diagnostic_preset_is_sft_v2_refs_plus_the_flag():
-    env = {"HF_MODEL_OWNER": "team"}
-    name, kw = resolve("agent", "sft-v2-refs", env)
-    assert resolve("agent", "sft-v2-refs-lao-diag", env) == (name, {**kw, "leave_gold_apps_out": True})
+    assert readers == set()
 
 
 @pytest.mark.parametrize("name", ["kd1", "t1", "kd2", "q1b"])
