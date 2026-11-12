@@ -1,6 +1,6 @@
 # On-policy preference training for unseen apps — design
 
-Date: 12 Nov 2026. Status: draft for the owner's approval. Implementation plan: to be written from this document.
+Date: 12 Nov 2026. Status: approved by the owner on 12 Nov 2026. Implementation plan: to be written from this document.
 
 ## Intent
 
@@ -124,8 +124,15 @@ sampled steps disagree is kept, but marked, so the plan can compare "greedy-wron
 
 ### 5. Gates and decisions
 
-- **Pilot first** (before the full run): sample 100 pool samples. Proceed only if at least 15% of decision points give
-  a pair; below that the model is too sure on pool and the plan must change the prompt conditions before training.
+- **Pilot first** (before the full run): sample 100 pool samples at temperature 0.7 and 1.0 with K = 8, and read 30
+  pairs by hand. K and the temperature for the full run are picked from it: the smallest K and temperature that reach
+  the pair rate, provided the hand-read pairs are decisions and not conventions. Proceed only if at least 15% of
+  decision points give a pair; below that the model is too sure on pool and the plan must change the prompt conditions
+  before training.
+- **Cheap selection before the gate**: 10% of the pairs (split by sample) are held out of training. Two or three short
+  configurations (β, learning rate, SFT weight) are compared on them by preference accuracy (share of held-out pairs
+  where the new model's DPO reward ranks the gold step higher) and by the eval loss of the `gold-dev` records, which
+  must not rise by more than 5%. Only the best configuration goes to the holdout/dev gate.
 - **Train gate** (`notebooks/molab_run.py`, ASR `pho-large-ft-b`, the shipped agent preset with the new model):
   holdout at least +1.0 over sft-q1c with the CI above 0, and dev at least -0.3. The bar is higher than +0.5 because
   the change is to the weights, which every past retrain failed on holdout.
@@ -135,8 +142,10 @@ sampled steps disagree is kept, but marked, so the plan can compare "greedy-wron
 
 ### 6. Side track: WiSE-FT
 
-Independent of the main track and cheap: merge `θ = α·θ_q1c + (1-α)·θ_base` for α in {0.7, 0.85}, run the holdout/dev
-gate, and keep the best if it wins by the same bar. If both tracks win, the plan may apply the interpolation to q1d.
+Independent of the main track and cheap: merge `θ = α·θ_q1c + (1-α)·θ_base` for α in {0.7, 0.85}. Before any gate run,
+check on 50 dev samples that the share of model outputs the agent parser accepts stays at the sft-q1c level; an α that
+breaks the tool-call format is dropped there. Then run the holdout/dev gate and keep the best if it wins by the same
+bar. If both tracks win, the plan may apply the interpolation to q1d.
 
 ## Schedule (GMT+7)
 
@@ -168,11 +177,27 @@ gate, and keep the best if it wins by the same bar. If both tracks win, the plan
 - **Holdout noise** (CI about ±3 points): a real but small gain may not pass +1.0; then it is not shipped, by design.
 - **Time**: if round 1 is not gated by 15 Nov 12:00, it is not shipped; the image stays at 63.44.
 
+## Where the starting values come from
+
+The owner asked for the source of each value (12 Nov). Most are starting points, not measurements on this model; the
+pilot and the cheap selection above replace them with measured values where it is affordable.
+
+| Value | Source | Status |
+|---|---|---|
+| K = 4, temperature 0.8, top-p 0.95 | Common practice in RFT/STaR and GRPO sampling (temperature 0.7–1.0); K from the compute budget (~10,000 generations) | Guess; the pilot sweeps temperature {0.7, 1.0} and K up to 8 |
+| Pairing table (section 3) | This repo: read and free-text differences follow inconsistent gold conventions (loss report; title snapping and `minimal_reads` lost); wrong tool and ask/act are decisions with one right answer | Evidence-based |
+| β = 0.1 | Default of the DPO paper (Rafailov et al., 2023) and common libraries | Default; compared in the cheap selection |
+| SFT term on the chosen step, weight 1 (RPO form) | Iterative Reasoning Preference Optimization (Pang et al., 2024) adds an NLL term on the chosen answer; the weight is from memory of that paper, not checked | Qualitative support; weight compared in the cheap selection |
+| One epoch, learning rate 5e-6 to 2e-5 | Common practice for DPO on small data | Range; picked in the cheap selection |
+| Pilot threshold 15% | Judgement: ~2,400 decision points × 15% ≈ 350 pairs, guessed as the least that moves a 4B model | Guess |
+| Gate holdout +1.0, CI > 0, dev ≥ -0.3 | This repo: holdout CI about ±3 points; six weight changes lost on holdout (-2 to -4.6); the usual gate is +0.5 | Evidence for raising the bar; the size of the raise is judgement |
+| WiSE-FT α in {0.7, 0.85} | WiSE-FT (Wortsman et al., 2022) found α near 0.5 good out of distribution, for CLIP; the base model here does not know the tool-call format, so α is kept near 1 | Guess; the format check drops a bad α before any gate |
+
 ## Calls made by the designer (not discussed with the owner; check these)
 
-- K = 4 samples at temperature 0.8 / top-p 0.95 per decision point, plus the greedy step.
+- K = 4 samples at temperature 0.8 / top-p 0.95 per decision point, plus the greedy step (starting point; the pilot picks).
 - The pairing table of section 3, in particular: no pairs for read-vs-read or for argument differences in round 1.
 - DPO β = 0.1 with an SFT term of weight 1 (RPO form), one epoch, a new LoRA on the merged sft-q1c.
 - The pilot threshold (15% of decision points give a pair) and the train gate (holdout +1.0 with CI above 0, dev ≥ -0.3).
-- The pair file ships inside `training_code/` for reproducibility.
+- The pair file ships inside `training_code/` for reproducibility (approved by the owner, 12 Nov).
 - WiSE-FT runs as a side track with α in {0.7, 0.85}.
