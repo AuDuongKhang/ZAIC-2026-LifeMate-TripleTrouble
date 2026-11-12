@@ -270,8 +270,8 @@ def _trim_torn(path: Path) -> None:
         path.write_bytes(data + b"\n")
 
 
-def _pull_hf_copy(hf_repo: str, paths: list[Path]) -> None:
-    """Fetch thoughts/<file> from the private HF dataset into a fresh session. A file HF does not have is fine (a new
+def _pull_hf_copy(hf_repo: str, paths: list[Path], folder: str = "thoughts") -> None:
+    """Fetch <folder>/<file> from the private HF dataset into a fresh session. A file HF does not have is fine (a new
     run); any other error stops the run, so a fresh local file can never overwrite the HF copy on the next upload.
     Being offline (LocalEntryNotFoundError) is such an error, not an absent file."""
     from huggingface_hub import hf_hub_download
@@ -280,16 +280,16 @@ def _pull_hf_copy(hf_repo: str, paths: list[Path]) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         for path in paths:
             try:
-                got = hf_hub_download(repo_id=hf_repo, filename=f"thoughts/{path.name}", repo_type="dataset", local_dir=tmp)
+                got = hf_hub_download(repo_id=hf_repo, filename=f"{folder}/{path.name}", repo_type="dataset", local_dir=tmp)
             except LocalEntryNotFoundError:
                 raise
             except EntryNotFoundError:
                 continue
             shutil.copyfile(got, path)
-            print(f"pulled {hf_repo}/thoughts/{path.name}", flush=True)
+            print(f"pulled {hf_repo}/{folder}/{path.name}", flush=True)
 
 
-def _upload(hf_repo: str, paths: list[Path]) -> None:
+def _upload(hf_repo: str, paths: list[Path], folder: str = "thoughts") -> None:
     """Upload the non-empty files; a failure is printed and the run goes on (the next upload retries)."""
     from huggingface_hub import HfApi
 
@@ -297,7 +297,7 @@ def _upload(hf_repo: str, paths: list[Path]) -> None:
         if not path.exists() or path.stat().st_size == 0:
             continue
         try:
-            HfApi().upload_file(path_or_fileobj=str(path), path_in_repo=f"thoughts/{path.name}", repo_id=hf_repo,
+            HfApi().upload_file(path_or_fileobj=str(path), path_in_repo=f"{folder}/{path.name}", repo_id=hf_repo,
                                 repo_type="dataset")
         except Exception as e:  # noqa: BLE001 - a failed upload must not kill a long run
             print(f"upload of {path.name} to {hf_repo} failed: {type(e).__name__}: {e}", flush=True)
