@@ -92,6 +92,21 @@ def test_max_steps_bounds_generations():
     assert len(llm.seen) == 3
 
 
+def test_warmup_generates_once_without_calls_or_time_cap():
+    llm = FakeLLM([CALL("alarm.list", {})])
+    agent = ReActAgent(llm=llm)
+    agent.warmup(TASK)
+    assert len(llm.seen) == 1 and llm.max_times == [None]
+    assert agent.last_trace is None
+
+
+def test_default_time_budget_leaves_room_below_the_limit():
+    from lifemate.infer import TIME_LIMIT_S
+
+    agent = ReActAgent(llm=FakeLLM([]))
+    assert agent.time_budget_s == 24.0 and TIME_LIMIT_S - agent.time_budget_s >= 5
+
+
 def test_time_budget_stops_but_keeps_calls():
     ticks = iter([0.0, 1.0, 25.0, 26.0, 27.0])
     env = FakeEnv()

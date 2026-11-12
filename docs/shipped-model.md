@@ -141,6 +141,14 @@ public runs of 11 Nov ran on `d200053`, before #82, so without these kernels: th
 through different kernels, which may change a few outputs. A molab run of this branch on public_test (runbook C1 with
 the pinned revisions) gives the score and time with the image's libraries.
 
+Triton compiles (and autotunes) the fla kernels on their first call, which no GPU check of an image has covered: the
+10 Nov Test Solution ran sft-final-h (Qwen3, no fla) and the CI smoke test runs on CPU. Since 12 Nov,
+`infer.load_pipeline` runs `infer.warmup` before the first timed sample: the split's first sample goes through the ASR
+and one LLM generation on its prompt, with no ToolEnv and no call, so that cost lands in the load time. The same day
+the agent's `time_budget_s` default went from 20 to 24 s: an A30 estimate from the 11 Nov public trace (prefill
+~2-3.5x slower than molab, decode bound by kernel launches) put up to ~20 samples (3%) past 20 s, where the agent stops
+before its last calls, and none past 30 s.
+
 ## Not shipped
 
 Models trained after sft-final-h failed the holdout gate (`RESULTS.md`): sft-kd1, sft-q1, beam search 3, sft-r1 and
