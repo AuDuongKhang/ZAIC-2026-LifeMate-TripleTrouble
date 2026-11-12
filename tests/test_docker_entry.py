@@ -123,9 +123,9 @@ def _fetched(monkeypatch, cfg):
 
 
 def test_fetch_models_downloads_both_models_at_their_revisions(monkeypatch):
-    cfg = {"agent_preset": "sft-final", "asr_preset": "pho-large-ft-b", "agent_kw": {"revision": "r1"},
+    cfg = {"agent_preset": "sft-q1c-refs-fixes-all", "asr_preset": "pho-large-ft-b", "agent_kw": {"revision": "r1"},
            "asr_kw": {"revision": "r2"}, "hf_model_owner": "team"}
-    assert _fetched(monkeypatch, cfg) == [("team/lifemate-sft-final", "r1"), ("team/pho-large-ft-b", "r2")]
+    assert _fetched(monkeypatch, cfg) == [("team/lifemate-sft-q1c", "r1"), ("team/pho-large-ft-b", "r2")]
 
 
 def test_fetch_models_uses_the_backend_default_model(monkeypatch):
@@ -172,7 +172,7 @@ def test_fetch_models_skips_checkpoints(monkeypatch):
 
     seen = []
     monkeypatch.setattr(huggingface_hub, "snapshot_download", lambda repo_id, **kw: seen.append(kw))
-    docker_entry.fetch_models({"agent_preset": "sft-final", "asr_preset": "none", "agent_kw": {}, "asr_kw": {},
+    docker_entry.fetch_models({"agent_preset": "sft-q1c-refs-fixes-all", "asr_preset": "none", "agent_kw": {}, "asr_kw": {},
                                "hf_model_owner": "team"})
     assert seen and "checkpoints/*" in seen[0]["ignore_patterns"]
 
@@ -187,7 +187,7 @@ def test_check_models_fails_when_a_model_is_not_cached(monkeypatch):
 
     monkeypatch.setattr(huggingface_hub, "snapshot_download", missing)
     with pytest.raises(SystemExit) as e:
-        docker_entry.check_models({"agent_preset": "sft-final", "asr_preset": "none", "agent_kw": {}, "asr_kw": {},
+        docker_entry.check_models({"agent_preset": "sft-q1c-refs-fixes-all", "asr_preset": "none", "agent_kw": {}, "asr_kw": {},
                                    "hf_model_owner": "team"})
     assert e.value.code not in (0, None)
 
@@ -198,7 +198,7 @@ def test_check_models_fails_on_a_partial_snapshot(tmp_path, monkeypatch):
     (tmp_path / "run_config.json").write_text("{}", encoding="utf-8")  # cached, but no config.json or weights
     monkeypatch.setattr(huggingface_hub, "snapshot_download", lambda repo_id, **kw: str(tmp_path))
     with pytest.raises(SystemExit, match="incomplete snapshot"):
-        docker_entry.check_models({"agent_preset": "sft-final", "asr_preset": "none", "agent_kw": {}, "asr_kw": {},
+        docker_entry.check_models({"agent_preset": "sft-q1c-refs-fixes-all", "asr_preset": "none", "agent_kw": {}, "asr_kw": {},
                                    "hf_model_owner": "team"}, load=False)
 
 

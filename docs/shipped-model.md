@@ -37,7 +37,8 @@ Commands: `docker/training_code/README.md`, steps 0 and 2–4.
 
 Pinned revision `e3a659cb166907460f564c31a01e613786a835b6` (merge commit "merged .../checkpoints/sft-final-h2/last", 6 Nov
 13:22 UTC). The repo also holds checkpoint folders of other runs (`checkpoints/sft-final-h`, `checkpoints/sft-v1`); only
-`checkpoints/sft-final-h2` produced that model. `run_config.json` and `train_log.jsonl` are stored next to the weights.
+`checkpoints/sft-final-h2` produced that model. `run_config.json` and `train_log.jsonl` were stored next to the weights. The
+Hub repo and its preset were deleted on 12 Nov 2026; the 10 Nov image on Drive still carries the weights.
 
 It is the sft-final recipe (all 1,545 train samples) plus few-shot examples hidden for half of the samples:
 
