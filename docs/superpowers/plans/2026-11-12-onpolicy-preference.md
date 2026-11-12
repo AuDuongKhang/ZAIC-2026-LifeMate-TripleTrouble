@@ -70,12 +70,12 @@ Pairing table (design section 3, plus one ruling): `gold_kind:model_kind`, and `
 |---|---|---|---|---|---|---|
 | write | — | `write:other_write` | `write:read` | `write:ask` | `write:answer` | — |
 | ask | `ask:write` | `ask:write` | `ask:read` | — (any target) | `ask:answer` | — |
-| answer | `answer:write` | `answer:write` | — | `answer:ask` | — | — |
+| answer | `answer:write` | `answer:write` | `answer:read` | `answer:ask` | — | — |
 | read | `read:write` | `read:write` | — | `read:ask` | `read:answer` | — |
 
 Added on 12 Nov at the owner's request: `write:args` when gold and model write to the same tool and `args_differ` is True (Task 2 assigns it, since it needs the messages, not only the decisions).
 
-Ruling recorded here: `read:answer` (the model stops where gold still reads) is a pair; the design's table is silent on it but its Intent names "stop or continue" as a decision.
+Ruling recorded here: `read:answer` (the model stops where gold still reads) is a pair; the design's table is silent on it but its Intent names "stop or continue" as a decision. `answer:read` (the model reads where gold stops) is also a pair: every call is scored, so the extra read lowers precision, and a gold-empty (out-of-scope) sample scores only with an empty submission (`tests/test_scoring.py::test_out_of_scope_needs_empty_submission`).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -109,7 +109,7 @@ def test_decision_maps_names_back_and_reads_the_kind():
     (("ask", "sms.send"), ("write", "sms.send"), "ask:write"),
     (("ask", "sms.send"), ("read", "contacts.search"), "ask:read"),
     (("ask", "sms.send"), ("answer", None), "ask:answer"),
-    (("answer", None), ("read", "alarm.list"), None),
+    (("answer", None), ("read", "alarm.list"), "answer:read"),
     (("answer", None), ("write", "alarm.create"), "answer:write"),
     (("answer", None), ("ask", "sms.send"), "answer:ask"),
     (("read", "alarm.list"), ("read", "contacts.search"), None),

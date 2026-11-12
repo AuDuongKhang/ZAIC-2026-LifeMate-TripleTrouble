@@ -98,7 +98,7 @@ A sampled step is compared to the gold step on the decision only:
 |---|---|---|
 | a write call to tool X | a call to another tool, an ask, or a plain answer | yes |
 | `sys.ask_missing_info` | any tool call or a plain answer | yes |
-| a plain answer (done, or out of scope) | any tool call | yes, if the call is a write or an ask |
+| a plain answer (done, or out of scope) | any tool call | yes (reads included: every call is scored, so an extra read lowers precision, and on an out-of-scope sample any call scores 0) |
 | a read call to tool X | another read tool | **no** (reads in another order or another search can be valid) |
 | a read call | a write call or an ask | yes |
 | a write call to tool X | a write call to X whose non-fuzzy argument present on both sides has another value | **yes** (`write:args`, added 12 Nov: these arguments decide the state hash and scoring requires them equal, so gold is the single right answer) |
