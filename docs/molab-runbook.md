@@ -350,6 +350,42 @@ two plus any that follow from them; more than 5 means the run is not comparable 
 owner). Ship when the leaderboard score is at or above 63.23; below it, `clock_fix` stays off and the shipped image stays as
 it is. One sample is 0.158 points, so a result within ±0.32 comes from the two fired samples alone.
 
+### C5. Preference training (sft-q1d)
+
+Plan: `docs/superpowers/plans/2026-11-12-onpolicy-preference.md` (Tasks 8 to 11), design
+`docs/superpowers/specs/2026-11-12-onpolicy-preference-design.md`. Notebook `notebooks/molab_pref.py` (upload it to
+molab once). Branch `feat/onpolicy-pref` until it is merged, then `main`. Every command it runs comes from
+`lifemate.sft.pref_commands`; the Start cell shows them.
+
+**Pilot (Task 8).** Fields: name `pilot`, model `TripleTrouble/lifemate-sft-q1c`, revision
+`8cb4336e529f0a4b2d6f10cdcfc63d15c45b651d`, K `8`, temperature `0.7,1.0`, top-p `0.95`, limit `100`. Steps in order:
+`records`, `sample`, `pairs`. Send `train_records/pairs/pilot-t0.7*` and `pilot-t1.0*` (pair files, review sheets) and
+the `pairs` log lines. Decision: the smallest K in {4, 8} and the lower temperature reaching a pair rate of 15%; below
+15% at K = 8, or more than 10 of 30 hand-read pairs that are conventions rather than decisions, stop and report.
+
+**Full run and cheap selection (Task 9).** Name `r1`, limit `0`, K and temperature from the pilot. Steps `records`,
+`sample`, `pairs`. Then `train` three times, run suffix and values: `a` lr `1e-5` beta `0.1` SFT weight `1.0`; `b`
+`5e-6` / `0.1` / `1.0`; `c` `1e-5` / `0.3` / `1.0` (plus `d` on a `--greedy-wrong-only` pair file when it holds at
+least 300 pairs). Send each `checkpoints/sft-q1d-r1-<run>/train_log.jsonl`. The picked run is merged (`merge`, same
+fields); note the HF commit sha of `TripleTrouble/lifemate-sft-q1d`. WiSE-FT: step `interpolate` (any name), note the
+shas of `lifemate-sft-q1c-wise70` and `-wise85`; then a format check on 50 dev samples, gold ASR, presets
+`sft-q1c-wise70-refs-fixes-all-clock`, `sft-q1c-wise85-refs-fixes-all-clock` and `sft-q1c-refs-fixes-all-clock`,
+extra infer args `--limit 50 --agent-kw revision=<sha>`.
+
+**Gate (Task 10)** (`notebooks/molab_run.py`, Split `train`, ASR preset `pho-large-ft-b`, HF model owner `TripleTrouble`):
+
+| Run | Agent preset | Extra infer args | Subset |
+|---|---|---|---|
+| B1 | `sft-q1c-refs-fixes-all-clock` | `--agent-kw revision=8cb4336e529f0a4b2d6f10cdcfc63d15c45b651d` | holdout |
+| B2 | same | same | dev |
+| Q1 | `sft-q1d-refs-fixes-all-clock` | `--agent-kw revision=<q1d sha>` | holdout |
+| Q2 | same | same | dev |
+| W1, W2 | the WiSE-FT preset kept by the format check | `--agent-kw revision=<sha>` | holdout, dev |
+
+A model passes with holdout at least +1.0 over B1 with the CI above 0, and dev at least -0.3 against B2. Then the
+public run (Split `public_test`, ASR `pho-large-ft-all-beam5`, extra infer args `--time-field --agent-kw
+revision=<sha>`); it ships only at or above 63.44.
+
 ## D. Closed, nothing to run
 
 Experiments 7 (few-shot selection by tool structure: +1.04 points of hit rate against a 10-point bar), 8 (date correction: simulation
