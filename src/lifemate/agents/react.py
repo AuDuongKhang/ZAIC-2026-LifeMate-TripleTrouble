@@ -13,7 +13,7 @@ from ..data import SYS_TOOL, default_data_root, load_app_groups
 from ..task import Task
 from .ask_guard import fold
 from .base import Agent
-from .clock_fix import fix_calls_clock, has_datetime
+from .clock_fix import fix_call_clock, has_datetime
 from .date_fix import fix_calls
 from .empty_retry import relaxed_call
 from .fewshot import ExampleBank, gold_apps, render_examples
@@ -147,8 +147,9 @@ class ReActAgent(Agent):
         only "thứ X" phrase (thứ X tuần sau / tuần này / này, or bare) into the call's date arguments, after date_fix and
         before id_fix and validation; day phrases (hôm nay, sáng mai) are left to the model. No extra call is ever sent.
         clock_fix puts the time of day the request states ("tám rưỡi tối mai" → 20:30) into the first dated call of the
-        sample (agents/clock_fix.py), after weekday_fix and before id_fix and validation; a dated call that was rejected
-        before it was sent does not use up the fix. No extra call is ever sent.
+        sample (agents/clock_fix.py), call by call right before validation, so a dated call that was rejected before it
+        was sent (in this turn or an earlier one) does not use up the fix; the assistant turn is updated, so the model
+        reads back the call that was sent. No extra call is ever sent.
         empty_retry: when a read tool returns an empty result, send it once more without its optional, non-date
         arguments (agents/empty_retry.py), unless that call was already sent or env.validate rejects it. The model then
         reads the relaxed call and its result in place of the empty one, so the transcript shows one call and its real
@@ -257,12 +258,6 @@ class ReActAgent(Agent):
                     trace.setdefault("weekday_fixes", []).extend({"from": a["arguments"], "to": b["arguments"]}
                                                                  for a, b in zip(calls, fixed) if a is not b)
                 calls = fixed
-            if self.clock_fix and not dated_sent:  # same place as date_fix: the model reads back the call that was sent
-                fixed = fix_calls_clock(calls, task.request, task.context["current_time"])
-                if fixed is not calls:
-                    trace.setdefault("clock_fixes", []).extend({"from": a["arguments"], "to": b["arguments"]}
-                                                               for a, b in zip(calls, fixed) if a is not b)
-                calls = fixed
             if self.id_fix:  # same place as date_fix: the model reads back the call that was sent
                 fixed = fix_calls_ids(calls, specs, names)
                 if fixed is not calls:
@@ -273,6 +268,12 @@ class ReActAgent(Agent):
                 {"type": "function", "function": {"name": c["name"], "arguments": c["arguments"]}} for c in calls]}
             messages.append(assistant)
             for i, call in enumerate(calls):
+                if self.clock_fix and not dated_sent and has_datetime(call):
+                    fixed = fix_call_clock(call, task.request, task.context["current_time"])
+                    if fixed is not call:  # the assistant turn shows the call that is sent
+                        trace.setdefault("clock_fixes", []).append({"from": call["arguments"], "to": fixed["arguments"]})
+                        call = calls[i] = fixed
+                        assistant["tool_calls"][i]["function"]["arguments"] = fixed["arguments"]
                 key = json.dumps([call["name"], call["arguments"]], sort_keys=True, ensure_ascii=False)
                 if key in done:
                     invalid += 1

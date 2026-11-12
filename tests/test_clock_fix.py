@@ -124,3 +124,9 @@ def test_only_the_first_dated_call_of_a_list_is_fixed():
 def test_a_value_that_is_not_a_real_datetime_is_left_alone(value, now):
     c = call(time=value)
     assert fix_call_clock(c, EVENING, now) is c
+
+
+def test_a_day_part_before_a_digital_time_counts():
+    assert spoken("tối nay 8h30 nhắc tôi gọi mẹ") == [(8, 30, "tối")]
+    c = call(time="2026-10-01T20:30:00+07:00")
+    assert fix_call_clock(c, "tối nay 8h30 nhắc tôi gọi mẹ", "2026-10-01T07:00:00+07:00") is c

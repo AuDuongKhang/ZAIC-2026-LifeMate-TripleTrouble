@@ -57,15 +57,9 @@ def _number(phrase: str) -> int:
     return _UNITS[words[0]]
 
 
-def _part(text: str, start: int, end: int, before: bool = True) -> str | None:
-    after = _PART_AFTER.match(text[end:])
-    if after:
-        return after["p"]
-    if before:
-        found = _PART_BEFORE.search(text[:start].rstrip())
-        if found:
-            return found["p"]
-    return None
+def _part(text: str, start: int, end: int) -> str | None:
+    after = _PART_AFTER.match(text[end:]) or _PART_BEFORE.search(text[:start].rstrip())
+    return after["p"] if after else None
 
 
 def clocks(request: str) -> list[dict]:
@@ -113,7 +107,7 @@ def clocks(request: str) -> list[dict]:
         hour = int(m["h"])
         if hour <= 24:
             found.append((m.start(), {"hour": hour, "minute": int(m["m"]) if m["m"] else 0,
-                                      "part": _part(text, m.start(), m.end(), before=False)}))
+                                      "part": _part(text, m.start(), m.end())}))
     return [entry for _, entry in sorted(found, key=lambda item: item[0])]
 
 

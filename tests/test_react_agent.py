@@ -690,6 +690,15 @@ def test_a_rejected_dated_call_does_not_use_up_the_clock_fix():
     assert env.called == [("reminders.create", RIGHT_ARGS)]
 
 
+
+def test_a_dated_call_rejected_in_the_same_turn_leaves_the_fix_to_the_next_one():
+    env = FakeEnv(bad={"calendar.create_event"})
+    rejected = CALL("calendar.create_event", {"start": "2026-11-06T19:30:00+07:00"})
+    llm = FakeLLM([rejected + "\n" + WRONG_TIME, "Xong."])
+    ReActAgent(llm=llm, clock_fix=True).run(CLOCK_TASK, env)
+    assert env.called == [("reminders.create", RIGHT_ARGS)]
+    assert llm.seen[1][-3]["tool_calls"][1]["function"]["arguments"] == RIGHT_ARGS  # the model reads back what was sent
+
 # --- analog_weight -----------------------------------------------------------------------------------------------------
 
 class AnalogBank(StubBank):
