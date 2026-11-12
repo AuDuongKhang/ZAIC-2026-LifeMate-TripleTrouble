@@ -283,3 +283,100 @@ def test_distillation_and_decision_weight_work_together(tiny, tmp_path):
     assert all("kd" in r for r in a) and "eval_loss" in a[1]
     assert a[0]["loss"] == pytest.approx(b[0]["loss"], rel=1e-6)  # same start, the logged loss is the plain one
     assert a[0]["grad_norm"] != pytest.approx(b[0]["grad_norm"], rel=1e-3)  # but the gradient weights the tokens
+
+
+# --- preference mode (--pairs) ---------------------------------------------------------------------------------------
+
+import math  # noqa: E402
+
+
+def _pair_rows(records):
+    rows = []
+    for r in records:
+        msgs = r["messages"]
+        last = max(i for i, m in enumerate(msgs) if m["role"] == "assistant")
+        chosen = msgs[last]
+        rejected = ({"role": "assistant", "content": "Đã xong."} if chosen.get("tool_calls") else
+                    {"role": "assistant", "content": "", "tool_calls": [
+                        {"type": "function", "function": {"name": "alarm.list", "arguments": {}}}]})
+        rows.append({"id": r["id"], "record": 0, "turn": last, "type": "t", "greedy_wrong": True,
+                     "messages": msgs[:last], "tools": r["tools"], "chosen": chosen, "rejected": rejected})
+    return rows
+
+
+@pytest.fixture(scope="module")
+def tiny_pairs(tiny):
+    records = [json.loads(line) for line in (tiny / "records" / "r.jsonl").read_text(encoding="utf-8").splitlines()]
+    (tiny / "records" / "pairs").mkdir(exist_ok=True)
+    (tiny / "records" / "pairs" / "p.jsonl").write_text(
+        "".join(json.dumps(p, ensure_ascii=False) + "\n" for p in _pair_rows(records)), encoding="utf-8")
+    return tiny
+
+
+def test_pairs_run_starts_at_log_two(tiny_pairs, tmp_path):
+    out = tmp_path / "pref"
+    _train(tiny_pairs, out, "--pairs", "p", "--sft-share", "0", "--sft-weight", "0", "--max-steps", "1")
+    first = _log(out)[0]
+    assert first["dpo"] == pytest.approx(math.log(2), abs=1e-4)
+    assert first["margin"] == pytest.approx(0, abs=1e-4)
+    assert first["pref_acc"] == 0.0  # a margin of exactly zero is not a win
+
+
+def test_pairs_run_logs_preference_terms_and_eval_accuracy(tiny_pairs, tmp_path):
+    out = tmp_path / "pref"
+    _train(tiny_pairs, out, "--pairs", "p", "--eval-pairs", "p")
+    rows = _log(out)
+    assert all({"dpo", "nll", "margin", "pref_acc"} <= set(r) for r in rows if r.get("pairs"))
+    evals = [r for r in rows if "eval_loss" in r]
+    assert evals and all("eval_pref_acc" in r and 0 <= r["eval_pref_acc"] <= 1 for r in evals)
+
+
+def test_pairs_resume_matches_an_uninterrupted_run(tiny_pairs, tmp_path):
+    full, part = tmp_path / "full", tmp_path / "part"
+    _train(tiny_pairs, full, "--pairs", "p")
+    _train(tiny_pairs, part, "--pairs", "p", "--max-steps", "1")
+    _train(tiny_pairs, part, "--pairs", "p", "--resume")
+    a, b = _log(full), _log(part)
+    assert [r["step"] for r in a] == [r["step"] for r in b]
+    assert [r["loss"] for r in a] == pytest.approx([r["loss"] for r in b], rel=1e-4)
+
+
+def test_reference_cache_is_rebuilt_when_the_pairs_change(tiny_pairs, tmp_path):
+    out = tmp_path / "pref"
+    _train(tiny_pairs, out, "--pairs", "p", "--max-steps", "1")
+    first = torch.load(out / "ref_logps.pt", weights_only=False)
+    path = tiny_pairs / "records" / "pairs" / "p2.jsonl"
+    rows = (tiny_pairs / "records" / "pairs" / "p.jsonl").read_text(encoding="utf-8").splitlines()
+    path.write_text("".join(line + "\n" for line in rows[:-1]), encoding="utf-8")
+    out2 = tmp_path / "pref2"
+    out2.mkdir()
+    (out2 / "ref_logps.pt").write_bytes((out / "ref_logps.pt").read_bytes())
+    _train(tiny_pairs, out2, "--pairs", "p2", "--max-steps", "1")
+    second = torch.load(out2 / "ref_logps.pt", weights_only=False)
+    assert second["key"]["pairs_sha"] != first["key"]["pairs_sha"]
+    assert len(second["train"]) == len(first["train"]) - 1
+
+
+def test_pairs_refuse_kd_and_decision_weight(tiny_pairs, tmp_path):
+    with pytest.raises(SystemExit):
+        _train(tiny_pairs, tmp_path / "a", "--pairs", "p", "--decision-weight", "2")
+    with pytest.raises(SystemExit):
+        _train(tiny_pairs, tmp_path / "b", "--pairs", "p", "--kd-teachers", "x")
+
+
+def test_merge_accepts_a_revision(tmp_path, monkeypatch):
+    import lifemate.agents.llm as llm
+    from lifemate.sft import merge
+
+    seen = {}
+
+    def fake_load(model, dtype, revision=None):
+        seen["revision"] = revision
+        raise RuntimeError("stop after loading")
+
+    monkeypatch.setattr(llm, "load_causal_lm", fake_load)
+    (tmp_path / "adapter").mkdir()
+    with pytest.raises(RuntimeError, match="stop after loading"):
+        merge.main(["--adapter", str(tmp_path / "adapter"), "--out", str(tmp_path / "out"), "--model", "m",
+                    "--revision", "abc123"])
+    assert seen["revision"] == "abc123"
