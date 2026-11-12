@@ -13,6 +13,7 @@ from ..data import SYS_TOOL, default_data_root, load_app_groups
 from ..task import Task
 from .ask_guard import fold
 from .base import Agent
+from .clock_fix import fix_calls_clock, has_datetime
 from .date_fix import fix_calls
 from .empty_retry import relaxed_call
 from .fewshot import ExampleBank, gold_apps, render_examples
@@ -104,7 +105,8 @@ class ReActAgent(Agent):
                  leak_guard: bool = False, vote_prompts: int = 0, vote_apply: bool = True,
                  date_fix: bool = False, analog_weight: float = 0.0, max_new_tokens: int = 384, num_beams: int = 1,
                  leave_gold_apps_out: bool = False, group_examples: int = 0, id_fix: bool = False,
-                 spoken_email: bool = False, weekday_fix: bool = False, empty_retry: bool = False):
+                 spoken_email: bool = False, weekday_fix: bool = False, empty_retry: bool = False,
+                 clock_fix: bool = False):
         """time_budget_s counts from task.started_at (sample start, ASR included) when the runner sets it.
         A step only starts with at least min_step_s left, and its generation is capped at the time remaining.
         check_refs holds back calls whose x-ref ids were never seen in a tool result (off by default: with it the
@@ -144,6 +146,9 @@ class ReActAgent(Agent):
         weekday_fix is the narrower date_fix of agents/date_fix.py (weekdays_only): it puts the date of the request's
         only "thứ X" phrase (thứ X tuần sau / tuần này / này, or bare) into the call's date arguments, after date_fix and
         before id_fix and validation; day phrases (hôm nay, sáng mai) are left to the model. No extra call is ever sent.
+        clock_fix puts the time of day the request states ("tám rưỡi tối mai" → 20:30) into the first dated call of the
+        sample (agents/clock_fix.py), after weekday_fix and before id_fix and validation; a dated call that was rejected
+        before it was sent does not use up the fix. No extra call is ever sent.
         empty_retry: when a read tool returns an empty result, send it once more without its optional, non-date
         arguments (agents/empty_retry.py), unless that call was already sent or env.validate rejects it. The model then
         reads the relaxed call and its result in place of the empty one, so the transcript shows one call and its real
@@ -166,6 +171,7 @@ class ReActAgent(Agent):
         self.group_examples = group_examples
         self.id_fix, self.spoken_email = id_fix, spoken_email
         self.weekday_fix, self.empty_retry = weekday_fix, empty_retry
+        self.clock_fix = clock_fix  # self.clock is the timer
         self.app_groups = load_app_groups(data_root or default_data_root(), split) if group_examples and examples else None
         if self.bank is None and examples:
             self.bank = ExampleBank.from_data(data_root or default_data_root(), split)
@@ -178,7 +184,7 @@ class ReActAgent(Agent):
                      "analog_weight": analog_weight, "max_new_tokens": max_new_tokens, "num_beams": num_beams,
                      "leave_gold_apps_out": leave_gold_apps_out, "group_examples": group_examples, "id_fix": id_fix,
                      "spoken_email": spoken_email, "weekday_fix": weekday_fix,
-                     "empty_retry": empty_retry}
+                     "empty_retry": empty_retry, "clock_fix": clock_fix}
 
     def run(self, task: Task, env) -> None:
         trace = self.last_trace = {"steps": [], "stop": None}  # None: a step raised
@@ -207,6 +213,7 @@ class ReActAgent(Agent):
         done: set[str] = set()  # canonical (name, arguments) of calls already sent
         empty: set[str] = set()  # the subset of done whose result was empty (only tracked with empty_hint)
         invalid = 0
+        dated_sent = False  # clock_fix only touches calls until the first dated call was sent
         checked = False  # the refusal check runs at most once, and only after the first output
         voted = not self.vote_prompts  # the prompt vote runs at most once, at the first write or ask
         if self.vote_prompts:
@@ -250,6 +257,12 @@ class ReActAgent(Agent):
                     trace.setdefault("weekday_fixes", []).extend({"from": a["arguments"], "to": b["arguments"]}
                                                                  for a, b in zip(calls, fixed) if a is not b)
                 calls = fixed
+            if self.clock_fix and not dated_sent:  # same place as date_fix: the model reads back the call that was sent
+                fixed = fix_calls_clock(calls, task.request, task.context["current_time"])
+                if fixed is not calls:
+                    trace.setdefault("clock_fixes", []).extend({"from": a["arguments"], "to": b["arguments"]}
+                                                               for a, b in zip(calls, fixed) if a is not b)
+                calls = fixed
             if self.id_fix:  # same place as date_fix: the model reads back the call that was sent
                 fixed = fix_calls_ids(calls, specs, names)
                 if fixed is not calls:
@@ -288,6 +301,7 @@ class ReActAgent(Agent):
                                      "come from tool results; call a read or search tool to look it up first."})
                     continue
                 result = env.call(call["name"], call["arguments"])
+                dated_sent = dated_sent or has_datetime(call)
                 scalar_strings(result, seen)
                 if self.id_fix:
                     entity_names(result, names)

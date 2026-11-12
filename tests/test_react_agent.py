@@ -154,6 +154,7 @@ def test_agent_info_records_prompt_and_options():
     agent = ReActAgent(llm=FakeLLM([]), prompt_version="v1", check_refs=False)
     assert agent.info["prompt"] == "v1" and agent.info["check_refs"] is False
     assert agent.info["weekday_fix"] is False
+    assert agent.info["clock_fix"] is False
     assert agent.info["empty_retry"] is False
 
 
@@ -646,6 +647,47 @@ def test_weekday_fix_leaves_day_phrases_alone():
     task = dataclasses.replace(WEEKDAY_TASK, request="nhắc tôi sáng mai")
     ReActAgent(llm=FakeLLM([CALL("tasks.add", {"due": "2026-10-05T08:00:00+07:00"}), "Xong."]), weekday_fix=True).run(task, env)
     assert env.called == [("tasks.add", {"due": "2026-10-05T08:00:00+07:00"})]
+
+
+# --- clock_fix ---------------------------------------------------------------------------------------------------------
+
+CLOCK_TASK = Task(id="c", request="Nhớ nhắc mình gọi lại cho khách lúc tám rưỡi tối mai nhé.", history=[], tools=[],
+                  context={"current_time": "2026-11-05T11:40:00+07:00", "timezone": "Asia/Ho_Chi_Minh"})
+WRONG_TIME = CALL("reminders.create", {"content": "gọi lại cho khách", "time": "2026-11-06T19:30:00+07:00"})
+RIGHT_ARGS = {"content": "gọi lại cho khách", "time": "2026-11-06T20:30:00+07:00"}
+
+
+def test_clock_fix_corrects_the_time_before_validation():
+    env, llm = FakeEnv(), FakeLLM([WRONG_TIME, "Xong."])
+    agent = ReActAgent(llm=llm, clock_fix=True)
+    agent.run(CLOCK_TASK, env)
+    assert env.called == [("reminders.create", RIGHT_ARGS)]
+    assert llm.seen[1][-2]["tool_calls"][0]["function"]["arguments"]["time"] == "2026-11-06T20:30:00+07:00"
+    assert agent.last_trace["clock_fixes"] == [{"from": {"content": "gọi lại cho khách", "time": "2026-11-06T19:30:00+07:00"},
+                                                "to": RIGHT_ARGS}]
+    assert agent.info["clock_fix"] is True
+
+
+def test_clock_fix_is_off_by_default():
+    env = FakeEnv()
+    agent = ReActAgent(llm=FakeLLM([WRONG_TIME, "Xong."]))
+    agent.run(CLOCK_TASK, env)
+    assert env.called == [("reminders.create", {"content": "gọi lại cho khách", "time": "2026-11-06T19:30:00+07:00"})]
+    assert "clock_fixes" not in agent.last_trace
+
+
+def test_clock_fix_only_touches_the_first_dated_call_of_a_sample():
+    env = FakeEnv()
+    later = CALL("alarm.create", {"time": "2026-11-06T19:00:00+07:00"})
+    ReActAgent(llm=FakeLLM([WRONG_TIME, later, "Xong."]), clock_fix=True).run(CLOCK_TASK, env)
+    assert env.called == [("reminders.create", RIGHT_ARGS), ("alarm.create", {"time": "2026-11-06T19:00:00+07:00"})]
+
+
+def test_a_rejected_dated_call_does_not_use_up_the_clock_fix():
+    env = FakeEnv(bad={"calendar.create_event"})
+    rejected = CALL("calendar.create_event", {"start": "2026-11-06T19:30:00+07:00"})
+    ReActAgent(llm=FakeLLM([rejected, WRONG_TIME, "Xong."]), clock_fix=True).run(CLOCK_TASK, env)
+    assert env.called == [("reminders.create", RIGHT_ARGS)]
 
 
 # --- analog_weight -----------------------------------------------------------------------------------------------------

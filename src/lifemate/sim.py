@@ -19,6 +19,7 @@ import json
 from pathlib import Path
 from typing import Callable
 
+from .agents.clock_fix import fix_calls_clock
 from .agents.date_fix import fix_calls
 from .agents.freetext import freetext_rewrite
 from .agents.id_fix import entity_names, fix_calls_ids
@@ -96,6 +97,24 @@ def weekday_fix(times: dict[str, str] | None = None, data_root: Path | None = No
     return rewrite
 
 
+def clock_fix(times: dict[str, str] | None = None, data_root: Path | None = None) -> Rewrite:
+    """Put the time of day the request states into the first dated call (agents/clock_fix.py). A trace holds only sent
+    calls, so its first dated call is the one the agent would fix. current_time comes from the train samples (`times`
+    {id: current_time} overrides, for tests)."""
+    if times is None:
+        times = {s["id"]: s["context"]["current_time"] for s in load_samples(data_root or default_data_root(), "train")}
+
+    def rewrite(trace: dict, catalog: dict[str, dict]) -> list[dict] | None:
+        now = times.get(trace["id"])
+        if now is None:
+            return None
+        fixed = fix_calls_clock(trace["calls"], trace.get("request", ""), now)
+        if fixed is trace["calls"]:
+            return None
+        return [{"name": c["name"], "arguments": c["arguments"]} for c in fixed]
+    return rewrite
+
+
 def id_fix(histories: dict[str, list] | None = None, data_root: Path | None = None) -> Rewrite:
     """Pass an entity's id where a write call names it (agents/id_fix.py), with the entities of the history and of each
     recorded result before the call. The trace has no history, so it comes from the train samples (`histories`
@@ -117,12 +136,13 @@ def id_fix(histories: dict[str, list] | None = None, data_root: Path | None = No
 
 REWRITES: dict[str, Callable[..., Rewrite]] = {"freetext": freetext_rewrite, "minimal_reads": minimal_reads_rewrite,
                                                "run_vote": run_vote,
-                                               "date_fix": date_fix, "weekday_fix": weekday_fix, "id_fix": id_fix}
+                                               "date_fix": date_fix, "weekday_fix": weekday_fix, "id_fix": id_fix,
+                                               "clock_fix": clock_fix}
 
 
 def build_rewrite(factory: Callable[..., Rewrite], kw: dict, data_root: Path) -> Rewrite:
     """factory(**kw), with data_root=data_root added when the factory takes a data_root and kw does not set one, so
-    rewrites that load train samples (date_fix, weekday_fix, id_fix) read the same data the replay uses."""
+    rewrites that load train samples (date_fix, weekday_fix, clock_fix, id_fix) read the same data the replay uses."""
     if "data_root" in inspect.signature(factory).parameters and "data_root" not in kw:
         kw = {**kw, "data_root": data_root}
     return factory(**kw)
