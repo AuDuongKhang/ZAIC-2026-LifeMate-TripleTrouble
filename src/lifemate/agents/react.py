@@ -95,7 +95,7 @@ class ReActAgent(Agent):
     name = "react"
 
     def __init__(self, llm: ChatLLM | None = None, model: str = "Qwen/Qwen3-4B-Instruct-2507", max_steps: int = 8,
-                 max_invalid: int = 2, time_budget_s: float = 20.0, min_step_s: float = 3.0,
+                 max_invalid: int = 2, time_budget_s: float = 24.0, min_step_s: float = 3.0,
                  prompt_version: str = DEFAULT_PROMPT, check_refs: bool = False,
                  examples: int = 0, split: str = "train", data_root: Path | None = None, bank: ExampleBank | None = None,
                  clock: Callable[[], float] = time.perf_counter, revision: str | None = None,
@@ -106,7 +106,9 @@ class ReActAgent(Agent):
                  leave_gold_apps_out: bool = False, group_examples: int = 0, id_fix: bool = False,
                  spoken_email: bool = False, weekday_fix: bool = False, empty_retry: bool = False):
         """time_budget_s counts from task.started_at (sample start, ASR included) when the runner sets it.
-        A step only starts with at least min_step_s left, and its generation is capped at the time remaining.
+        A step only starts with at least min_step_s left, and its generation is capped at the time remaining. The
+        default 24 s leaves 6 s of the 30 s limit for the last token, the call it sends and the rules after it; it was
+        20 s until 12 Nov, when the A30 estimate (prefill ~2-3.5x slower than molab) put ~3% of public samples past 20 s.
         check_refs holds back calls whose x-ref ids were never seen in a tool result (off by default: with it the
         model dodged the check, e.g. calling by phone_number instead of asking which contact).
         examples=k puts the k most similar solved training requests into the system prompt. split is the split being
@@ -180,9 +182,8 @@ class ReActAgent(Agent):
                      "spoken_email": spoken_email, "weekday_fix": weekday_fix,
                      "empty_retry": empty_retry}
 
-    def run(self, task: Task, env) -> None:
-        trace = self.last_trace = {"steps": [], "stop": None}  # None: a step raised
-        start = task.started_at if task.started_at is not None else self.clock()
+    def _prompt(self, task: Task) -> tuple[Task, list[dict], list[dict]]:
+        """(task as the agent reads it, tool schemas, first messages): emails respelled, examples picked, prompt built."""
         if self.spoken_email:
             task = dataclasses.replace(task, request=respell_emails(task.request),
                                        history=[_respell_user_turn(turn) for turn in task.history])
@@ -190,9 +191,6 @@ class ReActAgent(Agent):
             raise ValueError("leave_gold_apps_out reads the gold label, but this task has no label")
         left_out = {"exclude_apps": gold_apps(task.label)} if self.leave_gold_apps_out else {}
         tools = [tool_schema(spec) for spec in task.tools]
-        specs = {spec["name"]: spec for spec in task.tools}
-        seen = scalar_strings([turn.get("tool_results") for turn in task.history], set())
-        names = entity_names([turn.get("tool_results") for turn in task.history], {})  # only grows with id_fix on
         budget = self.llm.context_limit - self.llm.max_new_tokens
         examples_text = ""
         if self.bank is not None:
@@ -204,6 +202,24 @@ class ReActAgent(Agent):
             examples_text = render_examples(picked)
         messages = build_messages(task, lambda m: self.llm.count_tokens(m, tools), budget, self.prompt_version,
                                   examples_text, self.date_hints)
+        return task, tools, messages
+
+    def warmup(self, task: Task) -> None:
+        """One untimed generation on the prompt of a real task, before the first timed sample, so one-off GPU costs
+        (CUDA context, cuBLAS handles, Triton compilation and autotuning of the fla kernels of Qwen3.5) do not land in
+        that sample's 30 s. Greedy decoding keeps no state, so later outputs are unchanged. Sends no call, keeps no
+        trace, and has no time cap: a cap could stop it before the decode kernels ever run."""
+        _, tools, messages = self._prompt(task)
+        self.llm.generate(messages, tools)
+
+    def run(self, task: Task, env) -> None:
+        trace = self.last_trace = {"steps": [], "stop": None}  # None: a step raised
+        start = task.started_at if task.started_at is not None else self.clock()
+        task, tools, messages = self._prompt(task)
+        specs = {spec["name"]: spec for spec in task.tools}
+        seen = scalar_strings([turn.get("tool_results") for turn in task.history], set())
+        names = entity_names([turn.get("tool_results") for turn in task.history], {})  # only grows with id_fix on
+        budget = self.llm.context_limit - self.llm.max_new_tokens
         done: set[str] = set()  # canonical (name, arguments) of calls already sent
         empty: set[str] = set()  # the subset of done whose result was empty (only tracked with empty_hint)
         invalid = 0
