@@ -90,11 +90,19 @@ def _assistant(text: str) -> dict:
     return assistant_message(text)
 
 
+# Pair types that are conventions, not decisions (pilot of 13 Nov, 30 pairs read by hand): an extra read before a write
+# (a fare or a balance) is another valid order of work and only costs precision.
+DROPPED_TYPES = frozenset({"write:read"})
+
+
 def choose_rejected(gold_message: dict, candidates: list[str], name_map: dict[str, str], kinds: dict[str, str],
-                    fuzzy: dict[str, set[str]]) -> tuple[str, str, bool] | None:
+                    fuzzy: dict[str, set[str]], later: set | frozenset = frozenset()) -> tuple[str, str, bool] | None:
     """(type, rejected text, greedy_wrong) for the most frequent wrong decision among candidates ([greedy] + samples),
-    or None when no candidate makes a pair. Ties go to the earliest candidate; write:args candidates form one group."""
+    or None when no candidate makes a pair. Ties go to the earliest candidate; write:args candidates form one group.
+    later holds the decisions of the gold steps after this one: a candidate doing one of them first is another valid
+    order, not a mistake (stopping is never such a step). Types in DROPPED_TYPES never make a pair."""
     gold = decision(gold_message, name_map, kinds)
+    swaps = set(later) - {("answer", None)}
     groups: dict[tuple, list[int]] = {}
     types: dict[tuple, str] = {}
     for i, text in enumerate(candidates):
@@ -104,7 +112,7 @@ def choose_rejected(gold_message: dict, candidates: list[str], name_map: dict[st
         key: tuple = (kind, model)
         if kind is None and gold[0] == "write" and model == gold and args_differ(gold_message, message, name_map, fuzzy):
             kind, key = "write:args", ("write:args",)
-        if kind is None:
+        if kind is None or kind in DROPPED_TYPES or (kind != "write:args" and model in swaps):
             continue
         groups.setdefault(key, []).append(i)
         types[key] = kind
@@ -161,7 +169,8 @@ def main(argv: list[str] | None = None) -> dict:
         points += 1
         name_map = record.get("name_map", {})
         gold = record["messages"][row["turn"]]
-        chosen = choose_rejected(gold, [row["greedy"], *row["samples"]], name_map, kinds, fuzzy)
+        later = {decision(m, name_map, kinds) for m in record["messages"][row["turn"] + 1:] if m["role"] == "assistant"}
+        chosen = choose_rejected(gold, [row["greedy"], *row["samples"]], name_map, kinds, fuzzy, later)
         if chosen is None:
             continue
         kind, text, wrong = chosen

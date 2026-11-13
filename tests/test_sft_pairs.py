@@ -97,9 +97,9 @@ GOLD_WRITE = msg("alarm.create", time="2026-11-06T20:30:00+07:00", label="Đi ch
 
 def test_choose_rejected_takes_the_most_frequent_wrong_decision():
     from lifemate.sft.pairs import choose_rejected
-    read = call_text("alarm.list")
-    candidates = [call_text("alarm.create", time="2026-11-06T20:30:00+07:00", label="Đi chợ"), read, "Đã xong.", read]
-    assert choose_rejected(GOLD_WRITE, candidates, {}, KINDS, FUZZY_A) == ("write:read", read, False)
+    sms = call_text("sms.send", content="x")
+    candidates = [call_text("alarm.create", time="2026-11-06T20:30:00+07:00", label="Đi chợ"), sms, "Đã xong.", sms]
+    assert choose_rejected(GOLD_WRITE, candidates, {}, KINDS, FUZZY_A) == ("write:other_write", sms, False)
 
 
 def test_choose_rejected_breaks_ties_by_order_and_flags_a_wrong_greedy():
@@ -177,3 +177,32 @@ def test_greedy_wrong_only_keeps_only_those_pairs(tmp_path):
                          "--greedy-wrong-only"])
     assert report["with_pair"] == 1 and report["train"] == 0
     assert _read(tmp_path / "pairs" / "p.jsonl") == []
+
+
+# --- filters decided after the pilot (13 Nov): order swaps and extra reads are conventions ---------------------------
+
+def test_a_later_gold_step_done_first_is_not_a_pair():
+    from lifemate.sft.pairs import choose_rejected
+    gold = msg("contacts.search", query="Lan")
+    later = {("write", "alarm.create"), ("answer", None)}
+    alarm = call_text("alarm.create", time="2026-11-22T06:00:00+07:00")
+    assert choose_rejected(gold, [alarm, alarm], {}, KINDS, FUZZY_A, later) is None
+
+
+def test_stopping_early_stays_a_pair_although_gold_ends_with_an_answer():
+    from lifemate.sft.pairs import choose_rejected
+    gold = msg("contacts.search", query="Lan")
+    assert choose_rejected(gold, ["Đã xong."], {}, KINDS, FUZZY_A, {("answer", None)}) == ("read:answer", "Đã xong.", True)
+
+
+def test_an_extra_read_before_a_write_is_not_a_pair():
+    from lifemate.sft.pairs import choose_rejected
+    assert choose_rejected(GOLD_WRITE, [call_text("alarm.list")] * 3, {}, KINDS, FUZZY_A) is None
+
+
+def test_cli_drops_order_swaps(tmp_path):
+    """The record's gold writes at turn 2 and answers at turn 4; a model step that answers at turn 2 still pairs."""
+    from lifemate.sft import pairs
+    _write_inputs(tmp_path, ["train_0001"])
+    report = pairs.main(["--records", "rec", "--steps", "st", "--out", "p", "--records-dir", str(tmp_path)])
+    assert report["by_type"] == {"write:answer": 1}
