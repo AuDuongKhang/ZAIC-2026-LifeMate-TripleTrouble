@@ -201,6 +201,9 @@ def _(beta, data_root, hf_repo, hf_write, k, limit, lr, mo, model, name, os, own
                                      start_new_session=True)
     procs["log"] = work / f"pref-{step.value}.log"
     procs["name"], procs["started"] = step.value, time.time()
+    from lifemate.sft.pref_commands import run_name
+
+    procs["train_out"] = repo_dir / "checkpoints" / run_name(_f) if step.value == "train" else None
     _shown = "\n".join(shlex.join(c) for c in _cmds)
     mo.md(f"Started:\n```\n{_shown.replace(hf_write.value, '***') if hf_write.value else _shown}\n```")
     return
@@ -234,7 +237,15 @@ def _(hf_write, mo, procs, refresh, repo_dir, sys, time):
                            f"<div>{_done[0]} / {_done[1]} points ({100 * _done[0] / max(_done[1], 1):.0f}%)</div>")
     _elapsed = f", {(time.time() - procs['started']) / 60:.0f} min since Start" if procs.get("started") else ""
     _tail = "".join(_text.splitlines(True)[-30:])
-    mo.vstack([mo.md(f"**step** `{procs.get('name', '')}`: {_status}{_elapsed}"), _bar,
+    _plots = mo.md("")
+    _out = procs.get("train_out")
+    if _out is not None and (_out / "train_log.jsonl").exists():  # the training curves, as molab_train.py shows them
+        from lifemate.sft.plots import plot_log
+
+        _pngs = plot_log(_out / "train_log.jsonl", _out / "live_plots")
+        _plots = mo.vstack([mo.hstack([mo.image(src=p.read_bytes(), width=330) for p in _pngs[i:i + 3]], justify="start")
+                            for i in range(0, len(_pngs), 3)])
+    mo.vstack([mo.md(f"**step** `{procs.get('name', '')}`: {_status}{_elapsed}"), _bar, _plots,
                mo.ui.code_editor(value=_tail, language="markdown", disabled=True)])
     return
 

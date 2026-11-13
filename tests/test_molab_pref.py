@@ -79,3 +79,25 @@ def test_the_monitor_draws_a_progress_bar_from_the_log(tmp_path):
     html = mo.Html.call_args.args[0]
     assert '<progress value="130" max="520"' in html and "25%" in html
     assert "old run" not in mo.ui.code_editor.call_args.kwargs["value"]
+
+
+def test_the_monitor_shows_the_training_plots(tmp_path):
+    import json
+    import time
+
+    pytest.importorskip("matplotlib")
+    fn, params = _cell("refresh", "procs", "repo_dir")
+    out = tmp_path / "checkpoints" / "sft-q1d-r1-a"
+    out.mkdir(parents=True)
+    rows = [{"step": s, "loss": 1.0, "lr": 1e-5, "grad_norm": 0.5, "pairs": 4, "dpo": 0.6, "nll": 0.2, "margin": 0.1,
+             "pref_acc": 0.5} for s in (1, 2)]
+    (out / "train_log.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    log = tmp_path / "pref-train.log"
+    log.write_text("step 2/40 loss 1.0\n", encoding="utf-8")
+    mo = MagicMock()
+    fakes = {"hf_write": v(""), "mo": mo, "procs": {"step": MagicMock(), "log": log, "log_start": 0, "name": "train",
+                                                     "started": time.time(), "train_out": out},
+             "refresh": None, "repo_dir": Path(__file__).parent.parent, "sys": sys, "time": time}
+    fn(**{p: fakes[p] for p in params})
+    assert mo.image.call_count == 6  # loss, lr, grad_norm, dpo, margin, pref_acc
+    assert (out / "live_plots" / "pref_acc.png").exists()

@@ -49,7 +49,8 @@ def _one(f: dict) -> str:
     return f"{f['name']}-t{temps[0]}"
 
 
-def _run(f: dict) -> str:
+def run_name(f: dict) -> str:
+    """The checkpoint folder (checkpoints/<run_name>) of the train and merge steps."""
     return f"sft-q1d-{f['name']}" + (f"-{f['run']}" if f.get("run") else "")
 
 
@@ -89,12 +90,12 @@ def commands(step: str, f: dict) -> list[list[str]]:
                 _hf("pull", f, "pairs", f"{pairs}.jsonl", f"{pairs}-heldout.jsonl"),
                 _py("lifemate.sft.train", "--records", SFT_RECORDS, "--pairs", pairs, "--eval-pairs", f"{pairs}-heldout",
                     "--eval-records", EVAL_RECORDS, "--model", f["model"], "--revision", f["revision"], "--out",
-                    f"checkpoints/{_run(f)}", "--hf-repo", f"{f['owner']}/lifemate-sft-q1d", "--epochs", "1", "--lr",
+                    f"checkpoints/{run_name(f)}", "--hf-repo", f"{f['owner']}/lifemate-sft-q1d", "--epochs", "1", "--lr",
                     str(f["lr"]), "--beta", str(f["beta"]), "--sft-weight", str(f["sft_weight"]), "--lora-targets",
                     LORA_TARGETS)]
     if step == "merge":
         _one(f)
-        return [_py("lifemate.sft.merge", "--adapter", f"checkpoints/{_run(f)}/last", "--out", f"merged/{_run(f)}",
+        return [_py("lifemate.sft.merge", "--adapter", f"checkpoints/{run_name(f)}/last", "--out", f"merged/{run_name(f)}",
                     "--hf-repo", f"{f['owner']}/lifemate-sft-q1d", "--model", f["model"], "--revision", f["revision"])]
     if step == "interpolate":
         return [_py("lifemate.sft.interpolate", "--a", f["model"], "--a-revision", f["revision"], "--b",

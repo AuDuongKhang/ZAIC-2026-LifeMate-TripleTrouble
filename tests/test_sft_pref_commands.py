@@ -101,3 +101,10 @@ def test_progress_reads_the_last_progress_line():
     log = "loading\nprogress 3/40 points (8%), 2.0 s/point, eta 1 min\nprogress 12/40 points (30%), 2.0 s/point, eta 1 min\n"
     assert progress(log) == (12, 40)
     assert progress("loading model\n") is None
+
+
+def test_run_name_is_the_checkpoint_folder_of_train_and_merge():
+    from lifemate.sft.pref_commands import run_name
+    assert run_name(dict(F, name="r1", run="a")) == "sft-q1d-r1-a"
+    assert run_name(dict(F, name="r1", run="")) == "sft-q1d-r1"
+    assert f"checkpoints/{run_name(dict(F, temperature='1.0', run='a'))}" in commands("train", dict(F, temperature="1.0", run="a"))[-1]
