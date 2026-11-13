@@ -25,28 +25,50 @@ def test_records_transcribes_then_writes_the_four_record_files():
                             "--examples", "4", "--tokenizer", "none"]
     assert cmds[4] == PY + ["lifemate.sft.records", "--name", "gold-dev", "--subset", "dev", "--examples", "4",
                             "--tokenizer", "none"]
-    assert len(cmds) == 5
+    assert cmds[5] == PY + ["lifemate.sft.hf_files", "push", "--repo", F["data_repo"], "--folder", "records", "--dir",
+                            "train_records", "pref-pilot-gold.jsonl", "pref-pilot-asr.jsonl",
+                            "gold-pool-m1-asr-pho-large-fp16-lao50.jsonl", "gold-dev.jsonl"]
+    assert len(cmds) == 6
+
+
+def pull(folder, *names):
+    return PY + ["lifemate.sft.hf_files", "pull", "--repo", F["data_repo"], "--folder", folder, "--dir",
+                 "train_records" if folder == "records" else f"train_records/{folder}", *names]
+
+
+def only(cmds, module):
+    return [c for c in cmds if module in c]
 
 
 def test_sample_runs_once_per_temperature():
     cmds = commands("sample", F)
-    assert [c[c.index("--name") + 1] for c in cmds] == ["pilot-t0.7", "pilot-t1.0"]
-    assert cmds[0] == PY + ["lifemate.sft.sample_steps", "--records", "pref-pilot-gold", "--records", "pref-pilot-asr",
+    assert cmds[0] == pull("records", "pref-pilot-gold.jsonl", "pref-pilot-asr.jsonl")
+    assert [c[c.index("--name") + 1] for c in only(cmds, "lifemate.sft.sample_steps")] == ["pilot-t0.7", "pilot-t1.0"]
+    assert cmds[1] == PY + ["lifemate.sft.sample_steps", "--records", "pref-pilot-gold", "--records", "pref-pilot-asr",
                             "--name", "pilot-t0.7", "--model", F["model"], "--revision", F["revision"], "--k", "8",
                             "--temperature", "0.7", "--top-p", "0.95", "--seed", "0", "--hf-repo", F["data_repo"],
                             "--limit", "100"]
 
 
-def test_pairs_runs_once_per_temperature():
-    assert commands("pairs", F)[1] == PY + ["lifemate.sft.pairs", "--records", "pref-pilot-gold", "--records",
-                                            "pref-pilot-asr", "--steps", "pilot-t1.0", "--out", "pilot-t1.0"]
+def test_pairs_runs_once_per_temperature_and_shares_its_files():
+    cmds = commands("pairs", F)
+    assert cmds[0] == pull("records", "pref-pilot-gold.jsonl", "pref-pilot-asr.jsonl")
+    assert cmds[1:4] == [pull("steps", "pilot-t0.7.jsonl"),
+                         PY + ["lifemate.sft.pairs", "--records", "pref-pilot-gold", "--records", "pref-pilot-asr",
+                               "--steps", "pilot-t0.7", "--out", "pilot-t0.7"],
+                         PY + ["lifemate.sft.hf_files", "push", "--repo", F["data_repo"], "--folder", "pairs", "--dir",
+                               "train_records/pairs", "pilot-t0.7.jsonl", "pilot-t0.7-heldout.jsonl",
+                               "pilot-t0.7-review.md"]]
+    assert len(only(cmds, "lifemate.sft.pairs")) == 2
 
 
 def test_train_and_merge_need_one_temperature():
     with pytest.raises(ValueError, match="one temperature"):
         commands("train", F)
     one = dict(F, temperature="0.8", run="a")
-    assert commands("train", one) == [PY + [
+    assert commands("train", one) == [
+        pull("records", "gold-pool-m1-asr-pho-large-fp16-lao50.jsonl", "gold-dev.jsonl"),
+        pull("pairs", "pilot-t0.8.jsonl", "pilot-t0.8-heldout.jsonl"), PY + [
         "lifemate.sft.train", "--records", "gold-pool-m1-asr-pho-large-fp16-lao50", "--pairs", "pilot-t0.8",
         "--eval-pairs", "pilot-t0.8-heldout", "--eval-records", "gold-dev", "--model", F["model"], "--revision",
         F["revision"], "--out", "checkpoints/sft-q1d-pilot-a", "--hf-repo", "TripleTrouble/lifemate-sft-q1d", "--epochs",
@@ -66,7 +88,7 @@ def test_interpolate_makes_both_alphas_from_the_pinned_base():
 
 
 def test_no_limit_means_the_whole_pool():
-    assert "--limit" not in commands("sample", dict(F, limit=0))[0]
+    assert "--limit" not in only(commands("sample", dict(F, limit=0)), "lifemate.sft.sample_steps")[0]
 
 
 def test_unknown_step_is_refused():

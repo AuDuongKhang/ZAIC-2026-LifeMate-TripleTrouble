@@ -39,7 +39,10 @@ def _(mo):
     3. Pick a **step**, check the fields, press **Start**. Run the steps in this order: `records`, `sample`, `pairs`,
        then `train` (one temperature, one *run* suffix per configuration), `merge`; `interpolate` is the WiSE-FT side
        track and needs only *model* and *revision*. The fields of every run are in `docs/molab-runbook.md`, section C5.
-    4. **Stop** ends the step. `sample` resumes where it stopped (same name and fields); `train` resumes with
+    4. Files are shared through the HF dataset: `records` uploads its record files, `sample` its steps file and `pairs`
+       its pair files; every later step downloads what this session lacks. So `records` runs **once per name**, even
+       across sessions, and the HF **write** token is required (it also reads the private dataset).
+    5. **Stop** ends the step. `sample` resumes where it stopped (same name and fields); `train` resumes with
        `--resume`, which this notebook does not add: start a new run name instead, or resume from a terminal.
     """)
     return

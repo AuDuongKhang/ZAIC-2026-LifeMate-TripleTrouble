@@ -3,6 +3,8 @@ docs/superpowers/plans/2026-11-12-onpolicy-preference.md). Pure, so the exact co
 
 Steps: records (ASR cache + masked leave-app-out pool records + the sft-q1c records and gold-dev), sample (one steps file
 per temperature), pairs, train, merge, interpolate (WiSE-FT, alpha 0.7 and 0.85). `f` holds the notebook's fields.
+records pushes its files to the private HF dataset and sample, pairs and train pull what the session lacks, so records
+runs once per name.
 """
 from __future__ import annotations
 
@@ -23,6 +25,13 @@ STEPS = ("records", "sample", "pairs", "train", "merge", "interpolate")
 
 def _py(module: str, *args: str) -> list[str]:
     return [sys.executable, "-m", module, *args]
+
+
+def _hf(action: str, f: dict, folder: str, *names: str) -> list[str]:
+    """Pull files a step needs from the private HF dataset (a local copy wins) or push the files it wrote, so a new
+    session never rebuilds records or pairs (lifemate.sft.hf_files)."""
+    local = "train_records" if folder == "records" else f"train_records/{folder}"
+    return _py("lifemate.sft.hf_files", action, "--repo", f["data_repo"], "--folder", folder, "--dir", local, *names)
 
 
 def _temperatures(f: dict) -> list[str]:
@@ -58,17 +67,27 @@ def commands(step: str, f: dict) -> list[list[str]]:
             _py("lifemate.sft.records", "--name", SFT_RECORDS, "--subset", "pool", "--text", "gold", "--text",
                 f"cache:{ASR_CACHE}", "--mask", "1", "--leave-app-out", "0.5", "--examples", "4", "--tokenizer", "none"),
             _py("lifemate.sft.records", "--name", EVAL_RECORDS, "--subset", "dev", "--examples", "4", "--tokenizer", "none"),
+            _hf("push", f, "records", f"pref-{name}-gold.jsonl", f"pref-{name}-asr.jsonl", f"{SFT_RECORDS}.jsonl",
+                f"{EVAL_RECORDS}.jsonl"),
         ]
+    own_records = _hf("pull", f, "records", f"pref-{name}-gold.jsonl", f"pref-{name}-asr.jsonl")
     if step == "sample":
-        return [_py("lifemate.sft.sample_steps", *sources, "--name", f"{name}-t{t}", "--model", f["model"], "--revision",
+        return [own_records] + [_py("lifemate.sft.sample_steps", *sources, "--name", f"{name}-t{t}", "--model", f["model"], "--revision",
                     f["revision"], "--k", str(int(f["k"])), "--temperature", t, "--top-p", str(f["top_p"]), "--seed", "0",
                     "--hf-repo", f["data_repo"], *_limit(f)) for t in _temperatures(f)]
     if step == "pairs":
-        return [_py("lifemate.sft.pairs", *sources, "--steps", f"{name}-t{t}", "--out", f"{name}-t{t}")
-                for t in _temperatures(f)]
+        cmds = [own_records]
+        for t in _temperatures(f):
+            run = f"{name}-t{t}"
+            cmds += [_hf("pull", f, "steps", f"{run}.jsonl"),
+                     _py("lifemate.sft.pairs", *sources, "--steps", run, "--out", run),
+                     _hf("push", f, "pairs", f"{run}.jsonl", f"{run}-heldout.jsonl", f"{run}-review.md")]
+        return cmds
     if step == "train":
         pairs = _one(f)
-        return [_py("lifemate.sft.train", "--records", SFT_RECORDS, "--pairs", pairs, "--eval-pairs", f"{pairs}-heldout",
+        return [_hf("pull", f, "records", f"{SFT_RECORDS}.jsonl", f"{EVAL_RECORDS}.jsonl"),
+                _hf("pull", f, "pairs", f"{pairs}.jsonl", f"{pairs}-heldout.jsonl"),
+                _py("lifemate.sft.train", "--records", SFT_RECORDS, "--pairs", pairs, "--eval-pairs", f"{pairs}-heldout",
                     "--eval-records", EVAL_RECORDS, "--model", f["model"], "--revision", f["revision"], "--out",
                     f"checkpoints/{_run(f)}", "--hf-repo", f"{f['owner']}/lifemate-sft-q1d", "--epochs", "1", "--lr",
                     str(f["lr"]), "--beta", str(f["beta"]), "--sft-weight", str(f["sft_weight"]), "--lora-targets",

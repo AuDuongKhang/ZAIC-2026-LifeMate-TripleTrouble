@@ -355,7 +355,9 @@ it is. One sample is 0.158 points, so a result within ±0.32 comes from the two 
 Plan: `docs/superpowers/plans/2026-11-12-onpolicy-preference.md` (Tasks 8 to 11), design
 `docs/superpowers/specs/2026-11-12-onpolicy-preference-design.md`. Notebook `notebooks/molab_pref.py` (upload it to
 molab once). Branch `feat/onpolicy-pref` until it is merged, then `main`. Every command it runs comes from
-`lifemate.sft.pref_commands`; the Start cell shows them.
+`lifemate.sft.pref_commands`; the Start cell shows them. Record, steps and pair files go to the HF dataset
+(`records/`, `steps/`, `pairs/`) and later steps download them, so `records` runs once per name, even in a new session;
+fill in the HF write token.
 
 **Pilot (Task 8).** Fields: name `pilot`, model `TripleTrouble/lifemate-sft-q1c`, revision
 `8cb4336e529f0a4b2d6f10cdcfc63d15c45b651d`, K `8`, temperature `0.7,1.0`, top-p `0.95`, limit `100`. Steps in order:
