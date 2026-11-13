@@ -42,6 +42,7 @@ def _start(tmp_path, step):
     fakes = {"data_root": tmp_path / "data", "hf_repo": v("TripleTrouble/zaic2026-lifemate-data"), "hf_write": v("secret"),
              "mo": MagicMock(), "os": os, "procs": {}, "repo_dir": tmp_path, "shlex": shlex, "signal": signal,
              "start": v(True), "step": v(step), "step_env": dict, "stop": v(False), "subprocess": subprocess, "sys": sys,
+             "time": __import__("time"),
              "work": tmp_path, **{key: v(value) for key, value in FIELDS.items()}}
     fn(**{p: fakes[p] for p in params})
     return subprocess.Popen.call_args.args[0]
@@ -57,3 +58,24 @@ def test_start_runs_exactly_the_commands_of_the_step(tmp_path, step):
 def test_the_notebook_never_offers_a_test_split():
     text = NOTEBOOK.read_text(encoding="utf-8")
     assert "public_test" not in text and "private_test" not in text
+
+
+def test_the_monitor_draws_a_progress_bar_from_the_log(tmp_path):
+    import time
+
+    fn, params = _cell("refresh", "procs", "repo_dir")
+    log = tmp_path / "pref-sample.log"
+    log.write_text("old run\n", encoding="utf-8")
+    start = log.stat().st_size
+    with open(log, "a", encoding="utf-8") as f:
+        f.write("520 points to sample (0 already done)\nprogress 130/520 points (25%), 2.0 s/point, eta 13 min\n")
+    mo = MagicMock()
+    process = MagicMock()
+    process.poll.return_value = None
+    fakes = {"hf_write": v(""), "mo": mo, "procs": {"step": process, "log": log, "log_start": start, "name": "sample",
+                                                     "started": time.time()},
+             "refresh": None, "repo_dir": Path(__file__).parent.parent, "sys": sys, "time": time}
+    fn(**{p: fakes[p] for p in params})
+    html = mo.Html.call_args.args[0]
+    assert '<progress value="130" max="520"' in html and "25%" in html
+    assert "old run" not in mo.ui.code_editor.call_args.kwargs["value"]

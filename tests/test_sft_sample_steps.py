@@ -138,3 +138,24 @@ def test_sample_texts_on_a_tiny_model():
     a = sample_steps.sample_texts(model, tok, messages, [], 3, 1.0, 0.95, seed=5, max_new_tokens=8)
     b = sample_steps.sample_texts(model, tok, messages, [], 3, 1.0, 0.95, seed=5, max_new_tokens=8)
     assert a == b and isinstance(a[0], str) and len(a[1]) == 3
+
+
+def test_prints_the_total_and_progress_lines(tmp_path, monkeypatch, capsys):
+    _fake(monkeypatch)
+    _write(tmp_path, [_record(POOL[0]), _record(POOL[1])])
+    _run(tmp_path, "--progress-every", "1")
+    out = capsys.readouterr().out
+    assert "4 points to sample (0 already done)" in out
+    assert "progress 1/4 points" in out and "progress 4/4 points" in out
+
+
+def test_progress_counts_points_already_done_after_a_resume(tmp_path, monkeypatch, capsys):
+    _write(tmp_path, [_record(POOL[0]), _record(POOL[1])])
+    _fake(monkeypatch, fail_after=2)
+    with pytest.raises(RuntimeError):
+        _run(tmp_path, "--progress-every", "1")
+    capsys.readouterr()
+    _fake(monkeypatch)
+    _run(tmp_path, "--progress-every", "1")
+    out = capsys.readouterr().out
+    assert "4 points to sample (2 already done)" in out and "progress 3/4 points" in out

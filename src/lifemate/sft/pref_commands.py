@@ -6,6 +6,7 @@ per temperature), pairs, train, merge, interpolate (WiSE-FT, alpha 0.7 and 0.85)
 """
 from __future__ import annotations
 
+import re
 import sys
 
 ASR_CACHE = "pho-large-fp16"
@@ -82,3 +83,12 @@ def commands(step: str, f: dict) -> list[list[str]]:
                     f"merged/sft-q1c-wise{round(float(a) * 100)}", "--hf-repo",
                     f"{f['owner']}/lifemate-sft-q1c-wise{round(float(a) * 100)}") for a in ALPHAS]
     raise ValueError(f"unknown step {step!r}; one of {STEPS}")
+
+
+_PROGRESS = re.compile(r"^progress (\d+)/(\d+) points", re.M)
+
+
+def progress(log: str) -> tuple[int, int] | None:
+    """(done, total) of the last `progress d/t points` line lifemate.sft.sample_steps printed, or None."""
+    found = _PROGRESS.findall(log)
+    return (int(found[-1][0]), int(found[-1][1])) if found else None

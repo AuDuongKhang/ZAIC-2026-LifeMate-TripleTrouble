@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 import zlib
 from pathlib import Path
 
@@ -97,6 +98,7 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--max-new-tokens", type=int, default=384)
     ap.add_argument("--hf-repo", default=None, help="private HF dataset holding steps/<name>.jsonl")
     ap.add_argument("--upload-every", type=int, default=200, help="points between uploads")
+    ap.add_argument("--progress-every", type=int, default=10, help="points between progress lines")
     ap.add_argument("--records-dir", type=Path, default=RECORDS_DIR)
     args = ap.parse_args(argv)
 
@@ -120,15 +122,30 @@ def main(argv: list[str] | None = None) -> Path:
     _trim_torn(out)
     done = {(r["records"], r["record"], r["turn"]) for r in _jsonl(out)} if out.exists() else set()
 
+    points = [(name, i, turn) for name, i, rec in todo for turn in decision_points(rec)]
+    already = sum(p in done for p in points)
+    print(f"{len(points)} points to sample ({already} already done) from {len(todo)} records -> {out}", flush=True)
     model, tokenizer = load_model(args.model, args.revision)
     written = skipped = since_upload = 0
+    current, t0 = already, time.time()
+
+    def report() -> None:  # one line the notebook's progress bar reads
+        new = current - already
+        secs = (time.time() - t0) / new if new else 0.0
+        print(f"progress {current}/{len(points)} points ({100 * current / max(len(points), 1):.0f}%), "
+              f"{secs:.1f} s/point, eta {secs * (len(points) - current) / 60:.0f} min", flush=True)
+
     for name, i, rec in todo:
         for turn in decision_points(rec):
             if (name, i, turn) in done:
                 continue
+            current += 1
+            report_due = (current - already) % args.progress_every == 0 or current == len(points)
             prefix = rec["messages"][:turn]
             if len(render(tokenizer, prefix, rec["tools"], add_generation_prompt=True)) > args.max_len:
                 skipped += 1
+                if report_due:
+                    report()
                 continue
             seed = point_seed(args.seed, name, i, turn)
             greedy, samples = sample_texts(model, tokenizer, prefix, rec["tools"], args.k, args.temperature, args.top_p,
@@ -143,6 +160,8 @@ def main(argv: list[str] | None = None) -> Path:
             if args.hf_repo and since_upload >= args.upload_every:
                 _upload(args.hf_repo, [out], folder="steps")
                 since_upload = 0
+            if report_due:
+                report()
     if args.hf_repo and since_upload:
         _upload(args.hf_repo, [out], folder="steps")
     print(f"{written} points sampled, {len(done)} already in {out}; {skipped} points over --max-len skipped", flush=True)

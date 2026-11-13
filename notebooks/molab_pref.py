@@ -21,10 +21,11 @@ def _():
     import signal
     import subprocess
     import sys
+    import time
     from pathlib import Path
 
     import marimo as mo
-    return Path, mo, os, shlex, shutil, signal, subprocess, sys
+    return Path, mo, os, shlex, shutil, signal, subprocess, sys, time
 
 
 @app.cell
@@ -164,7 +165,7 @@ def _(commit, data_root, hf_write, os, repo_dir, work):
     commit  # everything below runs the pulled repo's code
     def step_env():
         env = {**os.environ, "PYTHONPATH": str(repo_dir / "src"), "LIFEMATE_DATA_ROOT": str(data_root), "PYTHONUTF8": "1",
-               "LIFEMATE_ASR_CACHE": str(work / "asr_cache")}
+               "LIFEMATE_ASR_CACHE": str(work / "asr_cache"), "PYTHONUNBUFFERED": "1"}  # the log fills as it runs
         if hf_write.value:
             env["HF_TOKEN"] = hf_write.value
         return env
@@ -173,7 +174,7 @@ def _(commit, data_root, hf_write, os, repo_dir, work):
 
 @app.cell
 def _(beta, data_root, hf_repo, hf_write, k, limit, lr, mo, model, name, os, owner, procs, repo_dir, revision, run,
-      sft_weight, shlex, signal, start, step, step_env, stop, subprocess, sys, temperature, top_p, work):
+      sft_weight, shlex, signal, start, step, step_env, stop, subprocess, sys, temperature, time, top_p, work):
     if stop.value and procs.get("step") and procs["step"].poll() is None:
         os.killpg(procs["step"].pid, signal.SIGTERM)  # the whole chain: bash and the python it runs
     mo.stop(not start.value, mo.md("_Pick a step and press **Start**._"))
@@ -189,11 +190,14 @@ def _(beta, data_root, hf_repo, hf_write, k, limit, lr, mo, model, name, os, own
           "beta": beta.value.strip(), "sft_weight": sft_weight.value.strip(), "owner": owner.value.strip(),
           "data_repo": hf_repo.value.strip(), "run": run.value.strip()}
     _cmds = commands(step.value, _f)
-    _log = open(work / f"pref-{step.value}.log", "a", encoding="utf-8")
+    _log_path = work / f"pref-{step.value}.log"
+    procs["log_start"] = _log_path.stat().st_size if _log_path.exists() else 0  # bytes: this run's part of the log
+    _log = open(_log_path, "a", encoding="utf-8")
     procs["step"] = subprocess.Popen(["bash", "-c", " && ".join(shlex.join(c) for c in _cmds)], cwd=repo_dir,
                                      env=step_env(), stdout=_log, stderr=subprocess.STDOUT, text=True,
                                      start_new_session=True)
     procs["log"] = work / f"pref-{step.value}.log"
+    procs["name"], procs["started"] = step.value, time.time()
     _shown = "\n".join(shlex.join(c) for c in _cmds)
     mo.md(f"Started:\n```\n{_shown.replace(hf_write.value, '***') if hf_write.value else _shown}\n```")
     return
@@ -201,22 +205,34 @@ def _(beta, data_root, hf_repo, hf_write, k, limit, lr, mo, model, name, os, own
 
 @app.cell
 def _(mo):
-    refresh = mo.ui.refresh(options=["30s", "60s", "5m"], default_interval="60s")
+    refresh = mo.ui.refresh(options=["10s", "30s", "60s", "5m"], default_interval="10s")
     refresh
     return (refresh,)
 
 
 @app.cell
-def _(hf_write, mo, procs, refresh):
+def _(hf_write, mo, procs, refresh, repo_dir, sys, time):
     refresh
     _p = procs.get("step")
     _status = "not started" if _p is None else ("running" if _p.poll() is None else f"exited with {_p.returncode}")
-    _tail = ""
+    _text = ""
     if procs.get("log") and procs["log"].exists():
-        _tail = "".join(procs["log"].read_text(encoding="utf-8", errors="replace").splitlines(True)[-30:])
+        _text = procs["log"].read_bytes()[procs.get("log_start", 0):].decode("utf-8", errors="replace")
         if hf_write.value:
-            _tail = _tail.replace(hf_write.value, "***")
-    mo.vstack([mo.md(f"**step**: {_status}"), mo.ui.code_editor(value=_tail, language="markdown", disabled=True)])
+            _text = _text.replace(hf_write.value, "***")
+    _bar = mo.md("")
+    if (repo_dir / "src").is_dir():
+        sys.path.insert(0, str(repo_dir / "src"))
+        from lifemate.sft.pref_commands import progress
+
+        _done = progress(_text)
+        if _done:  # sample prints `progress d/t points ...`; other steps show their log only
+            _bar = mo.Html(f'<progress value="{_done[0]}" max="{_done[1]}" style="width:100%"></progress>'
+                           f"<div>{_done[0]} / {_done[1]} points ({100 * _done[0] / max(_done[1], 1):.0f}%)</div>")
+    _elapsed = f", {(time.time() - procs['started']) / 60:.0f} min since Start" if procs.get("started") else ""
+    _tail = "".join(_text.splitlines(True)[-30:])
+    mo.vstack([mo.md(f"**step** `{procs.get('name', '')}`: {_status}{_elapsed}"), _bar,
+               mo.ui.code_editor(value=_tail, language="markdown", disabled=True)])
     return
 
 

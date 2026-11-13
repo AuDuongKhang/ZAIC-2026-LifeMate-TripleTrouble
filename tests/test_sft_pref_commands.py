@@ -72,3 +72,10 @@ def test_no_limit_means_the_whole_pool():
 def test_unknown_step_is_refused():
     with pytest.raises(ValueError):
         commands("deploy", F)
+
+
+def test_progress_reads_the_last_progress_line():
+    from lifemate.sft.pref_commands import progress
+    log = "loading\nprogress 3/40 points (8%), 2.0 s/point, eta 1 min\nprogress 12/40 points (30%), 2.0 s/point, eta 1 min\n"
+    assert progress(log) == (12, 40)
+    assert progress("loading model\n") is None
