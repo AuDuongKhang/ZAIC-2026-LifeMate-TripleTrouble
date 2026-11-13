@@ -44,8 +44,7 @@ def test_sample_runs_once_per_temperature():
     cmds = commands("sample", F)
     assert cmds[0] == pull("records", "pref-pilot-gold.jsonl", "pref-pilot-asr.jsonl")
     assert [c[c.index("--name") + 1] for c in only(cmds, "lifemate.sft.sample_steps")] == ["pilot-t0.7", "pilot-t1.0"]
-    # only the ASR-noisy records: on gold text the model was right at 355 of 363 pilot points (pilot, 13 Nov)
-    assert cmds[1] == PY + ["lifemate.sft.sample_steps", "--records", "pref-pilot-asr",
+    assert cmds[1] == PY + ["lifemate.sft.sample_steps", "--records", "pref-pilot-gold", "--records", "pref-pilot-asr",
                             "--name", "pilot-t0.7", "--model", F["model"], "--revision", F["revision"], "--k", "8",
                             "--temperature", "0.7", "--top-p", "0.95", "--seed", "0", "--hf-repo", F["data_repo"],
                             "--limit", "100"]

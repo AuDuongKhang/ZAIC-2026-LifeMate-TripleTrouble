@@ -72,8 +72,7 @@ def commands(step: str, f: dict) -> list[list[str]]:
         ]
     own_records = _hf("pull", f, "records", f"pref-{name}-gold.jsonl", f"pref-{name}-asr.jsonl")
     if step == "sample":
-        # ASR-noisy records only: on gold text sft-q1c was right at 355 of 363 pilot points, so they give few pairs
-        return [own_records] + [_py("lifemate.sft.sample_steps", "--records", f"pref-{name}-asr", "--name", f"{name}-t{t}", "--model", f["model"], "--revision",
+        return [own_records] + [_py("lifemate.sft.sample_steps", *sources, "--name", f"{name}-t{t}", "--model", f["model"], "--revision",
                     f["revision"], "--k", str(int(f["k"])), "--temperature", t, "--top-p", str(f["top_p"]), "--seed", "0",
                     "--hf-repo", f["data_repo"], *_limit(f)) for t in _temperatures(f)]
     if step == "pairs":
