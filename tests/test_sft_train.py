@@ -380,3 +380,20 @@ def test_merge_accepts_a_revision(tmp_path, monkeypatch):
         merge.main(["--adapter", str(tmp_path / "adapter"), "--out", str(tmp_path / "out"), "--model", "m",
                     "--revision", "abc123"])
     assert seen["revision"] == "abc123"
+
+
+def test_held_out_pair_samples_never_enter_the_sft_share(tiny_pairs, tmp_path, capsys):
+    # the tiny pairs come from the tiny records themselves, so every record's sample is held out here
+    _train(tiny_pairs, tmp_path / "pref", "--pairs", "p", "--eval-pairs", "p", "--sft-share", "0.5", "--max-steps", "1")
+    out = capsys.readouterr().out
+    assert "+ 0 records" in out and "held-out samples left out" in out
+
+
+def test_resume_refuses_a_checkpoint_without_the_mix_fingerprint(tiny_pairs, tmp_path):
+    out = tmp_path / "pref"
+    _train(tiny_pairs, out, "--pairs", "p", "--max-steps", "1")
+    config = json.loads((out / "last" / "run_config.json").read_text(encoding="utf-8"))
+    del config["mix_sha"]
+    (out / "last" / "run_config.json").write_text(json.dumps(config), encoding="utf-8")
+    with pytest.raises(SystemExit, match="mix"):
+        _train(tiny_pairs, out, "--pairs", "p", "--resume")

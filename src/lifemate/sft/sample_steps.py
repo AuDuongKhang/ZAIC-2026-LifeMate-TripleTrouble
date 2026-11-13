@@ -78,6 +78,21 @@ def sample_texts(model, tokenizer, messages: list[dict], tools: list[dict], k: i
     return texts(greedy)[0], texts(sampled)
 
 
+def check_rows(rows: list[dict], records: dict[tuple[str, int], dict], args) -> None:
+    """Stop before a resumed run reuses rows that another model, revision, sampling setting or records file made:
+    a skipped point must be exactly the point this run would sample."""
+    for r in rows:
+        made = (r["model"], r["revision"], r["temperature"], r["top_p"], len(r["samples"]))
+        wanted = (args.model, args.revision, args.temperature, args.top_p, args.k)
+        if made != wanted or r["seed"] != point_seed(args.seed, r["records"], r["record"], r["turn"]):
+            raise SystemExit(f"steps file rows were made with other settings {made} than this run {wanted}: use another "
+                             "--name, or the same settings")
+        rec = records.get((r["records"], r["record"]))
+        if rec is not None and rec["id"] != r["id"]:
+            raise SystemExit(f"{r['records']} record {r['record']} is {rec['id']} now but the steps file sampled {r['id']}: "
+                             "the records file was rebuilt; use another --name")
+
+
 def _jsonl(path: Path) -> list[dict]:
     with open(path, encoding="utf-8") as f:
         return [json.loads(line) for line in f if line.strip()]
@@ -120,7 +135,9 @@ def main(argv: list[str] | None = None) -> Path:
     if args.hf_repo and not out.exists():
         _pull_hf_copy(args.hf_repo, [out], folder="steps")
     _trim_torn(out)
-    done = {(r["records"], r["record"], r["turn"]) for r in _jsonl(out)} if out.exists() else set()
+    existing = _jsonl(out) if out.exists() else []
+    check_rows(existing, {(name, i): rec for name, i, rec in todo}, args)
+    done = {(r["records"], r["record"], r["turn"]) for r in existing}
 
     points = [(name, i, turn) for name, i, rec in todo for turn in decision_points(rec)]
     already = sum(p in done for p in points)

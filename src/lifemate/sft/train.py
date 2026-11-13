@@ -231,7 +231,8 @@ def main(argv: list[str] | None = None) -> Path:
 
     seed_everything(args.seed)
     tokenizer = AutoTokenizer.from_pretrained(args.model, revision=args.revision)
-    train = load_encoded(args.records, tokenizer, args.max_len, args.records_dir, args.decision_weight)
+    # --pairs reads the records itself: it needs their sample ids to keep held-out pair samples out of the SFT share
+    train = [] if args.pairs else load_encoded(args.records, tokenizer, args.max_len, args.records_dir, args.decision_weight)
     eval_pairs: list[dict] = []
     if args.pairs:  # preference mode: the pairs, then a seeded share of plain records (behaviour away from decisions)
         def load_pairs(name: str) -> list[dict]:
@@ -243,10 +244,29 @@ def main(argv: list[str] | None = None) -> Path:
             return encoded
 
         pairs = load_pairs(args.pairs)
-        n_sft = min(len(train), round(args.sft_share / (1 - args.sft_share) * len(pairs)))
-        train = pairs + [train[i] for i in sorted(random.Random(args.seed).sample(range(len(train)), n_sft))]
+        held_ids: set[str] = set()
+        if args.eval_pairs:  # a held-out sample trained on through its gold record would inflate eval_pref_acc
+            with open(pairs_path(args.eval_pairs), encoding="utf-8") as f:
+                held_ids = {json.loads(line)["id"] for line in f if line.strip()}
+        with open(args.records_dir / f"{args.records}.jsonl", encoding="utf-8") as f:
+            raw = [json.loads(line) for line in f if line.strip()]
+        kept = [r for r in raw if r["id"] not in held_ids]
+        pool = [e for e in (encode_record(r, tokenizer, args.max_len) for r in kept) if e is not None]
+        n_sft = min(len(pool), round(args.sft_share / (1 - args.sft_share) * len(pairs)))
+        picked = sorted(random.Random(args.seed).sample(range(len(pool)), n_sft))
+        train = pairs + [pool[i] for i in picked]
         eval_pairs = load_pairs(args.eval_pairs) if args.eval_pairs else []
-        print(f"preference mix: {len(pairs)} pairs + {n_sft} records", flush=True)
+        print(f"preference mix: {len(pairs)} pairs + {n_sft} records ({len(raw) - len(kept)} records of "
+              f"{len(held_ids)} held-out samples left out)", flush=True)
+        mix_sha = hashlib.sha256(json.dumps([sorted(held_ids), picked]).encode()).hexdigest()[:16]
+        if args.resume:  # the same records must come back, or the data order changes mid-run
+            saved_mix = json.loads((ckpt / "run_config.json").read_text(encoding="utf-8")).get("mix_sha")
+            if saved_mix != mix_sha:
+                raise SystemExit(f"--resume: the preference mix differs from the checkpoint's (mix_sha {mix_sha} vs "
+                                 f"{saved_mix}); a checkpoint made before held-out samples were left out resumes only "
+                                 "with the code it was trained with")
+        run_config = json.loads((out / "run_config.json").read_text(encoding="utf-8"))
+        (out / "run_config.json").write_text(json.dumps({**run_config, "mix_sha": mix_sha}, indent=1), encoding="utf-8")
     evals = load_encoded(args.eval_records, tokenizer, args.max_len, args.records_dir) if args.eval_records else []
     targets = None
     if args.kd_teachers:

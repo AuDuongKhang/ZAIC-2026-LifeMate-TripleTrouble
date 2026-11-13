@@ -159,3 +159,23 @@ def test_progress_counts_points_already_done_after_a_resume(tmp_path, monkeypatc
     _run(tmp_path, "--progress-every", "1")
     out = capsys.readouterr().out
     assert "4 points to sample (2 already done)" in out and "progress 3/4 points" in out
+
+
+@pytest.mark.parametrize("change", [["--revision", "r2"], ["--temperature", "1.0"], ["--k", "3"], ["--model", "other"]])
+def test_resume_refuses_rows_made_with_other_settings(tmp_path, monkeypatch, change):
+    _fake(monkeypatch)
+    _write(tmp_path, [_record(POOL[0])])
+    _run(tmp_path)
+    before = _rows(tmp_path)
+    with pytest.raises(SystemExit, match="other settings"):
+        _run(tmp_path, *change)
+    assert _rows(tmp_path) == before
+
+
+def test_resume_refuses_rows_whose_record_changed(tmp_path, monkeypatch):
+    _fake(monkeypatch)
+    _write(tmp_path, [_record(POOL[0])])
+    _run(tmp_path)
+    _write(tmp_path, [_record(POOL[1])])  # rebuilt records: index 0 is now another sample
+    with pytest.raises(SystemExit, match="record"):
+        _run(tmp_path)
