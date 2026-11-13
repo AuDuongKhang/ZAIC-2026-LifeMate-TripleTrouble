@@ -180,7 +180,8 @@ def test_empty_retry_and_weekday_presets(name, model, flags):
 
 def test_new_options_are_off_in_every_other_preset():
     on = {k for k, v in load_presets()["agent"].items() if v["agent_kw"].get("empty_retry") or v["agent_kw"].get("weekday_fix")}
-    assert on == {"sft-q1b-refs-fixes-retry", "sft-q1b-refs-fixes-wd", "sft-q1b-refs-fixes-all", "sft-q1c-refs-fixes-all"}
+    assert on == {"sft-q1b-refs-fixes-retry", "sft-q1b-refs-fixes-wd", "sft-q1b-refs-fixes-all", "sft-q1c-refs-fixes-all",
+                  "sft-q1d-refs-fixes-all"}
 
 
 def test_no_preset_reads_labels():
