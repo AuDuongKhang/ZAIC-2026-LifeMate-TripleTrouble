@@ -182,7 +182,7 @@ def test_empty_retry_and_weekday_presets(name, model, flags):
 def test_new_options_are_off_in_every_other_preset():
     on = {k for k, v in load_presets()["agent"].items() if v["agent_kw"].get("empty_retry") or v["agent_kw"].get("weekday_fix")}
     assert on == {"sft-q1b-refs-fixes-retry", "sft-q1b-refs-fixes-wd", "sft-q1b-refs-fixes-all", "sft-q1c-refs-fixes-all",
-                  "sft-q1c-refs-fixes-all-clock"}
+                  "sft-q1c-refs-fixes-all-clock", *Q1D_PRESETS}
 
 
 def test_no_preset_reads_labels():
@@ -203,7 +203,20 @@ def test_clock_fix_preset_is_the_shipped_preset_plus_the_flag():
 
 
 def test_clock_fix_is_off_in_every_other_preset():
-    assert {k for k, v in load_presets()["agent"].items() if v["agent_kw"].get("clock_fix")} == {"sft-q1c-refs-fixes-all-clock"}
+    assert {k for k, v in load_presets()["agent"].items() if v["agent_kw"].get("clock_fix")} == {
+        "sft-q1c-refs-fixes-all-clock", *Q1D_PRESETS}
+
+
+Q1D_PRESETS = {"sft-q1d-refs-fixes-all-clock": "lifemate-sft-q1d",
+               "sft-q1c-wise70-refs-fixes-all-clock": "lifemate-sft-q1c-wise70",
+               "sft-q1c-wise85-refs-fixes-all-clock": "lifemate-sft-q1c-wise85"}
+
+
+@pytest.mark.parametrize("name, repo", sorted(Q1D_PRESETS.items()))
+def test_q1d_and_wise_presets_are_the_clock_preset_with_another_model(name, repo):
+    env = {"HF_MODEL_OWNER": "me"}
+    agent, kw = resolve("agent", "sft-q1c-refs-fixes-all-clock", env)
+    assert resolve("agent", name, env) == (agent, {**kw, "model": f"me/{repo}"})
 
 
 def test_the_shipped_preset_has_clock_fix():

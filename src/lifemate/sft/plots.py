@@ -1,5 +1,7 @@
-"""Training plots from train_log.jsonl: loss.png (train and eval), lr.png, grad_norm.png. The molab training notebook
-redraws them while a run trains, and train.py saves them with every checkpoint."""
+"""Training plots from train_log.jsonl: loss.png (train and eval), lr.png, grad_norm.png, and for a preference run
+(sft.train --pairs) also dpo.png (DPO term and NLL of the chosen step), margin.png and pref_acc.png (train and held-out
+preference accuracy). The molab notebooks redraw them while a run trains, and train.py saves them with every
+checkpoint."""
 from __future__ import annotations
 
 import json
@@ -26,7 +28,10 @@ def plot_log(log_path: Path, out_dir: Path) -> list[Path]:
         return []
     out_dir.mkdir(parents=True, exist_ok=True)
     written = []
-    for name, keys in (("loss", ("loss", "eval_loss")), ("lr", ("lr",)), ("grad_norm", ("grad_norm",))):
+    plots = [("loss", ("loss", "eval_loss")), ("lr", ("lr",)), ("grad_norm", ("grad_norm",))]
+    if any("dpo" in r for r in rows):  # a preference run: its own terms, so plain SFT runs keep their three plots
+        plots += [("dpo", ("dpo", "nll")), ("margin", ("margin",)), ("pref_acc", ("pref_acc", "eval_pref_acc"))]
+    for name, keys in plots:
         fig, ax = plt.subplots(figsize=(6, 3.5))
         for key in keys:
             pts = [(r["step"], r[key]) for r in rows if r.get(key) is not None]

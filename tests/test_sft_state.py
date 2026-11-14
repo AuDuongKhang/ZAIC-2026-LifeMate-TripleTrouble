@@ -58,3 +58,22 @@ def test_plot_log_writes_pngs(tmp_path):
     log.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
     plot_log(log, tmp_path)
     assert all((tmp_path / f).exists() for f in ("loss.png", "lr.png", "grad_norm.png"))
+
+
+def test_plain_logs_get_no_preference_plots(tmp_path):
+    pytest.importorskip("matplotlib")
+    log = tmp_path / "train_log.jsonl"
+    log.write_text(json.dumps({"step": 1, "loss": 1.0, "lr": 1e-4, "grad_norm": 0.5}) + "\n", encoding="utf-8")
+    assert sorted(p.name for p in plot_log(log, tmp_path)) == ["grad_norm.png", "loss.png", "lr.png"]
+
+
+def test_preference_logs_get_dpo_margin_and_accuracy_plots(tmp_path):
+    pytest.importorskip("matplotlib")
+    log = tmp_path / "train_log.jsonl"
+    rows = [{"step": s, "loss": 1.0, "lr": 1e-5, "grad_norm": 0.5, "pairs": 12, "dpo": 0.69 - s / 100, "nll": 0.2,
+             "margin": s / 10, "pref_acc": 0.5 + s / 20} for s in range(1, 6)]
+    rows[-1].update(eval_loss=0.3, eval_pref_acc=0.7)
+    log.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    names = sorted(p.name for p in plot_log(log, tmp_path))
+    assert names == ["dpo.png", "grad_norm.png", "loss.png", "lr.png", "margin.png", "pref_acc.png"]
+    assert all((tmp_path / n).stat().st_size > 0 for n in names)

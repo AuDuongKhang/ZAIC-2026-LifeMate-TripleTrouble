@@ -45,13 +45,14 @@ from .plots import plot_log, read_log
 from .records import RECORDS_DIR
 from .kd import kd_sum, merge_targets, soft_targets, target_report
 from .state import TrainState, batches, total_steps, truncate_log
+from .pref import encode_pair, rpo_loss, step_logps
 from .tokenize import MAX_LEN, encode_record
 
 BASE_MODEL = "Qwen/Qwen3-4B-Instruct-2507"
 # Arguments a resumed run must share with its checkpoint (the rest, such as --max-steps or --hf-repo, may change).
 RUN_KEYS = ("records", "model", "epochs", "lr", "warmup", "micro_bs", "grad_accum", "lora_r", "lora_alpha",
             "lora_dropout", "max_len", "seed", "decision_weight", "lora_targets", "kd_teachers", "kd_alpha", "kd_temp",
-            "kd_top_k")
+            "kd_top_k", "pairs", "beta", "sft_weight", "sft_share", "revision")
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
 
@@ -144,9 +145,19 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--kd-temp", type=float, default=2.0)
     ap.add_argument("--kd-top-k", type=int, default=20, help="teacher probabilities kept per labelled token")
     ap.add_argument("--kd-report-only", action="store_true", help="write kd_report.json and stop before training")
+    ap.add_argument("--revision", default=None, help="commit sha of --model (and of its tokenizer)")
+    ap.add_argument("--pairs", default=None, help="preference mode: <records-dir>/pairs/<NAME>.jsonl (lifemate.sft.pairs)")
+    ap.add_argument("--eval-pairs", default=None, help="held-out pairs for eval_pref_acc, never trained on")
+    ap.add_argument("--beta", type=float, default=0.1, help="--pairs: DPO beta")
+    ap.add_argument("--sft-weight", type=float, default=1.0, help="--pairs: weight of the NLL of the chosen step")
+    ap.add_argument("--sft-share", type=float, default=0.2, help="--pairs: share of plain --records items in the mix")
     args = ap.parse_args(argv)
     if args.kd_report_only and not args.kd_teachers:
         ap.error("--kd-report-only needs --kd-teachers")
+    if args.pairs and (args.kd_teachers or args.decision_weight != 1.0):
+        ap.error("--pairs cannot be combined with --kd-teachers or --decision-weight")
+    if args.pairs and not 0 <= args.sft_share < 1:
+        ap.error("--sft-share is a share in [0, 1)")
 
     import torch
     import torch.nn.functional as F
@@ -182,10 +193,21 @@ def main(argv: list[str] | None = None) -> Path:
     elif args.resume:
         print(f"resume source: local {ckpt} (no --hf-repo)", flush=True)
     records_sha = hashlib.sha256((args.records_dir / f"{args.records}.jsonl").read_bytes()).hexdigest()[:16]
+
+    def pairs_path(name: str) -> Path:
+        return args.records_dir / "pairs" / f"{name}.jsonl"
+
+    def file_sha(path: Path | None) -> str | None:
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:16] if path is not None else None
+
+    pairs_sha = file_sha(pairs_path(args.pairs)) if args.pairs else None
+    eval_pairs_sha = file_sha(pairs_path(args.eval_pairs)) if args.eval_pairs else None
     if args.resume:
         if not ckpt.exists():
             raise SystemExit(f"--resume: no checkpoint at {ckpt}" + (f" nor in {args.hf_repo}" if api else ""))
         saved = json.loads((ckpt / "run_config.json").read_text(encoding="utf-8"))
+        if saved.get("pairs_sha") != pairs_sha:
+            raise SystemExit(f"--resume: pairs/{args.pairs}.jsonl differs from the one the checkpoint was trained on")
         if saved.get("records_sha") != records_sha:  # another file would shift the data order
             raise SystemExit(f"--resume: train_records/{args.records}.jsonl differs from the one the checkpoint was "
                              f"trained on (sha {records_sha} vs {saved.get('records_sha')}); rebuild it with the same "
@@ -205,11 +227,46 @@ def main(argv: list[str] | None = None) -> Path:
         log_path.unlink(missing_ok=True)  # steps of a run stopped before its first checkpoint
         state = TrainState(epoch=0, pos=0, step=0, seed=args.seed)
     config = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}
-    (out / "run_config.json").write_text(json.dumps({**config, "records_sha": records_sha}, indent=1), encoding="utf-8")
+    (out / "run_config.json").write_text(json.dumps({**config, "records_sha": records_sha, "pairs_sha": pairs_sha}, indent=1), encoding="utf-8")
 
     seed_everything(args.seed)
-    tokenizer = AutoTokenizer.from_pretrained(args.model)
-    train = load_encoded(args.records, tokenizer, args.max_len, args.records_dir, args.decision_weight)
+    tokenizer = AutoTokenizer.from_pretrained(args.model, revision=args.revision)
+    # --pairs reads the records itself: it needs their sample ids to keep held-out pair samples out of the SFT share
+    train = [] if args.pairs else load_encoded(args.records, tokenizer, args.max_len, args.records_dir, args.decision_weight)
+    eval_pairs: list[dict] = []
+    if args.pairs:  # preference mode: the pairs, then a seeded share of plain records (behaviour away from decisions)
+        def load_pairs(name: str) -> list[dict]:
+            with open(pairs_path(name), encoding="utf-8") as f:
+                rows = [json.loads(line) for line in f if line.strip()]
+            encoded = [e for e in (encode_pair(r, tokenizer, args.max_len) for r in rows) if e is not None]
+            print(f"pairs/{name}.jsonl: {len(encoded)} pairs, {len(rows) - len(encoded)} skipped as longer than "
+                  f"{args.max_len} tokens", flush=True)
+            return encoded
+
+        pairs = load_pairs(args.pairs)
+        held_ids: set[str] = set()
+        if args.eval_pairs:  # a held-out sample trained on through its gold record would inflate eval_pref_acc
+            with open(pairs_path(args.eval_pairs), encoding="utf-8") as f:
+                held_ids = {json.loads(line)["id"] for line in f if line.strip()}
+        with open(args.records_dir / f"{args.records}.jsonl", encoding="utf-8") as f:
+            raw = [json.loads(line) for line in f if line.strip()]
+        kept = [r for r in raw if r["id"] not in held_ids]
+        pool = [e for e in (encode_record(r, tokenizer, args.max_len) for r in kept) if e is not None]
+        n_sft = min(len(pool), round(args.sft_share / (1 - args.sft_share) * len(pairs)))
+        picked = sorted(random.Random(args.seed).sample(range(len(pool)), n_sft))
+        train = pairs + [pool[i] for i in picked]
+        eval_pairs = load_pairs(args.eval_pairs) if args.eval_pairs else []
+        print(f"preference mix: {len(pairs)} pairs + {n_sft} records ({len(raw) - len(kept)} records of "
+              f"{len(held_ids)} held-out samples left out)", flush=True)
+        mix_sha = hashlib.sha256(json.dumps([sorted(held_ids), picked]).encode()).hexdigest()[:16]
+        if args.resume:  # the same records must come back, or the data order changes mid-run
+            saved_mix = json.loads((ckpt / "run_config.json").read_text(encoding="utf-8")).get("mix_sha")
+            if saved_mix != mix_sha:
+                raise SystemExit(f"--resume: the preference mix differs from the checkpoint's (mix_sha {mix_sha} vs "
+                                 f"{saved_mix}); a checkpoint made before held-out samples were left out resumes only "
+                                 "with the code it was trained with")
+        run_config = json.loads((out / "run_config.json").read_text(encoding="utf-8"))
+        (out / "run_config.json").write_text(json.dumps({**run_config, "mix_sha": mix_sha}, indent=1), encoding="utf-8")
     evals = load_encoded(args.eval_records, tokenizer, args.max_len, args.records_dir) if args.eval_records else []
     targets = None
     if args.kd_teachers:
@@ -231,7 +288,7 @@ def main(argv: list[str] | None = None) -> Path:
         seed_everything(args.seed)  # the student starts as it would without teachers
 
     device = "cuda" if torch.cuda.is_available() else "cpu"  # cpu: local smoke tests with a tiny model only
-    model = load_causal_lm(args.model, torch.bfloat16).to(device)  # refuses a checkpoint whose weights would stay random
+    model = load_causal_lm(args.model, torch.bfloat16, args.revision).to(device)  # refuses a checkpoint whose weights would stay random
     model.config.use_cache = False
     model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     model.enable_input_require_grads()
@@ -241,6 +298,25 @@ def main(argv: list[str] | None = None) -> Path:
         model = get_peft_model(model, LoraConfig(r=args.lora_r, lora_alpha=args.lora_alpha, lora_dropout=args.lora_dropout,
                                                  target_modules=args.lora_targets.split(","), task_type="CAUSAL_LM"))
     model.print_trainable_parameters()
+    if args.pairs:  # the reference is the same network with the adapter disabled: computed once, cached on disk
+        cache = out / "ref_logps.pt"
+        key = {"pairs_sha": pairs_sha, "eval_pairs_sha": eval_pairs_sha, "model": args.model, "revision": args.revision,
+               "max_len": args.max_len}
+        saved_ref = torch.load(cache, weights_only=False) if cache.exists() else None
+        if saved_ref is None or saved_ref["key"] != key:
+            model.eval()
+            with torch.no_grad(), model.disable_adapter():
+                saved_ref = {"key": key, **{name: [(step_logps(model, e["prefix"], e["chosen"], device)[0].item(),
+                                                    step_logps(model, e["prefix"], e["rejected"], device)[0].item())
+                                                   for e in rows]
+                                            for name, rows in (("train", [e for e in train if "prefix" in e]),
+                                                               ("eval", eval_pairs))}}
+            model.train()
+            torch.save(saved_ref, cache)
+        for e, ref in zip([e for e in train if "prefix" in e], saved_ref["train"]):
+            e["ref"] = ref
+        for e, ref in zip(eval_pairs, saved_ref["eval"]):
+            e["ref"] = ref
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(params, lr=args.lr, weight_decay=0.0)
     n, mb_per_epoch = len(train), math.ceil(len(train) / args.micro_bs)
@@ -283,6 +359,21 @@ def main(argv: list[str] | None = None) -> Path:
         model.train()
         return total_loss / max(count, 1)
 
+    def pair_margin(e: dict):
+        """(margin, mean NLL of the chosen step, policy log-probs) of one encoded pair against its reference."""
+        pc, nll = step_logps(model, e["prefix"], e["chosen"], device)
+        pr, _ = step_logps(model, e["prefix"], e["rejected"], device)
+        rc, rr = (torch.tensor(v, device=device) for v in e["ref"])
+        return rpo_loss(pc, pr, rc, rr, nll, args.beta, args.sft_weight), nll
+
+    def eval_pref_acc() -> float:
+        """Share of the held-out pairs whose margin (policy vs reference) prefers the gold step."""
+        model.eval()
+        with torch.no_grad():
+            wins = sum(pair_margin(e)[0][1].item() > 0 for e in eval_pairs)
+        model.train()
+        return wins / max(len(eval_pairs), 1)
+
     def save() -> None:
         tmp = out / "last.tmp"
         shutil.rmtree(tmp, ignore_errors=True)
@@ -319,11 +410,29 @@ def main(argv: list[str] | None = None) -> Path:
     t0 = last_save = step_start = time.time()
     start_step = state.step
     step_loss, step_kd, step_count, step_tokens = 0.0, 0.0, 0, 0
+    pref = {"pairs": 0, "dpo": 0.0, "nll": 0.0, "margin": 0.0, "wins": 0}
     model.train()
     if state.step < stop_at:
         for batch in batches(n, state, args.micro_bs, args.epochs):
-            count = sum(labelled_weight(train[i]) for i in batch)
-            for i in batch:
+            if args.pairs:  # one loss per item, averaged over the accumulated micro-batches
+                for i in batch:
+                    item = train[i]
+                    if "prefix" in item:
+                        (loss, margin), nll = pair_margin(item)
+                        pref["pairs"] += 1
+                        pref["dpo"] += loss.item() - args.sft_weight * nll.item()
+                        pref["nll"] += nll.item()
+                        pref["margin"] += margin.item()
+                        pref["wins"] += margin.item() > 0
+                        tokens = len(item["prefix"]) + len(item["chosen"]) + len(item["rejected"])
+                    else:
+                        logits, gold_ids, _ = record_logits(item)
+                        loss = F.cross_entropy(logits, gold_ids)
+                        tokens = len(item["input_ids"])
+                    (loss / len(batch) / args.grad_accum).backward()
+                    step_loss, step_count, step_tokens = step_loss + loss.item(), step_count + 1, step_tokens + tokens
+            count = 0 if args.pairs else sum(labelled_weight(train[i]) for i in batch)
+            for i in ([] if args.pairs else batch):
                 logits, gold_ids, w = record_logits(train[i], weighted=True)
                 if w is None:
                     ce = ce_weighted = F.cross_entropy(logits, gold_ids, reduction="sum")
@@ -353,8 +462,16 @@ def main(argv: list[str] | None = None) -> Path:
                    "seconds": round(offset + now - t0, 1)}
             if targets is not None:
                 row["kd"] = round(step_kd / max(step_count, 1), 5)
-            if evals and (state.step % args.eval_every == 0 or state.step == stop_at):
-                row["eval_loss"] = round(eval_loss(), 5)
+            if pref["pairs"]:
+                k = pref["pairs"]
+                row.update(pairs=k, dpo=round(pref["dpo"] / k, 5), nll=round(pref["nll"] / k, 5),
+                           margin=round(pref["margin"] / k, 5), pref_acc=round(pref["wins"] / k, 4))
+                pref = {"pairs": 0, "dpo": 0.0, "nll": 0.0, "margin": 0.0, "wins": 0}
+            if (evals or eval_pairs) and (state.step % args.eval_every == 0 or state.step == stop_at):
+                if evals:
+                    row["eval_loss"] = round(eval_loss(), 5)
+                if eval_pairs:
+                    row["eval_pref_acc"] = round(eval_pref_acc(), 4)
             with open(log_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(row) + "\n")
             secs = now - step_start

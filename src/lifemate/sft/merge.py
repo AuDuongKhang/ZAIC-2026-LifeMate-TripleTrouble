@@ -23,6 +23,7 @@ def main(argv: list[str] | None = None) -> Path:
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--hf-repo", default=None, help="private HF model repo for the merged model")
     ap.add_argument("--model", default=None, help="base model (default: the adapter's base_model_name_or_path)")
+    ap.add_argument("--revision", default=None, help="commit sha of the base model (and of its tokenizer)")
     args = ap.parse_args(argv)
 
     import torch
@@ -44,12 +45,12 @@ def main(argv: list[str] | None = None) -> Path:
             shutil.copytree(Path(tmp) / sub, args.adapter)
     base = args.model or json.loads((args.adapter / "adapter_config.json").read_text(encoding="utf-8"))[
         "base_model_name_or_path"]
-    model = load_causal_lm(base, torch.bfloat16)
+    model = load_causal_lm(base, torch.bfloat16, args.revision)
     model = PeftModel.from_pretrained(model, str(args.adapter)).merge_and_unload()
     model = model.to(torch.bfloat16)  # the adapter is fp32; keep the merged weights in the base dtype
     args.out.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(str(args.out), safe_serialization=True)
-    AutoTokenizer.from_pretrained(base).save_pretrained(str(args.out))
+    AutoTokenizer.from_pretrained(base, revision=args.revision).save_pretrained(str(args.out))
     for name in ("train_log.jsonl", "run_config.json", "loss.png"):  # how the model was made, next to it
         if (args.adapter / name).exists():
             shutil.copy(args.adapter / name, args.out / name)

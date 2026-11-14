@@ -107,6 +107,13 @@ A sampled step is compared to the gold step on the decision only:
 Tool identity is compared on the real tool names (the masking map is inverted before comparing). The rejected text is
 the model's sampled step exactly as generated; the chosen text is the gold step as the record renders it.
 
+Filters decided by the owner after the pilot (13 Nov; 11 of 30 hand-read pairs at temperature 1.0 were conventions):
+a model step that does a **later gold step first** is another valid order and makes no pair (stopping never counts as
+such a step, so stopping early still pairs), and **`write:read`** (an extra read, such as a fare or a balance, before a
+write) makes no pair. With both, the pilot gives 6.2% (T 0.7) and 8.7% (T 1.0) of 726 points at K = 8, and 28 of 30
+hand-read pairs at T 0.7 are decisions. The pool has about 6,900 points (not the 2,400 first estimated), so 8.7% is
+about 600 pairs; the 15% pilot threshold was meant as "at least ~350 pairs" and is replaced by that count.
+
 Each decision point contributes at most one pair (the most frequent wrong decision among the K samples), so a point the
 model gets wrong 4 times out of 4 does not outweigh others. A point where the greedy step is already gold and only
 sampled steps disagree is kept, but marked, so the plan can compare "greedy-wrong only" against "all" pairs.
