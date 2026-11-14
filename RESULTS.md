@@ -101,6 +101,11 @@ Timing is per sample on the machine that ran it; the scoring A30 is slower than 
 | 2026-11-12 06:24 | f63a8ce | train       | 300 | react | whisper | 74.09    | 80.74      | 70.65 | 86.52 | 84.0  | 4.7    | 19.099 | prompt v1; WER 0.0832; G4: preset sft-q1c-refs-fixes-all-clock, subset dev; vs G1/G2 (preset sft-q1c-refs-fixes-all, same model revision): +0.33 [95% CI +0.0, +1.0], better 1 / worse 0 / same 299 (no clear difference); clock_fix fired on train_0031 (0.0 -> 1.0), as simulated; no other sample differs; holdout + dev pooled (597): +0.53; no fired sample got worse, so clock_fix passes the no-harm gate and gets a public run (Task 5); 0 over the time limit |
 | 2026-11-12 07:41 | 6bed3b4 | public_test | 634 | react | whisper | 63.29    | -          | -     | -     | -     | 4.491  | 13.203 | prompt v1; the shipped system (sft-q1c-refs-fixes-all at 8cb4336, pho-large-ft-all beam 5 at 73bb56a, --time-field) on branch fix/a30-warmup-budget (PR #90): fla kernels (first public run with them), warmup before the first sample, time_budget_s 24; leaderboard 63.29 vs 63.23 for the 11 Nov run without fla (+0.06, noise); ASR text identical on 634/634, tool calls differ on 32 and state hash on 9 (fla vs PyTorch fallback numerics); mean 4.49 s vs 5.11 s, 9 samples over 10 s (was 21), first sample 4.0 s, load 43.4 s (warmup included, was 12.1 s); 0 errors, 0 over the time limit |
 | 2026-11-12 07:43 | 6093204 | public_test | 634 | react | whisper | 63.44    | -          | -     | -     | -     | 4.533  | 13.232 | prompt v1; shipped preset + clock_fix (preset sft-q1c-refs-fixes-all-clock, PR #89 at 6093204, after its review fixes; sft-q1c pinned at 8cb4336), pho-large-ft-all beam 5, --time-field; leaderboard 63.44, +0.21 over the 63.23 submission and +0.15 (about one sample) over the pinned shipped system (63.29, 6bed3b4); clock_fix fired on public_0147 (alarm 07:30 -> 08:00, "8 giờ sáng mai") and public_0238 (parking from 18:30 -> 20:30), the two the simulator named; same calls as the 6bed3b4 run on 632 / 634 (only the two fired samples differ), 34 differ from the unpinned 11 Nov run; 0 schema errors, 0 over the time limit; at or above 63.23, so clock_fix ships (plan Task 6) |
+| 2026-11-14 04:57 | 80c2a78 | train       | 297 | react | whisper | 49.37    | 60.01      | 48.66 | 50.0  | 71.43 | 3.924  | 12.04  | prompt v1; WER 0.1331; preference plan (docs/superpowers/plans/2026-11-12-onpolicy-preference.md) gate B1: shipped preset sft-q1c-refs-fixes-all-clock (sft-q1c @ 8cb4336), subset holdout, pho-large-ft-b; baseline of the q1d runs below; 0 over the time limit |
+| 2026-11-14 06:13 | 80c2a78 | train       | 300 | react | whisper | 74.72    | 80.95      | 71.46 | 86.52 | 84.0  | 3.939  | 14.102 | prompt v1; WER 0.0832; preference plan (docs/superpowers/plans/2026-11-12-onpolicy-preference.md) gate B2: same, subset dev; 0 over the time limit |
+| 2026-11-14 05:59 | 80c2a78 | train       | 297 | react | whisper | 48.06    | 58.35      | 45.78 | 59.23 | 71.43 | 3.753  | 9.058  | prompt v1; WER 0.1331; preference plan (docs/superpowers/plans/2026-11-12-onpolicy-preference.md) gate Q1: sft-q1d run d (sft-q1c + preference LoRA from 549 pairs, lr 5e-5, beta 0.3, 2 epochs; merged @ 45e35dc), preset sft-q1d-refs-fixes-all-clock, holdout; vs B1 -1.31 [95% CI -4.04, +1.35], better 18 / worse 29 (gate failed); other tools 49 -> 54 samples (16.50 -> 18.18 points), ask/act flips 23 -> 20, ask kind 50.0 -> 59.2, act 48.7 -> 45.8 |
+| 2026-11-14 06:27 | 80c2a78 | train       | 300 | react | whisper | 71.82    | 79.95      | 68.42 | 85.0  | 80.0  | 3.741  | 13.808 | prompt v1; WER 0.0832; preference plan (docs/superpowers/plans/2026-11-12-onpolicy-preference.md) gate Q2: sft-q1d run d, dev; vs B2 -2.90 [95% CI -6.16, +0.17], better 13 / worse 24; other tools 22 -> 32 samples (7.33 -> 10.67 points) |
+| 2026-11-14 08:18 | 80c2a78 | train       | 297 | react | whisper | 46.98    | 58.24      | 46.75 | 46.67 | 57.14 | 3.683  | 8.775  | prompt v1; WER 0.1331; preference plan (docs/superpowers/plans/2026-11-12-onpolicy-preference.md) gate Q1: sft-q1d run g (same as d but 1 epoch; merged @ 09c15ee), holdout; vs B1 -2.38 [95% CI -5.22, +0.31], better 16 / worse 22 (gate failed, dev not run); other tools 49 -> 53, ask/act flips 23 -> 24; sft-q1d closed |
 
 ## Offline simulations
 
@@ -198,6 +203,18 @@ Added 12 Nov 2026:
 - On sft-q1b, ASR costs 15.36 points on holdout (59.47 gold text vs 44.11 pho-large-ft-b), against 9.87 on sft-v2. One
   candidate cause: the ASR-noisy training copies come from off-the-shelf PhoWhisper-large (WER about 0.26), while inference
   uses the fine-tuned ASR (about 0.10), so the model never sees the errors it meets at test time.
+
+- On-policy preference training (sft-q1d, PRs #93/#94, closed 14 Nov). sft-q1c was sampled (greedy + K at temperature)
+  at every agent turn of function-masked, leave-app-out pool records, gold and ASR-noisy (pho-large-fp16) text; a
+  disagreement on a decision (tool, ask/act, stop, write arguments) made a pair, minus order swaps of a later gold step and
+  extra reads before a write (11 of 30 pilot pairs were such conventions). Full pool: 6,008 points, 596 pairs (9.9%),
+  greedy wrong at 217; on gold text the model was right at 355 of 363 pilot points, so nearly all pairs come from the
+  noisy copies. DPO + NLL on a new LoRA over sft-q1c: lr 5e-6 to 1e-5 (runs a-c) barely moved it (DPO term 0.693 ->
+  0.67-0.69, held-out pair accuracy 0.57-0.62); lr 5e-5 learned (d: 0.83 on 47 held-out pairs) but its second epoch
+  memorised the pairs (gold-dev eval loss +19%); g (1 epoch) 0.70 at +4.5%. Both d and g lost on holdout (-1.31, -2.38),
+  with more wrong-tool samples, not fewer. Likely causes: the pairs teach off-the-shelf-ASR noise (WER about 0.26) that the
+  shipped ASR does not make, and preferences learned on pool decision points do not carry to unseen apps. Closed; the
+  image stays sft-q1c + clock_fix (public 63.44).
 
 ## ASR
 
