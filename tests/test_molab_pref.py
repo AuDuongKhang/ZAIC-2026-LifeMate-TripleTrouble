@@ -32,10 +32,10 @@ def v(value):
 
 FIELDS = {"name": "pilot", "model": "TripleTrouble/lifemate-sft-q1c", "revision": "8cb4336e529f0a4b2d6f10cdcfc63d15c45b651d",
           "k": 8, "temperature": "0.7,1.0", "top_p": 0.95, "limit": 100, "lr": "1e-5", "beta": "0.1",
-          "sft_weight": "1.0", "owner": "TripleTrouble", "run": ""}
+          "sft_weight": "1.0", "owner": "TripleTrouble", "run": "", "epochs": 2}
 
 
-def _start(tmp_path, step):
+def _start(tmp_path, step, **override):
     fn, params = _cell("start", "step")
     (tmp_path / "data" / "train").mkdir(parents=True, exist_ok=True)
     subprocess = MagicMock()
@@ -43,7 +43,7 @@ def _start(tmp_path, step):
              "mo": MagicMock(), "os": os, "procs": {}, "repo_dir": tmp_path, "shlex": shlex, "signal": signal,
              "start": v(True), "step": v(step), "step_env": dict, "stop": v(False), "subprocess": subprocess, "sys": sys,
              "time": __import__("time"),
-             "work": tmp_path, **{key: v(value) for key, value in FIELDS.items()}}
+             "work": tmp_path, **{key: v(value) for key, value in {**FIELDS, **override}.items()}}
     fn(**{p: fakes[p] for p in params})
     return subprocess.Popen.call_args.args[0]
 
@@ -101,3 +101,10 @@ def test_the_monitor_shows_the_training_plots(tmp_path):
     fn(**{p: fakes[p] for p in params})
     assert mo.image.call_count == 6  # loss, lr, grad_norm, dpo, margin, pref_acc
     assert (out / "live_plots" / "pref_acc.png").exists()
+
+
+def test_start_passes_the_epochs_field_to_train(tmp_path):
+    cmd = _start(tmp_path, "train", temperature="1.0", run="d")
+    f = dict(FIELDS, data_repo="TripleTrouble/zaic2026-lifemate-data", temperature="1.0", run="d")
+    assert cmd == ["bash", "-c", " && ".join(shlex.join(c) for c in commands("train", f))]
+    assert "--epochs 2" in cmd[2]

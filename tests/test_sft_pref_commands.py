@@ -108,3 +108,9 @@ def test_run_name_is_the_checkpoint_folder_of_train_and_merge():
     assert run_name(dict(F, name="r1", run="a")) == "sft-q1d-r1-a"
     assert run_name(dict(F, name="r1", run="")) == "sft-q1d-r1"
     assert f"checkpoints/{run_name(dict(F, temperature='1.0', run='a'))}" in commands("train", dict(F, temperature="1.0", run="a"))[-1]
+
+
+def test_train_takes_the_epochs_field_and_defaults_to_one():
+    one = dict(F, temperature="1.0", run="d")
+    assert commands("train", dict(one, epochs=2))[-1][commands("train", one)[-1].index("--epochs") + 1] == "2"
+    assert "1" == commands("train", one)[-1][commands("train", one)[-1].index("--epochs") + 1]

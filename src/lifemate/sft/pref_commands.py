@@ -90,7 +90,7 @@ def commands(step: str, f: dict) -> list[list[str]]:
                 _hf("pull", f, "pairs", f"{pairs}.jsonl", f"{pairs}-heldout.jsonl"),
                 _py("lifemate.sft.train", "--records", SFT_RECORDS, "--pairs", pairs, "--eval-pairs", f"{pairs}-heldout",
                     "--eval-records", EVAL_RECORDS, "--model", f["model"], "--revision", f["revision"], "--out",
-                    f"checkpoints/{run_name(f)}", "--hf-repo", f"{f['owner']}/lifemate-sft-q1d", "--epochs", "1", "--lr",
+                    f"checkpoints/{run_name(f)}", "--hf-repo", f"{f['owner']}/lifemate-sft-q1d", "--epochs", str(int(f.get("epochs") or 1)), "--lr",
                     str(f["lr"]), "--beta", str(f["beta"]), "--sft-weight", str(f["sft_weight"]), "--lora-targets",
                     LORA_TARGETS)]
     if step == "merge":

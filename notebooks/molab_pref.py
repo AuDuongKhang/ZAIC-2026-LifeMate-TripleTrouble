@@ -154,13 +154,14 @@ def _(mo):
     lr = mo.ui.text(value="1e-5", label="learning rate")
     beta = mo.ui.text(value="0.1", label="beta")
     sft_weight = mo.ui.text(value="1.0", label="SFT weight")
+    epochs = mo.ui.number(start=1, stop=5, value=1, label="epochs (train)")
     owner = mo.ui.text(value="TripleTrouble", label="HF owner")
     run = mo.ui.text(value="", label="run suffix (train/merge, e.g. a)")
     start = mo.ui.run_button(label="Start")
     stop = mo.ui.run_button(label="Stop")
     mo.vstack([mo.hstack([step, name, run]), model, revision, mo.hstack([k, temperature, top_p, limit]),
-               mo.hstack([lr, beta, sft_weight, owner]), mo.hstack([start, stop], justify="start")])
-    return beta, k, limit, lr, model, name, owner, revision, run, sft_weight, start, step, stop, temperature, top_p
+               mo.hstack([lr, beta, sft_weight, epochs, owner]), mo.hstack([start, stop], justify="start")])
+    return beta, epochs, k, limit, lr, model, name, owner, revision, run, sft_weight, start, step, stop, temperature, top_p
 
 
 @app.cell
@@ -176,7 +177,7 @@ def _(commit, data_root, hf_write, os, repo_dir, work):
 
 
 @app.cell
-def _(beta, data_root, hf_repo, hf_write, k, limit, lr, mo, model, name, os, owner, procs, repo_dir, revision, run,
+def _(beta, data_root, epochs, hf_repo, hf_write, k, limit, lr, mo, model, name, os, owner, procs, repo_dir, revision, run,
       sft_weight, shlex, signal, start, step, step_env, stop, subprocess, sys, temperature, time, top_p, work):
     if stop.value and procs.get("step") and procs["step"].poll() is None:
         os.killpg(procs["step"].pid, signal.SIGTERM)  # the whole chain: bash and the python it runs
@@ -191,6 +192,7 @@ def _(beta, data_root, hf_repo, hf_write, k, limit, lr, mo, model, name, os, own
     _f = {"name": name.value.strip(), "model": model.value.strip(), "revision": revision.value.strip(), "k": k.value,
           "temperature": temperature.value, "top_p": top_p.value, "limit": limit.value, "lr": lr.value.strip(),
           "beta": beta.value.strip(), "sft_weight": sft_weight.value.strip(), "owner": owner.value.strip(),
+          "epochs": epochs.value,
           "data_repo": hf_repo.value.strip(), "run": run.value.strip()}
     _cmds = commands(step.value, _f)
     _log_path = work / f"pref-{step.value}.log"
