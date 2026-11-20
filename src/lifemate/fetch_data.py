@@ -71,7 +71,7 @@ def extract(zip_path: Path, dest: Path, only: str | None = None) -> None:
 
 def fetch_split_zips(repo_id: str, dest: Path) -> None:
     """Add every SPLIT_ZIPS split the data lacks from the HF dataset; a zip not uploaded (yet) is skipped."""
-    from huggingface_hub.errors import EntryNotFoundError
+    from huggingface_hub.errors import EntryNotFoundError, LocalEntryNotFoundError
 
     for split, filename in SPLIT_ZIPS.items():
         if (dest / split / f"{split}.jsonl").is_file():
@@ -79,6 +79,8 @@ def fetch_split_zips(repo_id: str, dest: Path) -> None:
         with tempfile.TemporaryDirectory(dir=dest) as tmp:
             try:
                 zip_path = download_hf(repo_id, filename, Path(tmp))
+            except LocalEntryNotFoundError:  # hub unreachable and not cached: a failure, not a missing file
+                raise
             except EntryNotFoundError:
                 print(f"{split}: no {filename} in {repo_id}, skipped", flush=True)
                 continue

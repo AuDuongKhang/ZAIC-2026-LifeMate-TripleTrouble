@@ -86,3 +86,20 @@ def test_fetch_skips_a_split_zip_the_dataset_lacks_or_the_data_has(tmp_path, mon
     (dest / "private_test" / "private_test.jsonl").unlink()
     fetch_data.main(["--hf-repo", "team/data", "--dest", str(dest)])  # not uploaded yet: no error
     assert asked == ["private_test.zip"]
+
+
+def test_fetch_fails_when_the_hub_cannot_be_reached(tmp_path, monkeypatch):
+    import pytest
+    from huggingface_hub.errors import LocalEntryNotFoundError
+
+    from lifemate import fetch_data
+
+    dest = tmp_path / "data"
+    (dest / "train").mkdir(parents=True)
+    (dest / "train" / "train.jsonl").write_text("{}\n", encoding="utf-8")
+
+    def offline(repo_id, filename, out_dir):  # no network and no cached copy: not "the dataset lacks the file"
+        raise LocalEntryNotFoundError("cannot reach the hub")
+    monkeypatch.setattr(fetch_data, "download_hf", offline)
+    with pytest.raises(LocalEntryNotFoundError):
+        fetch_data.main(["--hf-repo", "team/data", "--dest", str(dest)])
