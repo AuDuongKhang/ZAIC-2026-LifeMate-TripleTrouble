@@ -37,12 +37,15 @@ def _(mo):
     3. Press **Pull repo**: it pulls the latest commit of the branch, installs the requirements and lists the presets.
        Press it again whenever the branch has new commits.
     4. Press **Fetch data** once per session (after the first Pull repo); the data stays for the whole session.
+       Pressing it again adds a split released later (`private_test.zip` in the HF dataset) without refetching the rest.
     5. Pick an agent preset and an ASR preset (configs/presets.json on the pulled branch; `cached:<name>` entries are
        the ASR caches in this session) and press **Run**. Add a new setup as one line in presets.json on the branch.
        The HF model owner list holds the HF token's user and orgs; it fills `${HF_MODEL_OWNER}` in presets.
 
-    On `train`, **Train subset** picks `dev`, `holdout` or `pool` (`all` = the whole split); it is ignored on `public_test`.
-    On `train` the run is scored locally; on `public_test` download `submission.jsonl` and submit it on the portal.
+    On `train`, **Train subset** picks `dev`, `holdout` or `pool` (`all` = the whole split); it is ignored on the test splits.
+    On `train` the run is scored locally; on `public_test` or `private_test` download `submission.jsonl` and submit it on
+    the portal. To run the shipped system, use the presets of `configs/shipped.json` and put its revisions in **extra
+    infer args**: `--agent-kw revision=<agent_kw.revision> --asr-kw revision=<asr_kw.revision> --time-field`.
 
     **Command** (optional) runs one other step instead of infer, as `python -m lifemate.<command>` from the work folder,
     for example `transcribe --split train --asr whisper --asr-kw model=vinai/PhoWhisper-large --name pho-large-fp16 --subset eval`,
@@ -63,7 +66,7 @@ def _(mo, os):
                          label="HF dataset (user/name)")
     hf_token = mo.ui.text(kind="password", value=os.environ.get("HF_TOKEN", ""), label="HF token (read)")
     data_url = mo.ui.text(value=os.environ.get("LIFEMATE_DATA_URL", ""), label="or data zip URL", full_width=True)
-    split = mo.ui.dropdown(["train", "public_test"], value="train", label="Split")
+    split = mo.ui.dropdown(["train", "public_test", "private_test"], value="train", label="Split")
     subset = mo.ui.dropdown(["all", "dev", "holdout", "pool"], value="all", label="Train subset (--subset)")
     limit = mo.ui.number(start=0, stop=100000, value=0, label="--limit (0 = all)")
     extra = mo.ui.text(value="", label="extra infer args", full_width=True)
