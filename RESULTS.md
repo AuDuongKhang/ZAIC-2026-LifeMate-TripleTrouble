@@ -106,6 +106,7 @@ Timing is per sample on the machine that ran it; the scoring A30 is slower than 
 | 2026-11-14 05:59 | 80c2a78 | train       | 297 | react | whisper | 48.06    | 58.35      | 45.78 | 59.23 | 71.43 | 3.753  | 9.058  | prompt v1; WER 0.1331; preference plan (docs/superpowers/plans/2026-11-12-onpolicy-preference.md) gate Q1: sft-q1d run d (sft-q1c + preference LoRA from 549 pairs, lr 5e-5, beta 0.3, 2 epochs; merged @ 45e35dc), preset sft-q1d-refs-fixes-all-clock, holdout; vs B1 -1.31 [95% CI -4.04, +1.35], better 18 / worse 29 (gate failed); other tools 49 -> 54 samples (16.50 -> 18.18 points), ask/act flips 23 -> 20, ask kind 50.0 -> 59.2, act 48.7 -> 45.8 |
 | 2026-11-14 06:27 | 80c2a78 | train       | 300 | react | whisper | 71.82    | 79.95      | 68.42 | 85.0  | 80.0  | 3.741  | 13.808 | prompt v1; WER 0.0832; preference plan (docs/superpowers/plans/2026-11-12-onpolicy-preference.md) gate Q2: sft-q1d run d, dev; vs B2 -2.90 [95% CI -6.16, +0.17], better 13 / worse 24; other tools 22 -> 32 samples (7.33 -> 10.67 points) |
 | 2026-11-14 08:18 | 80c2a78 | train       | 297 | react | whisper | 46.98    | 58.24      | 46.75 | 46.67 | 57.14 | 3.683  | 8.775  | prompt v1; WER 0.1331; preference plan (docs/superpowers/plans/2026-11-12-onpolicy-preference.md) gate Q1: sft-q1d run g (same as d but 1 epoch; merged @ 09c15ee), holdout; vs B1 -2.38 [95% CI -5.22, +0.31], better 16 / worse 22 (gate failed, dev not run); other tools 49 -> 53, ask/act flips 23 -> 24; sft-q1d closed |
+| 2026-11-20 06:03 | d06e025 | private_test | 625 | react | whisper | 53.87    | -          | -     | -     | -     | 5.456  | 16.47  | prompt v1; FINAL private test submission (round 2): the frozen system of the submitted image (b8662a2, sft-q1c-refs-fixes-all-clock with sft-q1c at 8cb4336, pho-large-ft-all beam 5 at 73bb56a, time_budget_s 24, --time-field), run on molab from main d06e025 (agent, ASR, infer and shipped.json unchanged since b8662a2); leaderboard 53.87 vs 63.44 on public (-9.57): private has 65 apps, 19 not in train (public: 36 and 11); checked before submitting: official validator 0 schema errors, 625 ids in order, replayed state hashes 625/625, 0 rejected calls; writes 70.4%, asks 15.8%, read only 10.9%, empty 2.9% (public 71.9 / 13.6 / 8.8 / 5.7); 0 errors, max 16.5 s, 0 over the time limit; submission.jsonl md5 1057b43384f15c3425184e86d1893186 |
 
 ## Offline simulations
 
@@ -215,6 +216,12 @@ Added 12 Nov 2026:
   with more wrong-tool samples, not fewer. Likely causes: the pairs teach off-the-shelf-ASR noise (WER about 0.26) that the
   shipped ASR does not make, and preferences learned on pool decision points do not carry to unseen apps. Closed; the
   image stays sft-q1c + clock_fix (public 63.44).
+
+- Private test (20 Nov, final): **53.87** with the frozen image system (sft-q1c + rules + clock_fix, pho-large-ft-all
+  beam 5), against 63.44 on public. Private brings more apps the model never trained on (19 of 65 not in train, 8 in
+  neither train nor public; public had 11 of 36). The 9.6-point drop fits the model being much weaker on apps it never
+  trained on (holdout about 49 vs dev about 74 on train), though private has no labels to confirm where the points went.
+  The run matched the image config and passed every structural check before its one submission.
 
 ## ASR
 
